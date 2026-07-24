@@ -162,10 +162,12 @@ export function LoginPanel({ active, onBack }: Props) {
           <Text style={styles.googleText}>Mit Google anmelden</Text>
         </Pressable>
 
-        <Pressable onPress={() => router.push('/register')} style={styles.registerRow}>
-          <Text style={styles.muted}>Du hast noch kein Konto? </Text>
-          <Text style={styles.link}>Jetzt registrieren</Text>
-        </Pressable>
+        <View style={styles.registerWrap}>
+          <Text style={styles.muted}>Noch kein Konto?</Text>
+          <Pressable onPress={() => router.push('/register')} style={styles.registerBtn}>
+            <Text style={styles.registerBtnText}>Jetzt registrieren</Text>
+          </Pressable>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -278,18 +280,26 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
-  registerRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    flexWrap: 'wrap',
+  registerWrap: {
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  registerBtn: {
+    alignSelf: 'stretch',
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: Brand.purple,
+    backgroundColor: '#f5f3ff',
+    paddingVertical: Spacing.three,
+    alignItems: 'center',
+  },
+  registerBtnText: {
+    color: Brand.purple,
+    fontSize: 16,
+    fontWeight: '700',
   },
   muted: {
     color: Brand.textMuted,
     fontSize: 14,
-  },
-  link: {
-    color: Brand.purple,
-    fontSize: 14,
-    fontWeight: '700',
   },
 });
