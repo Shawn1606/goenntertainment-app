@@ -2,6 +2,7 @@ import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActivityCard } from '@/components/activity-card';
+import { BrandLogo } from '@/components/brand-logo';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { ACTIVITIES } from '@/constants/activities';
@@ -36,9 +37,7 @@ export default function HomeScreen() {
           <View>
             {/* Kopf: Marke + Abmelden */}
             <View style={styles.topBar}>
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                <ThemedText style={{ color: theme.tint, fontSize: 22, fontWeight: '800' }}>GÖ</ThemedText>4Fun
-              </ThemedText>
+              <BrandLogo size="small" />
               <Pressable
                 onPress={logout}
                 style={[styles.logout, { backgroundColor: theme.backgroundElement }]}>

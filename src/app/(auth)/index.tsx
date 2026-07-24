@@ -3,7 +3,7 @@ import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthIllustration } from '@/components/auth-illustration';
-import { BrandGradientText } from '@/components/brand-gradient-text';
+import { BrandLogo } from '@/components/brand-logo';
 import { GoennBackground } from '@/components/goenn-background';
 import { LoginSheet } from '@/components/login-sheet';
 import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -29,9 +29,7 @@ export default function WelcomeScreen() {
         style={[styles.container, { paddingTop: insets.top + Spacing.six, paddingBottom: insets.bottom + Spacing.four }]}>
         <View style={styles.top}>
           <Text style={styles.welcome}>Willkommen bei</Text>
-          <BrandGradientText style={styles.brand}>
-            <Text style={styles.brandGoe}>GÖ</Text>4Fun
-          </BrandGradientText>
+          <BrandLogo size="large" />
           <Text style={styles.tagline}>Lege direkt los!</Text>
         </View>
 
@@ -68,15 +66,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#4b5563',
     marginBottom: Spacing.two,
-  },
-  brand: {
-    fontWeight: '800',
-    textAlign: 'center',
-    fontSize: 40,
-  },
-  brandGoe: {
-    fontSize: 68,
-    fontWeight: '800',
   },
   tagline: {
     fontSize: 18,

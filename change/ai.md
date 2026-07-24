@@ -96,3 +96,14 @@ files:
   ~ src/app/(app)/index.tsx (Home-Kopf: GÖ 22px/800 + 4Fun)
 tests: web bundle 200; tsc clean; JS: Welcome GÖ=68px, Home GÖ=22px, alter Name weg
 note: app.json name/slug (goenntertainment-app) NICHT geaendert (nur Anzeige-Titel)
+
+STEP 6 · app · PR #1 · Logo-Wortmarke + animierter Hintergrund
+files:
+  + src/components/brand-logo.tsx (BrandLogo size large|small: GÖ BrandGradientText + "4" LinearGradient-Badge + "Fun" dunkel/800)
+  ~ src/components/goenn-background.tsx (statische SVG-Blobs -> LinearGradient-Basis + 4 animierte Orb-Kugeln)
+  ~ src/app/(auth)/index.tsx (BrandLogo statt Inline-Titel; brand/brandGoe styles weg)
+  ~ src/app/(app)/index.tsx (Home-Kopf: BrandLogo size=small)
+animation: Orb = Animated.View(translateX/Y, interpolate 0->dx/dy) + Svg RadialGradient-Circle; Animated.loop(sequence up/down), Easing.inOut(ease), useNativeDriver: Platform.OS!=='web'
+tests: web bundle 200; tsc clean; JS: Logo-Teile GÖ/4/Fun da, 4 orbs vorhanden
+KNOWN-LIMIT: Bewegung im Test-Browser NICHT verifizierbar — Pane versteckt => requestAnimationFrame pausiert => JS-Driver tickt nicht (rAF-Zähler-Test lief 0 Frames/Timeout). Auf Handy (native driver) laeuft es. Nur statisch/strukturell geprueft.
+open (unveraendert): Home-Pastell-Thema, Google-Login, Interessen, Passwort-vergessen, Activities

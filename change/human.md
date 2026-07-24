@@ -54,6 +54,18 @@ und oben auf der Home-Seite. Der alte Name ist überall ersetzt.
 Nur der interne Projektname (für die Technik) bleibt gleich – geändert ist der Name,
 den du in der App **siehst**.
 
+## 6) GÖ4Fun als Logo + bewegter Hintergrund
+
+- **GÖ4Fun sieht jetzt aus wie ein Logo**: „GÖ" im Farbverlauf, die **4** sitzt in einer
+  runden farbigen Kugel (Badge), „Fun" kräftig daneben. Auf Start- und Home-Seite.
+- **Der Hintergrund hat jetzt bunte Kugeln, die sich langsam wie Wellen bewegen** –
+  ein weiches, fließendes Driften.
+
+Wichtig / ehrlich: Die **Bewegung** konnte ich in meinem Test-Browser **nicht anschauen**
+(der zeigt keine laufenden Bilder). Auf dem **Handy läuft die Animation** aber. Schau's
+dir in Expo Go an – wenn's zu schnell, zu langsam oder zu stark ist, sag Bescheid, dann
+stelle ich Tempo und Stärke nach.
+
 ---
 
 ## Was noch offen ist
