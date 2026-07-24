@@ -5,6 +5,36 @@ export type AccountType = 'personal' | 'business';
 export type Interest = {
   id: number;
   name: string;
+  slug?: string | null;
+  icon?: string | null;
+};
+
+export type ActivityHost = {
+  id: number;
+  name: string;
+  username: string | null;
+};
+
+export type Activity = {
+  id: number;
+  title: string;
+  description: string;
+  location: string;
+  starts_at: string | null;
+  banner_url: string | null;
+  host: ActivityHost | null;
+  interests: Interest[];
+};
+
+export type CreateActivityInput = {
+  title: string;
+  description: string;
+  location: string;
+  /** ISO-8601 String. */
+  starts_at: string;
+  interests: number[];
+  /** Ausgewähltes Bild (aus Galerie/Kamera); optional. */
+  banner?: { uri: string; name: string; type: string } | null;
 };
 
 export type User = {
@@ -101,4 +131,44 @@ export const api = {
   logout: (token: string) => request<{ message: string }>('/logout', { method: 'POST', token }),
 
   me: (token: string) => request<{ user: User; profile_complete: boolean }>('/user', { token }),
+
+  interests: () => request<{ data: Interest[] }>('/interests'),
+
+  activities: (token: string) => request<{ data: Activity[] }>('/activities', { token }),
+
+  /**
+   * Legt eine Activity an. Wegen des optionalen Banner-Bildes als multipart/form-data
+   * (nicht JSON) – Content-Type wird von fetch automatisch mit Boundary gesetzt.
+   */
+  createActivity: async (token: string, input: CreateActivityInput): Promise<{ data: Activity }> => {
+    const form = new FormData();
+    form.append('title', input.title);
+    form.append('description', input.description);
+    form.append('location', input.location);
+    form.append('starts_at', input.starts_at);
+    input.interests.forEach((id) => form.append('interests[]', String(id)));
+    if (input.banner) {
+      form.append('banner', input.banner as unknown as Blob);
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}/activities`, {
+        method: 'POST',
+        headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        body: form,
+      });
+    } catch {
+      throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
+    }
+
+    const isJson = response.headers.get('content-type')?.includes('application/json');
+    const data = isJson ? await response.json() : null;
+
+    if (!response.ok) {
+      throw new ApiError(data?.message ?? 'Etwas ist schiefgelaufen.', response.status, data?.errors ?? {});
+    }
+
+    return data as { data: Activity };
+  },
 };

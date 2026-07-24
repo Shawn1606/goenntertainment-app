@@ -1,13 +1,15 @@
-import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActivityCard } from '@/components/activity-card';
 import { BrandLogo } from '@/components/brand-logo';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { ACTIVITIES } from '@/constants/activities';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { type Activity, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 const ACCOUNT_TYPE_LABELS: Record<string, string> = {
@@ -17,14 +19,39 @@ const ACCOUNT_TYPE_LABELS: Record<string, string> = {
 
 export default function HomeScreen() {
   const theme = useTheme();
+  const router = useRouter();
   const safeAreaInsets = useSafeAreaInsets();
-  const { user, logout } = useAuth();
+  const { user, logout, token } = useAuth();
+
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    if (!token) return;
+    setError(null);
+    try {
+      const res = await api.activities(token);
+      setActivities(res.data);
+    } catch {
+      setError('Aktivitäten konnten nicht geladen werden.');
+    } finally {
+      setLoading(false);
+    }
+  }, [token]);
+
+  // Bei jedem Fokus neu laden – so erscheint eine neu erstellte Activity sofort.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load]),
+  );
 
   return (
     <ThemedView style={styles.container}>
       <FlatList
-        data={ACTIVITIES}
-        keyExtractor={(item) => item.id}
+        data={activities}
+        keyExtractor={(item) => String(item.id)}
         style={styles.list}
         contentContainerStyle={[
           styles.content,
@@ -35,22 +62,16 @@ export default function HomeScreen() {
         ]}
         ListHeaderComponent={
           <View>
-            {/* Kopf: Marke + Abmelden */}
             <View style={styles.topBar}>
               <BrandLogo size="small" />
-              <Pressable
-                onPress={logout}
-                style={[styles.logout, { backgroundColor: theme.backgroundElement }]}>
+              <Pressable onPress={logout} style={[styles.logout, { backgroundColor: theme.backgroundElement }]}>
                 <ThemedText type="small">Abmelden</ThemedText>
               </Pressable>
             </View>
 
-            {/* Begrüßungskarte mit echten Userdaten */}
             <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
               <ThemedText type="subtitle">Hallo {user?.name ?? ''} 👋</ThemedText>
-              {user?.username ? (
-                <ThemedText themeColor="textSecondary">@{user.username}</ThemedText>
-              ) : null}
+              {user?.username ? <ThemedText themeColor="textSecondary">@{user.username}</ThemedText> : null}
 
               {user?.account_type ? (
                 <View style={styles.badgeRow}>
@@ -69,9 +90,7 @@ export default function HomeScreen() {
                   </ThemedText>
                   <View style={styles.chipRow}>
                     {user.interests.map((interest) => (
-                      <View
-                        key={interest.id}
-                        style={[styles.chip, { borderColor: theme.backgroundSelected }]}>
+                      <View key={interest.id} style={[styles.chip, { borderColor: theme.backgroundSelected }]}>
                         <ThemedText type="small">{interest.name}</ThemedText>
                       </View>
                     ))}
@@ -87,9 +106,23 @@ export default function HomeScreen() {
         }
         renderItem={({ item }) => <ActivityCard activity={item} />}
         ItemSeparatorComponent={() => <View style={{ height: Spacing.three }} />}
+        ListEmptyComponent={
+          loading ? (
+            <View style={styles.empty}>
+              <ActivityIndicator color={theme.tint} />
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <ThemedText themeColor="textSecondary" style={styles.emptyText}>
+                {error ?? 'Noch keine Aktivitäten. Erstelle mit ＋ die erste!'}
+              </ThemedText>
+            </View>
+          )
+        }
       />
 
       <Pressable
+        onPress={() => router.push('/create-activity')}
         style={[
           styles.fab,
           {
@@ -159,6 +192,13 @@ const styles = StyleSheet.create({
   },
   listHeader: {
     marginBottom: Spacing.three,
+  },
+  empty: {
+    paddingVertical: Spacing.six,
+    alignItems: 'center',
+  },
+  emptyText: {
+    textAlign: 'center',
   },
   fab: {
     position: 'absolute',

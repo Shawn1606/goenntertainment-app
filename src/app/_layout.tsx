@@ -28,6 +28,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Protected guard={!!token}>
         <Stack.Screen name="(app)" />
+        <Stack.Screen name="create-activity" options={{ presentation: 'modal' }} />
       </Stack.Protected>
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
