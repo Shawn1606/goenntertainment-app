@@ -88,3 +88,11 @@ changes:
   - grauer bottomHandle-Strich ENTFERNT
 tests: web bundle 200; tsc clean own; JS: GÖ=68px lila, community 420x160 top~452/720; sheet-login->home ok (hasToken true)
 note: browser-tool ref/coord-klick auf RN-web Pressable+LinearGradient unzuverlaessig; echter DOM-.click() bzw. Handy-Tap loest onPress korrekt aus (kein bug)
+
+STEP 5 · app · PR #1 · Rename "Gönntertainment" -> "GÖ4Fun"
+grund: alter Name zu lang; User waehlt GÖ4Fun (GÖ=gönn, 4Fun=for Fun); GÖ muss herausstechen
+files:
+  ~ src/app/(auth)/index.tsx (Welcome-Titel: <Text brandGoe 68px>GÖ</Text>4Fun)
+  ~ src/app/(app)/index.tsx (Home-Kopf: GÖ 22px/800 + 4Fun)
+tests: web bundle 200; tsc clean; JS: Welcome GÖ=68px, Home GÖ=22px, alter Name weg
+note: app.json name/slug (goenntertainment-app) NICHT geaendert (nur Anzeige-Titel)

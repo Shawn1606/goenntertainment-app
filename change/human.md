@@ -45,6 +45,15 @@ und ist schon zusammengeführt.
 Getestet: Start-Bildschirm sieht wie gewünscht aus, und Anmelden über das hochfahrende
 Fenster führt weiter auf die Home-Seite.
 
+## 5) Neuer, kürzerer Name: GÖ4Fun
+
+Aus „Gönntertainment" ist **GÖ4Fun** geworden (kürzer, geht leichter von der Zunge:
+GÖ = gönn, „4Fun" = for Fun). Das **GÖ** ist groß hervorgehoben – auf der Startseite
+und oben auf der Home-Seite. Der alte Name ist überall ersetzt.
+
+Nur der interne Projektname (für die Technik) bleibt gleich – geändert ist der Name,
+den du in der App **siehst**.
+
 ---
 
 ## Was noch offen ist

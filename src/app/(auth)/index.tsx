@@ -30,7 +30,7 @@ export default function WelcomeScreen() {
         <View style={styles.top}>
           <Text style={styles.welcome}>Willkommen bei</Text>
           <BrandGradientText style={styles.brand}>
-            <Text style={styles.brandGoe}>GÖ</Text>nntertainment
+            <Text style={styles.brandGoe}>GÖ</Text>4Fun
           </BrandGradientText>
           <Text style={styles.tagline}>Lege direkt los!</Text>
         </View>

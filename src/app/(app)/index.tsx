@@ -37,7 +37,7 @@ export default function HomeScreen() {
             {/* Kopf: Marke + Abmelden */}
             <View style={styles.topBar}>
               <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                Gönntertainment
+                <ThemedText style={{ color: theme.tint, fontSize: 22, fontWeight: '800' }}>GÖ</ThemedText>4Fun
               </ThemedText>
               <Pressable
                 onPress={logout}
