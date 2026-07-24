@@ -71,34 +71,39 @@ export function GoennBackground({ children, style, ...rest }: ViewProps) {
 
   return (
     <View style={[styles.container, style]} {...rest}>
-      {/* Basis-Verlauf */}
+      {/* Basis-Verlauf – kräftiger als vorher (Pfirsich → Pink → Lila) */}
       <LinearGradient
-        colors={['#fdf1ec', '#faf0f6', '#efe4f7']}
+        colors={['#ffdcc4', '#ffcbe6', '#dcc0ff']}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
 
-      {/* Pfirsich-Schein oben rechts */}
+      {/* Farbige Scheine: Pfirsich oben rechts, Pink unten links */}
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%" pointerEvents="none">
         <Defs>
-          <RadialGradient id="peachGlow" cx="90%" cy="8%" r="55%">
-            <Stop offset="0" stopColor="#ffcdb4" stopOpacity="0.9" />
-            <Stop offset="0.7" stopColor="#ffcdb4" stopOpacity="0" />
+          <RadialGradient id="peachGlow" cx="88%" cy="6%" r="60%">
+            <Stop offset="0" stopColor="#ffb28c" stopOpacity="0.95" />
+            <Stop offset="0.7" stopColor="#ffb28c" stopOpacity="0" />
+          </RadialGradient>
+          <RadialGradient id="pinkGlow" cx="8%" cy="70%" r="55%">
+            <Stop offset="0" stopColor="#ff9ecf" stopOpacity="0.6" />
+            <Stop offset="0.75" stopColor="#ff9ecf" stopOpacity="0" />
           </RadialGradient>
         </Defs>
-        <Circle cx="0" cy="0" r="0" fill="url(#peachGlow)" />
         <Path d={`M0 0 H${width} V${height} H0 Z`} fill="url(#peachGlow)" />
+        <Path d={`M0 0 H${width} V${height} H0 Z`} fill="url(#pinkGlow)" />
       </Svg>
 
-      {/* schwebende Kreise */}
-      <Orb id="c-purple" color="#d9c9f0" size={90} x={-20} y={height * 0.42} dx={16} dy={20} duration={6000} />
-      <Orb id="c-peach" color="#ffd4bf" size={70} x={width - 40} y={height * 0.34} dx={-14} dy={22} duration={7200} />
+      {/* schwebende Kreise – satter */}
+      <Orb id="c-purple" color="#c39bf5" size={100} x={-24} y={height * 0.42} dx={16} dy={20} duration={6000} />
+      <Orb id="c-peach" color="#ffb495" size={78} x={width - 44} y={height * 0.34} dx={-14} dy={22} duration={7200} />
+      <Orb id="c-pink" color="#ff9ecf" size={64} x={width * 0.5} y={height * 0.2} dx={12} dy={-16} duration={8400} />
 
-      {/* lila Wellen unten */}
-      <Wave color="#ece0f8" height={height * 0.32} bottom={0} amp={22} duration={9000} />
-      <Wave color="#ddc9f2" height={height * 0.24} bottom={0} amp={30} duration={7000} />
-      <Wave color="#cbb0ec" height={height * 0.16} bottom={0} amp={26} duration={8000} />
+      {/* lila/pinke Wellen unten – kräftiger */}
+      <Wave color="#f0cdf5" height={height * 0.32} bottom={0} amp={22} duration={9000} />
+      <Wave color="#d9a6f0" height={height * 0.24} bottom={0} amp={30} duration={7000} />
+      <Wave color="#b578e6" height={height * 0.16} bottom={0} amp={26} duration={8000} />
 
       {children}
     </View>
@@ -108,7 +113,7 @@ export function GoennBackground({ children, style, ...rest }: ViewProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fdf1ec',
+    backgroundColor: '#ffdcc4',
     overflow: 'hidden',
   },
 });

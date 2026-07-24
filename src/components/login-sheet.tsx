@@ -6,6 +6,7 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Switch,
   Text,
   useWindowDimensions,
   View,
@@ -14,9 +15,11 @@ import {
 import { BrandGradientText } from '@/components/brand-gradient-text';
 import { BrandButton } from '@/components/ui/brand-button';
 import { BrandTextField } from '@/components/ui/brand-text-field';
+import { LockIcon, MailIcon } from '@/components/ui/icons';
 import { Brand, Spacing } from '@/constants/theme';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { clearCredentials, loadCredentials, saveCredentials } from '@/lib/credential-store';
 
 type Props = {
   visible: boolean;
@@ -37,9 +40,27 @@ export function LoginSheet({ visible, onClose }: Props) {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // Gespeicherte Zugangsdaten beim ersten Öffnen vorausfüllen.
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    (async () => {
+      const saved = await loadCredentials();
+      if (active && saved) {
+        setEmail(saved.email);
+        setPassword(saved.password);
+        setRemember(true);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [visible]);
 
   useEffect(() => {
     Animated.timing(translateY, {
@@ -61,6 +82,12 @@ export function LoginSheet({ visible, onClose }: Props) {
     setGeneralError(null);
     try {
       await login(email.trim(), password);
+      // Nach erfolgreichem Login: Zugangsdaten speichern oder löschen.
+      if (remember) {
+        await saveCredentials({ email: email.trim(), password });
+      } else {
+        await clearCredentials();
+      }
       // Erfolg → der Auth-Gate wechselt automatisch in die App.
     } catch (error) {
       if (error instanceof ApiError) {
@@ -77,6 +104,11 @@ export function LoginSheet({ visible, onClose }: Props) {
   function goRegister() {
     onClose();
     router.push('/register');
+  }
+
+  function goForgotPassword() {
+    onClose();
+    router.push('/forgot-password');
   }
 
   function notYet() {
@@ -108,6 +140,7 @@ export function LoginSheet({ visible, onClose }: Props) {
             keyboardType="email-address"
             autoCapitalize="none"
             autoComplete="email"
+            leftIcon={<MailIcon />}
             error={errors.email?.[0]}
           />
           <BrandTextField
@@ -116,12 +149,25 @@ export function LoginSheet({ visible, onClose }: Props) {
             placeholder="Dein Passwort"
             secureTextEntry
             autoComplete="current-password"
+            leftIcon={<LockIcon />}
             error={errors.password?.[0]}
           />
 
-          <Pressable onPress={notYet} style={styles.forgot}>
-            <Text style={styles.forgotText}>Passwort vergessen?</Text>
-          </Pressable>
+          <View style={styles.rememberRow}>
+            <View style={styles.rememberLeft}>
+              <Switch
+                value={remember}
+                onValueChange={setRemember}
+                trackColor={{ false: '#e5e7eb', true: Brand.purple }}
+                thumbColor="#ffffff"
+              />
+              <Text style={styles.rememberText}>Passwort speichern</Text>
+            </View>
+
+            <Pressable onPress={goForgotPassword} hitSlop={8}>
+              <Text style={styles.forgotText}>Passwort vergessen?</Text>
+            </Pressable>
+          </View>
 
           <BrandButton title="Anmelden" onPress={onSubmit} loading={loading} />
         </View>
@@ -194,8 +240,22 @@ const styles = StyleSheet.create({
   form: {
     gap: Spacing.three,
   },
-  forgot: {
-    alignSelf: 'flex-end',
+  rememberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+  },
+  rememberLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  rememberText: {
+    color: Brand.text,
+    fontSize: 14,
+    fontWeight: '600',
   },
   forgotText: {
     color: Brand.purple,

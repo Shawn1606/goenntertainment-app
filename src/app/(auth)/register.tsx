@@ -1,5 +1,5 @@
 import { Stack, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -8,6 +8,7 @@ import { BrandGradientText } from '@/components/brand-gradient-text';
 import { GoennBackground } from '@/components/goenn-background';
 import { BrandButton } from '@/components/ui/brand-button';
 import { BrandTextField } from '@/components/ui/brand-text-field';
+import { AtIcon, CheckIcon, DotIcon, LockIcon, MailIcon, UserIcon } from '@/components/ui/icons';
 import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
 import { ApiError, type AccountType } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -16,6 +17,19 @@ const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
   { value: 'personal', label: 'Persönlich' },
   { value: 'business', label: 'Business' },
 ];
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/** Eine Anforderungszeile: grünes Häkchen wenn erfüllt, sonst grauer Punkt. */
+function Requirement({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <View style={styles.reqRow}>
+      {ok ? <CheckIcon /> : <DotIcon />}
+      <Text style={[styles.reqText, ok && styles.reqTextOk]}>{label}</Text>
+    </View>
+  );
+}
 
 export default function RegisterScreen() {
   const insets = useSafeAreaInsets();
@@ -30,6 +44,28 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
+
+  // Live-Prüfung – exakt nach den Backend-Regeln (RegisterRequest).
+  const checks = useMemo(() => {
+    const u = username.trim();
+    const p = password;
+    return {
+      nameOk: name.trim().length > 0,
+      userLenOk: u.length >= 3 && u.length <= 30,
+      userCharsOk: u.length > 0 && USERNAME_RE.test(u),
+      emailOk: EMAIL_RE.test(email.trim()),
+      passLenOk: p.length >= 8,
+      passMixOk: /[A-Za-z]/.test(p) && /\d/.test(p),
+    };
+  }, [name, username, email, password]);
+
+  const formValid =
+    checks.nameOk &&
+    checks.userLenOk &&
+    checks.userCharsOk &&
+    checks.emailOk &&
+    checks.passLenOk &&
+    checks.passMixOk;
 
   async function onSubmit() {
     setLoading(true);
@@ -70,10 +106,29 @@ export default function RegisterScreen() {
           <View style={styles.card}>
             {generalError ? <Text style={styles.generalError}>{generalError}</Text> : null}
 
-            <BrandTextField label="Name" value={name} onChangeText={setName} placeholder="Dein Name" autoComplete="name" error={errors.name?.[0]} />
-            <BrandTextField label="Benutzername" value={username} onChangeText={setUsername} placeholder="benutzername" autoCapitalize="none" autoComplete="username" error={errors.username?.[0]} />
-            <BrandTextField label="E-Mail" value={email} onChangeText={setEmail} placeholder="beispiel@email.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" error={errors.email?.[0]} />
-            <BrandTextField label="Passwort" value={password} onChangeText={setPassword} placeholder="Min. 8 Zeichen, Buchstaben & Zahlen" secureTextEntry autoComplete="new-password" error={errors.password?.[0]} />
+            <BrandTextField label="Name" value={name} onChangeText={setName} placeholder="Dein Name" autoComplete="name" leftIcon={<UserIcon />} error={errors.name?.[0]} />
+
+            <View>
+              <BrandTextField label="Benutzername" value={username} onChangeText={setUsername} placeholder="benutzername" autoCapitalize="none" autoComplete="username" leftIcon={<AtIcon />} error={errors.username?.[0]} />
+              {username.length > 0 && !(checks.userLenOk && checks.userCharsOk) ? (
+                <View style={styles.reqs}>
+                  <Requirement ok={checks.userLenOk} label="3 bis 30 Zeichen" />
+                  <Requirement ok={checks.userCharsOk} label="Nur Buchstaben, Zahlen, - und _" />
+                </View>
+              ) : null}
+            </View>
+
+            <BrandTextField label="E-Mail" value={email} onChangeText={setEmail} placeholder="beispiel@email.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" leftIcon={<MailIcon />} error={errors.email?.[0]} />
+
+            <View>
+              <BrandTextField label="Passwort" value={password} onChangeText={setPassword} placeholder="Passwort wählen" secureTextEntry autoComplete="new-password" leftIcon={<LockIcon />} error={errors.password?.[0]} />
+              {password.length > 0 && !(checks.passLenOk && checks.passMixOk) ? (
+                <View style={styles.reqs}>
+                  <Requirement ok={checks.passLenOk} label="Mindestens 8 Zeichen" />
+                  <Requirement ok={checks.passMixOk} label="Buchstaben und Zahlen" />
+                </View>
+              ) : null}
+            </View>
 
             <View>
               <Text style={styles.typeLabel}>Konto-Typ</Text>
@@ -99,7 +154,7 @@ export default function RegisterScreen() {
               {errors.account_type?.[0] ? <Text style={styles.generalError}>{errors.account_type[0]}</Text> : null}
             </View>
 
-            <BrandButton title="Konto erstellen" onPress={onSubmit} loading={loading} />
+            <BrandButton title="Konto erstellen" onPress={onSubmit} loading={loading} disabled={!formValid} />
           </View>
 
           <Pressable onPress={() => router.replace('/')} style={styles.loginRow}>
@@ -150,6 +205,23 @@ const styles = StyleSheet.create({
   generalError: {
     color: '#ef4444',
     textAlign: 'center',
+  },
+  reqs: {
+    marginTop: Spacing.two,
+    marginLeft: Spacing.one,
+    gap: Spacing.one,
+  },
+  reqRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  reqText: {
+    fontSize: 13,
+    color: Brand.textMuted,
+  },
+  reqTextOk: {
+    color: '#16a34a',
   },
   typeLabel: {
     marginLeft: Spacing.one,
