@@ -115,3 +115,12 @@ files:
   ~ src/components/goenn-background.tsx (Orbs-only RAUS -> Referenz-Look: LinearGradient-Basis #fdf1ec/#faf0f6/#efe4f7 + Pfirsich-RadialGradient oben rechts + 2 kleine Orbs (purple links, peach rechts) + 3 lila Wellen unten (Wave: Svg Path preserveAspectRatio none, Animated translateX +-amp, dur 7-9s))
 tests: web bundle 200; tsc clean; JS: GÖ lila 46px + 4Fun grau 46px (Badge weg), 3 Wellen-Paths, 12 svgs
 KNOWN-LIMIT: Wellen-Bewegung im versteckten Test-Pane nicht sichtbar (rAF pausiert); laeuft am Geraet
+
+STEP 8 · app · PR #1 · Logo als fliessende Script-Schrift
+grund: User will flowy Schrift-Look wie "flow healing arts"-Logo (verbundene Script), Name GÖ4Fun bleibt
+deps+: @expo-google-fonts/pacifico (bundled font)
+files:
+  ~ src/app/_layout.tsx (useFonts({Pacifico_400Regular}); Splash wartet bis fontsReady && !isBootstrapping)
+  ~ src/components/brand-logo.tsx (Zweiton RAUS -> ein Wortbild "GÖ4Fun" in fontFamily Pacifico_400Regular + BrandGradientText, fontSize 54/24, lineHeight *1.45)
+tests: web bundle 200; tsc clean; JS: logo fontFamily=Pacifico_400Regular 54px, document.fonts hat pacifico=true
+note: GÖ sticht durch Grossbuchstaben im Script heraus; Verlauf via MaskedView (native), Web-Fallback solid lila

@@ -77,6 +77,12 @@ stelle ich Tempo und Stärke nach.
 Wie vorher: die **Bewegung** sehe ich in meinem Test-Browser nicht (technische Grenze),
 auf dem **Handy läuft sie**. Bitte am Handy anschauen und sagen, ob Tempo/Stärke passen.
 
+## 8) Logo in fließender Schrift
+
+Statt gerader Blockschrift ist „GÖ4Fun" jetzt in einer **geschwungenen Schrift**
+geschrieben (wie das „flow"-Logo, das du geschickt hast) – im Farbverlauf, mit dem
+großen GÖ, das durch die Großbuchstaben heraussticht. Name bleibt GÖ4Fun.
+
 ---
 
 ## Was noch offen ist
