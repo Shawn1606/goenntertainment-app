@@ -1,42 +1,43 @@
 import { useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
-  Animated,
+  KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Switch,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandGradientText } from '@/components/brand-gradient-text';
 import { BrandButton } from '@/components/ui/brand-button';
 import { BrandTextField } from '@/components/ui/brand-text-field';
 import { LockIcon, MailIcon } from '@/components/ui/icons';
-import { Brand, Spacing } from '@/constants/theme';
+import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { clearCredentials, loadCredentials, saveCredentials } from '@/lib/credential-store';
 
 type Props = {
-  visible: boolean;
-  onClose: () => void;
+  /** true, wenn der Login-Screen aktuell sichtbar ist (löst das Vorausfüllen aus). */
+  active: boolean;
+  /** Zurück zum Start-Screen. */
+  onBack: () => void;
 };
 
 /**
- * Login-Sheet, das von unten hochfährt – das „Overlay" der alten Web-Startseite.
- * Enthält das Login-Formular; Registrieren führt auf die eigene Seite.
+ * Login-Screen als voller Panel – Teil des gekoppelten Slides mit dem Start-Screen.
+ * Kein eigenes Overlay/Backdrop mehr: der Hintergrund liegt fest dahinter, dieser
+ * Panel wird vom Eltern-Screen mit hochgezogen.
  */
-export function LoginSheet({ visible, onClose }: Props) {
+export function LoginPanel({ active, onBack }: Props) {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { login } = useAuth();
-  const { height: screenHeight } = useWindowDimensions();
-
-  const [sheetHeight, setSheetHeight] = useState(screenHeight * 0.7);
-  const translateY = useRef(new Animated.Value(screenHeight)).current;
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -45,36 +46,22 @@ export function LoginSheet({ visible, onClose }: Props) {
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [generalError, setGeneralError] = useState<string | null>(null);
 
-  // Gespeicherte Zugangsdaten beim ersten Öffnen vorausfüllen.
+  // Gespeicherte Zugangsdaten vorausfüllen, sobald der Login sichtbar wird.
   useEffect(() => {
-    if (!visible) return;
-    let active = true;
+    if (!active) return;
+    let alive = true;
     (async () => {
       const saved = await loadCredentials();
-      if (active && saved) {
+      if (alive && saved) {
         setEmail(saved.email);
         setPassword(saved.password);
         setRemember(true);
       }
     })();
     return () => {
-      active = false;
+      alive = false;
     };
-  }, [visible]);
-
-  useEffect(() => {
-    Animated.timing(translateY, {
-      toValue: visible ? 0 : sheetHeight,
-      duration: 300,
-      useNativeDriver: true,
-    }).start();
-  }, [visible, sheetHeight, translateY]);
-
-  const backdropOpacity = translateY.interpolate({
-    inputRange: [0, sheetHeight],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
+  }, [active]);
 
   async function onSubmit() {
     setLoading(true);
@@ -82,7 +69,6 @@ export function LoginSheet({ visible, onClose }: Props) {
     setGeneralError(null);
     try {
       await login(email.trim(), password);
-      // Nach erfolgreichem Login: Zugangsdaten speichern oder löschen.
       if (remember) {
         await saveCredentials({ email: email.trim(), password });
       } else {
@@ -101,39 +87,32 @@ export function LoginSheet({ visible, onClose }: Props) {
     }
   }
 
-  function goRegister() {
-    onClose();
-    router.push('/register');
-  }
-
-  function goForgotPassword() {
-    onClose();
-    router.push('/forgot-password');
-  }
-
   function notYet() {
     Alert.alert('Kommt bald', 'Diese Funktion ist noch nicht fertig.');
   }
 
   return (
-    <View style={StyleSheet.absoluteFill} pointerEvents={visible ? 'auto' : 'none'}>
-      <Animated.View style={[styles.backdrop, { opacity: backdropOpacity }]}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-      </Animated.View>
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* Griff oben: tippen führt zurück zum Start-Screen. */}
+      <Pressable onPress={onBack} hitSlop={16} style={[styles.handleHitbox, { paddingTop: insets.top + Spacing.two }]}>
+        <View style={styles.handle} />
+        <Text style={styles.handleText}>Startseite</Text>
+      </Pressable>
 
-      <Animated.View
-        onLayout={(e) => setSheetHeight(e.nativeEvent.layout.height)}
-        style={[styles.sheet, { transform: [{ translateY }] }]}>
-        <Pressable onPress={onClose} hitSlop={12} style={styles.handleHitbox}>
-          <View style={styles.handle} />
-        </Pressable>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.five }]}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.header}>
+          <BrandGradientText style={styles.title}>Willkommen zurück!</BrandGradientText>
+          <Text style={styles.subtitle}>Schön, dich wiederzusehen 💜</Text>
+        </View>
 
-        <BrandGradientText style={styles.title}>Willkommen zurück!</BrandGradientText>
+        <View style={styles.card}>
+          {generalError ? <Text style={styles.generalError}>{generalError}</Text> : null}
 
-        {generalError ? <Text style={styles.generalError}>{generalError}</Text> : null}
-
-        <View style={styles.form}>
           <BrandTextField
+            label="E-Mail"
             value={email}
             onChangeText={setEmail}
             placeholder="beispiel@email.com"
@@ -144,6 +123,7 @@ export function LoginSheet({ visible, onClose }: Props) {
             error={errors.email?.[0]}
           />
           <BrandTextField
+            label="Passwort"
             value={password}
             onChangeText={setPassword}
             placeholder="Dein Passwort"
@@ -164,18 +144,13 @@ export function LoginSheet({ visible, onClose }: Props) {
               <Text style={styles.rememberText}>Passwort speichern</Text>
             </View>
 
-            <Pressable onPress={goForgotPassword} hitSlop={8}>
+            <Pressable onPress={() => router.push('/forgot-password')} hitSlop={8}>
               <Text style={styles.forgotText}>Passwort vergessen?</Text>
             </Pressable>
           </View>
 
           <BrandButton title="Anmelden" onPress={onSubmit} loading={loading} />
         </View>
-
-        <Pressable onPress={goRegister} style={styles.registerRow}>
-          <Text style={styles.muted}>Du hast kein Account? </Text>
-          <Text style={styles.link}>Jetzt Registrieren</Text>
-        </Pressable>
 
         <View style={styles.divider}>
           <View style={styles.line} />
@@ -186,41 +161,22 @@ export function LoginSheet({ visible, onClose }: Props) {
         <Pressable onPress={notYet} style={styles.googleBtn}>
           <Text style={styles.googleText}>Mit Google anmelden</Text>
         </Pressable>
-      </Animated.View>
-    </View>
+
+        <Pressable onPress={() => router.push('/register')} style={styles.registerRow}>
+          <Text style={styles.muted}>Du hast noch kein Konto? </Text>
+          <Text style={styles.link}>Jetzt registrieren</Text>
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-  },
-  sheet: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#ffffff',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.two,
-    paddingBottom: Spacing.five,
-    gap: Spacing.three,
-    ...Platform.select({
-      android: { elevation: 12 },
-      default: {
-        shadowColor: '#000',
-        shadowOpacity: 0.2,
-        shadowRadius: 16,
-        shadowOffset: { width: 0, height: -4 },
-      },
-    }),
-  },
+  flex: { flex: 1 },
   handleHitbox: {
-    alignSelf: 'center',
-    paddingVertical: Spacing.two,
+    alignItems: 'center',
+    gap: Spacing.one,
+    paddingBottom: Spacing.two,
   },
   handle: {
     width: 48,
@@ -228,17 +184,54 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: Brand.handle,
   },
+  handleText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Brand.textMuted,
+  },
+  content: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    paddingHorizontal: Spacing.four,
+    maxWidth: MaxContentWidth,
+    width: '100%',
+    alignSelf: 'center',
+    gap: Spacing.five,
+  },
+  header: {
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
   title: {
-    fontSize: 24,
-    fontWeight: '700',
+    fontSize: 34,
+    fontWeight: '800',
     textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: Brand.textMuted,
+  },
+  card: {
+    backgroundColor: Brand.card,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.7)',
+    padding: Spacing.four,
+    gap: Spacing.four,
+    ...Platform.select({
+      android: { elevation: 3 },
+      default: {
+        shadowColor: '#7c3aed',
+        shadowOpacity: 0.12,
+        shadowRadius: 24,
+        shadowOffset: { width: 0, height: 8 },
+      },
+    }),
   },
   generalError: {
     color: '#ef4444',
     textAlign: 'center',
-  },
-  form: {
-    gap: Spacing.three,
   },
   rememberRow: {
     flexDirection: 'row',
@@ -262,6 +255,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  line: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(155,109,255,0.25)',
+  },
+  googleBtn: {
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: 'rgba(155,109,255,0.35)',
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    paddingVertical: Spacing.three,
+    alignItems: 'center',
+  },
+  googleText: {
+    color: Brand.text,
+    fontSize: 15,
+    fontWeight: '600',
+  },
   registerRow: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -275,28 +291,5 @@ const styles = StyleSheet.create({
     color: Brand.purple,
     fontSize: 14,
     fontWeight: '700',
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  line: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#e5e7eb',
-  },
-  googleBtn: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#ffffff',
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-  },
-  googleText: {
-    color: Brand.text,
-    fontSize: 15,
-    fontWeight: '600',
   },
 });
