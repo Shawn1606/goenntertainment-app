@@ -1,41 +1,49 @@
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useRef, useState } from 'react';
+import { PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthIllustration } from '@/components/auth-illustration';
 import { BrandGradientText } from '@/components/brand-gradient-text';
 import { GoennBackground } from '@/components/goenn-background';
 import { LoginSheet } from '@/components/login-sheet';
-import { BrandButton } from '@/components/ui/brand-button';
 import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
 
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  // Hochwischen öffnet das Login-Sheet.
+  const pan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => g.dy < -12 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderRelease: (_e, g) => {
+        if (g.dy < -40) setSheetOpen(true);
+      },
+    }),
+  ).current;
+
   return (
     <GoennBackground>
-      <View style={[styles.container, { paddingTop: insets.top + Spacing.five, paddingBottom: insets.bottom }]}>
-        <View style={styles.hero}>
+      <View
+        {...pan.panHandlers}
+        style={[styles.container, { paddingTop: insets.top + Spacing.six, paddingBottom: insets.bottom + Spacing.four }]}>
+        <View style={styles.top}>
           <Text style={styles.welcome}>Willkommen bei</Text>
-          <BrandGradientText style={styles.brand}>Gönntertainment</BrandGradientText>
-
+          <BrandGradientText style={styles.brand}>
+            <Text style={styles.brandGoe}>GÖ</Text>nntertainment
+          </BrandGradientText>
           <Text style={styles.tagline}>Lege direkt los!</Text>
-
-          <View style={styles.illustration}>
-            <AuthIllustration />
-          </View>
-
-          <View style={styles.cta}>
-            <BrandButton title="Anmelden" onPress={() => setSheetOpen(true)} />
-            <Pressable onPress={() => setSheetOpen(true)} hitSlop={8}>
-              <Text style={styles.hint}>oder nach oben wischen</Text>
-            </Pressable>
-          </View>
         </View>
 
-        <Pressable onPress={() => setSheetOpen(true)} hitSlop={12} style={styles.bottomHandle}>
-          <View style={styles.handle} />
+        <View style={styles.spacer} />
+
+        <View style={styles.mascot}>
+          <AuthIllustration size="large" />
+        </View>
+
+        <Pressable onPress={() => setSheetOpen(true)} hitSlop={12} style={styles.hint}>
+          <Text style={styles.hintArrow}>↑</Text>
+          <Text style={styles.hintText}>Nach oben wischen zum Anmelden</Text>
         </Pressable>
       </View>
 
@@ -52,52 +60,51 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
-  hero: {
-    flex: 1,
+  top: {
     alignItems: 'center',
-    justifyContent: 'center',
   },
   welcome: {
     fontSize: 22,
     fontWeight: '500',
     color: '#4b5563',
-    marginBottom: Spacing.one,
+    marginBottom: Spacing.two,
   },
   brand: {
-    fontSize: 36,
-    fontWeight: '700',
+    fontWeight: '800',
     textAlign: 'center',
-    marginBottom: Spacing.five,
+    fontSize: 40,
+  },
+  brandGoe: {
+    fontSize: 68,
+    fontWeight: '800',
   },
   tagline: {
     fontSize: 18,
     fontWeight: '500',
     color: '#4b5563',
-    marginBottom: Spacing.four,
+    marginTop: Spacing.three,
   },
-  illustration: {
+  spacer: {
+    flex: 1,
+  },
+  mascot: {
+    width: '100%',
+    alignItems: 'center',
     marginBottom: Spacing.five,
-    width: '100%',
-    alignItems: 'center',
-  },
-  cta: {
-    width: '100%',
-    maxWidth: 320,
-    alignItems: 'center',
-    gap: Spacing.two,
   },
   hint: {
-    fontSize: 13,
+    alignItems: 'center',
+    gap: Spacing.one,
+  },
+  hintArrow: {
+    fontSize: 26,
+    lineHeight: 28,
+    color: Brand.purple,
+    fontWeight: '700',
+  },
+  hintText: {
+    fontSize: 15,
+    fontWeight: '600',
     color: Brand.textMuted,
-  },
-  bottomHandle: {
-    alignSelf: 'center',
-    paddingVertical: Spacing.two,
-  },
-  handle: {
-    width: 48,
-    height: 5,
-    borderRadius: 999,
-    backgroundColor: Brand.handle,
   },
 });

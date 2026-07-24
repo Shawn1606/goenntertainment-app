@@ -79,20 +79,30 @@ const BADGES: Badge[] = [
   },
 ];
 
-export function AuthIllustration() {
+export function AuthIllustration({ size = 'normal' }: { size?: 'normal' | 'large' }) {
+  const large = size === 'large';
+  const badgeSize = large ? 52 : 40;
+  const iconSize = large ? 26 : 20;
+  const communityHeight = large ? 160 : 110;
+
   return (
-    <View style={styles.wrapper} pointerEvents="none">
-      <View style={styles.badges}>
+    <View style={[styles.wrapper, large && styles.wrapperLarge]} pointerEvents="none">
+      <View style={[styles.badges, large && styles.badgesLarge]}>
         {BADGES.map((badge, i) => (
-          <View key={i} style={[styles.badge, { borderColor: badge.border }]}>
-            <Svg width={20} height={20} viewBox="0 0 24 24" fill="none" stroke={badge.color} color={badge.color}>
+          <View
+            key={i}
+            style={[
+              styles.badge,
+              { width: badgeSize, height: badgeSize, borderRadius: badgeSize / 2, borderColor: badge.border },
+            ]}>
+            <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none" stroke={badge.color} color={badge.color}>
               {badge.icon}
             </Svg>
           </View>
         ))}
       </View>
 
-      <Svg width="100%" height={110} viewBox="0 0 280 120" fill="none">
+      <Svg width="100%" height={communityHeight} viewBox="0 0 280 120" fill="none">
         <Path
           d="M40 95 C40 95 55 60 70 60 C85 60 90 80 100 80 C110 80 115 55 130 55 C145 55 150 75 160 75 C170 75 175 50 190 50 C205 50 210 70 220 70 C230 70 240 95 240 95"
           stroke="#a78bfa"
@@ -125,15 +135,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 16,
   },
+  wrapperLarge: {
+    maxWidth: 420,
+    gap: 22,
+  },
   badges: {
     flexDirection: 'row',
     justifyContent: 'center',
     gap: 12,
   },
+  badgesLarge: {
+    gap: 16,
+  },
   badge: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
     borderWidth: 2,
     backgroundColor: 'rgba(255,255,255,0.8)',
     alignItems: 'center',
