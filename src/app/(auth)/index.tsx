@@ -1,42 +1,46 @@
-import { Link } from 'expo-router';
-import { StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { PrimaryButton } from '@/components/ui/primary-button';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { useTheme } from '@/hooks/use-theme';
+import { AuthIllustration } from '@/components/auth-illustration';
+import { BrandGradientText } from '@/components/brand-gradient-text';
+import { GoennBackground } from '@/components/goenn-background';
+import { LoginSheet } from '@/components/login-sheet';
+import { BrandButton } from '@/components/ui/brand-button';
+import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
 
 export default function WelcomeScreen() {
-  const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   return (
-    <ThemedView style={[styles.container, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
-      <View style={styles.hero}>
-        <ThemedText type="small" themeColor="textSecondary">
-          Willkommen bei
-        </ThemedText>
-        <ThemedText type="subtitle" style={{ color: theme.tint }}>
-          Gönntertainment
-        </ThemedText>
-        <ThemedText themeColor="textSecondary" style={styles.tagline}>
-          Lege direkt los!
-        </ThemedText>
+    <GoennBackground>
+      <View style={[styles.container, { paddingTop: insets.top + Spacing.five, paddingBottom: insets.bottom }]}>
+        <View style={styles.hero}>
+          <Text style={styles.welcome}>Willkommen bei</Text>
+          <BrandGradientText style={styles.brand}>Gönntertainment</BrandGradientText>
 
-        <ThemedText style={styles.mascot}>🎉</ThemedText>
+          <Text style={styles.tagline}>Lege direkt los!</Text>
+
+          <View style={styles.illustration}>
+            <AuthIllustration />
+          </View>
+
+          <View style={styles.cta}>
+            <BrandButton title="Anmelden" onPress={() => setSheetOpen(true)} />
+            <Pressable onPress={() => setSheetOpen(true)} hitSlop={8}>
+              <Text style={styles.hint}>oder nach oben wischen</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <Pressable onPress={() => setSheetOpen(true)} hitSlop={12} style={styles.bottomHandle}>
+          <View style={styles.handle} />
+        </Pressable>
       </View>
 
-      <View style={styles.actions}>
-        <Link href="/login" asChild>
-          <PrimaryButton title="Anmelden" />
-        </Link>
-        <Link href="/register" asChild>
-          <PrimaryButton title="Konto erstellen" variant="secondary" />
-        </Link>
-      </View>
-    </ThemedView>
+      <LoginSheet visible={sheetOpen} onClose={() => setSheetOpen(false)} />
+    </GoennBackground>
   );
 }
 
@@ -52,17 +56,48 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: Spacing.half,
+  },
+  welcome: {
+    fontSize: 22,
+    fontWeight: '500',
+    color: '#4b5563',
+    marginBottom: Spacing.one,
+  },
+  brand: {
+    fontSize: 36,
+    fontWeight: '700',
+    textAlign: 'center',
+    marginBottom: Spacing.five,
   },
   tagline: {
-    marginTop: Spacing.two,
+    fontSize: 18,
+    fontWeight: '500',
+    color: '#4b5563',
+    marginBottom: Spacing.four,
   },
-  mascot: {
-    fontSize: 96,
-    marginTop: Spacing.five,
+  illustration: {
+    marginBottom: Spacing.five,
+    width: '100%',
+    alignItems: 'center',
   },
-  actions: {
-    gap: Spacing.three,
-    paddingBottom: Spacing.four,
+  cta: {
+    width: '100%',
+    maxWidth: 320,
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  hint: {
+    fontSize: 13,
+    color: Brand.textMuted,
+  },
+  bottomHandle: {
+    alignSelf: 'center',
+    paddingVertical: Spacing.two,
+  },
+  handle: {
+    width: 48,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: Brand.handle,
   },
 });

@@ -30,6 +30,25 @@ export const Colors = {
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
+/**
+ * Marken-Design aus der alten Web-App (immer hell/pastell, wie im Original).
+ * Verlauf Lila → Pink, weicher Pastell-Hintergrund, weiße Karten.
+ */
+export const Brand = {
+  purple: '#9b6dff',
+  pink: '#ff6bb5',
+  peach: '#ffb4a2',
+  lavender: '#e8d5ff',
+  text: '#1f2937', // gray-800
+  textMuted: '#6b7280', // gray-500
+  card: 'rgba(255,255,255,0.9)',
+  inputBg: 'rgba(255,255,255,0.85)',
+  inputBorder: '#ede9fe', // purple-100
+  handle: '#d1d5db', // gray-300
+} as const;
+
+export const BrandGradient = [Brand.purple, Brand.pink] as const;
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */

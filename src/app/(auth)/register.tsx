@@ -1,14 +1,14 @@
-import { Link, Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { PrimaryButton } from '@/components/ui/primary-button';
-import { TextField } from '@/components/ui/text-field';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { useTheme } from '@/hooks/use-theme';
+import { AuthIllustration } from '@/components/auth-illustration';
+import { BrandGradientText } from '@/components/brand-gradient-text';
+import { GoennBackground } from '@/components/goenn-background';
+import { BrandButton } from '@/components/ui/brand-button';
+import { BrandTextField } from '@/components/ui/brand-text-field';
+import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
 import { ApiError, type AccountType } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -18,8 +18,8 @@ const ACCOUNT_TYPES: { value: AccountType; label: string }[] = [
 ];
 
 export default function RegisterScreen() {
-  const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { register } = useAuth();
 
   const [name, setName] = useState('');
@@ -43,7 +43,6 @@ export default function RegisterScreen() {
         password,
         account_type: accountType,
       });
-      // Erfolg → Auth-Gate wechselt automatisch in die App.
     } catch (error) {
       if (error instanceof ApiError) {
         setErrors(error.errors);
@@ -57,67 +56,27 @@ export default function RegisterScreen() {
   }
 
   return (
-    <ThemedView style={styles.flex}>
-      <Stack.Screen options={{ headerShown: true, title: '', headerBackTitle: 'Zurück' }} />
+    <GoennBackground>
+      <Stack.Screen options={{ headerShown: true, title: '', headerTransparent: true, headerBackTitle: 'Zurück', headerTintColor: Brand.purple }} />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
-          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.five }]}
+          contentContainerStyle={[styles.content, { paddingTop: insets.top + Spacing.six, paddingBottom: insets.bottom + Spacing.five }]}
           keyboardShouldPersistTaps="handled">
-          <ThemedText type="small" themeColor="textSecondary" style={styles.subheading}>
-            Schön, dass du dabei bist
-          </ThemedText>
-          <ThemedText type="subtitle" style={[styles.heading, { color: theme.tint }]}>
-            Konto erstellen
-          </ThemedText>
+          <View style={styles.header}>
+            <Text style={styles.subheading}>Schön, dass du dabei bist</Text>
+            <BrandGradientText style={styles.heading}>Konto erstellen</BrandGradientText>
+          </View>
 
-          {generalError ? (
-            <ThemedText type="small" style={styles.generalError}>
-              {generalError}
-            </ThemedText>
-          ) : null}
+          <View style={styles.card}>
+            {generalError ? <Text style={styles.generalError}>{generalError}</Text> : null}
 
-          <View style={styles.form}>
-            <TextField
-              label="Name"
-              value={name}
-              onChangeText={setName}
-              placeholder="Dein Name"
-              autoComplete="name"
-              error={errors.name?.[0]}
-            />
-            <TextField
-              label="Benutzername"
-              value={username}
-              onChangeText={setUsername}
-              placeholder="benutzername"
-              autoCapitalize="none"
-              autoComplete="username"
-              error={errors.username?.[0]}
-            />
-            <TextField
-              label="E-Mail"
-              value={email}
-              onChangeText={setEmail}
-              placeholder="beispiel@email.com"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoComplete="email"
-              error={errors.email?.[0]}
-            />
-            <TextField
-              label="Passwort"
-              value={password}
-              onChangeText={setPassword}
-              placeholder="Min. 8 Zeichen, Buchstaben & Zahlen"
-              secureTextEntry
-              autoComplete="new-password"
-              error={errors.password?.[0]}
-            />
+            <BrandTextField label="Name" value={name} onChangeText={setName} placeholder="Dein Name" autoComplete="name" error={errors.name?.[0]} />
+            <BrandTextField label="Benutzername" value={username} onChangeText={setUsername} placeholder="benutzername" autoCapitalize="none" autoComplete="username" error={errors.username?.[0]} />
+            <BrandTextField label="E-Mail" value={email} onChangeText={setEmail} placeholder="beispiel@email.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" error={errors.email?.[0]} />
+            <BrandTextField label="Passwort" value={password} onChangeText={setPassword} placeholder="Min. 8 Zeichen, Buchstaben & Zahlen" secureTextEntry autoComplete="new-password" error={errors.password?.[0]} />
 
             <View>
-              <ThemedText type="smallBold" themeColor="textSecondary" style={styles.typeLabel}>
-                Konto-Typ
-              </ThemedText>
+              <Text style={styles.typeLabel}>Konto-Typ</Text>
               <View style={styles.typeRow}>
                 {ACCOUNT_TYPES.map((type) => {
                   const selected = accountType === type.value;
@@ -128,67 +87,76 @@ export default function RegisterScreen() {
                       style={[
                         styles.typeOption,
                         {
-                          backgroundColor: selected ? theme.tint : theme.backgroundElement,
-                          borderColor: selected ? theme.tint : 'transparent',
+                          borderColor: selected ? Brand.purple : Brand.inputBorder,
+                          backgroundColor: selected ? '#f5f3ff' : Brand.inputBg,
                         },
                       ]}>
-                      <ThemedText
-                        type="smallBold"
-                        style={{ color: selected ? theme.tintText : theme.text }}>
-                        {type.label}
-                      </ThemedText>
+                      <Text style={[styles.typeText, { color: selected ? Brand.purple : Brand.text }]}>{type.label}</Text>
                     </Pressable>
                   );
                 })}
               </View>
-              {errors.account_type?.[0] ? (
-                <ThemedText type="small" style={styles.generalError}>
-                  {errors.account_type[0]}
-                </ThemedText>
-              ) : null}
+              {errors.account_type?.[0] ? <Text style={styles.generalError}>{errors.account_type[0]}</Text> : null}
             </View>
 
-            <PrimaryButton title="Konto erstellen" onPress={onSubmit} loading={loading} />
+            <BrandButton title="Konto erstellen" onPress={onSubmit} loading={loading} />
           </View>
 
-          <View style={styles.footer}>
-            <ThemedText type="small" themeColor="textSecondary">
-              Schon ein Konto?
-            </ThemedText>
-            <Link href="/login">
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                Zum Login
-              </ThemedText>
-            </Link>
+          <Pressable onPress={() => router.replace('/')} style={styles.loginRow}>
+            <Text style={styles.muted}>Schon ein Konto? </Text>
+            <Text style={styles.link}>Zum Login</Text>
+          </Pressable>
+
+          <View style={styles.illustration}>
+            <AuthIllustration />
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </ThemedView>
+    </GoennBackground>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
-    padding: Spacing.four,
+    paddingHorizontal: Spacing.four,
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
     flexGrow: 1,
   },
-  subheading: {
-    textAlign: 'center',
-  },
-  heading: {
-    textAlign: 'center',
+  header: {
+    alignItems: 'center',
     marginBottom: Spacing.four,
   },
-  form: {
+  subheading: {
+    fontSize: 14,
+    color: Brand.textMuted,
+    marginBottom: Spacing.one,
+  },
+  heading: {
+    fontSize: 30,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  card: {
+    backgroundColor: Brand.card,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.6)',
+    padding: Spacing.four,
     gap: Spacing.three,
+  },
+  generalError: {
+    color: '#ef4444',
+    textAlign: 'center',
   },
   typeLabel: {
     marginLeft: Spacing.one,
-    marginBottom: Spacing.one,
+    marginBottom: Spacing.two,
+    fontSize: 13,
+    fontWeight: '700',
+    color: Brand.textMuted,
   },
   typeRow: {
     flexDirection: 'row',
@@ -201,14 +169,28 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.three,
     alignItems: 'center',
   },
-  footer: {
-    marginTop: Spacing.four,
-    alignItems: 'center',
-    gap: Spacing.one,
+  typeText: {
+    fontSize: 15,
+    fontWeight: '700',
   },
-  generalError: {
-    color: '#EF4444',
-    textAlign: 'center',
-    marginTop: Spacing.one,
+  loginRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: Spacing.four,
+    flexWrap: 'wrap',
+  },
+  muted: {
+    color: Brand.textMuted,
+    fontSize: 14,
+  },
+  link: {
+    color: Brand.purple,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  illustration: {
+    marginTop: Spacing.five,
+    alignItems: 'center',
+    opacity: 0.9,
   },
 });
