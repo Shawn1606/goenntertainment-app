@@ -66,6 +66,17 @@ Wichtig / ehrlich: Die **Bewegung** konnte ich in meinem Test-Browser **nicht an
 dir in Expo Go an – wenn's zu schnell, zu langsam oder zu stark ist, sag Bescheid, dann
 stelle ich Tempo und Stärke nach.
 
+## 7) Logo flowiger + Hintergrund aus deiner Referenz
+
+- **Das eckige Badge-Logo ist weg.** Jetzt ist es ein weiches Wortbild: „GÖ" im
+  Farbverlauf, „4Fun" in ruhigem Grau daneben – fließend, wie in deinem Bild.
+- **Der Hintergrund ist wie in deiner Referenz**: heller Pastellton, ein Pfirsich-Schein
+  oben rechts, zwei schwebende Kreise und **lila Wellen unten**, die sich langsam
+  hin und her bewegen.
+
+Wie vorher: die **Bewegung** sehe ich in meinem Test-Browser nicht (technische Grenze),
+auf dem **Handy läuft sie**. Bitte am Handy anschauen und sagen, ob Tempo/Stärke passen.
+
 ---
 
 ## Was noch offen ist

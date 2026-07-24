@@ -107,3 +107,11 @@ animation: Orb = Animated.View(translateX/Y, interpolate 0->dx/dy) + Svg RadialG
 tests: web bundle 200; tsc clean; JS: Logo-Teile GÖ/4/Fun da, 4 orbs vorhanden
 KNOWN-LIMIT: Bewegung im Test-Browser NICHT verifizierbar — Pane versteckt => requestAnimationFrame pausiert => JS-Driver tickt nicht (rAF-Zähler-Test lief 0 Frames/Timeout). Auf Handy (native driver) laeuft es. Nur statisch/strukturell geprueft.
 open (unveraendert): Home-Pastell-Thema, Google-Login, Interessen, Passwort-vergessen, Activities
+
+STEP 7 · app · PR #1 · Logo flowy + Hintergrund nach Referenz
+grund: User: Badge-Logo schlecht, will "flowy"; Hintergrund aus Referenz-Screenshot (Pfirsich oben rechts, lila Wellen unten) + animiert
+files:
+  ~ src/components/brand-logo.tsx (Badge RAUS; jetzt GÖ Verlauf 800 + "4Fun" grau #a8a2b5 600, gleiche fontSize, flowy Zweiton)
+  ~ src/components/goenn-background.tsx (Orbs-only RAUS -> Referenz-Look: LinearGradient-Basis #fdf1ec/#faf0f6/#efe4f7 + Pfirsich-RadialGradient oben rechts + 2 kleine Orbs (purple links, peach rechts) + 3 lila Wellen unten (Wave: Svg Path preserveAspectRatio none, Animated translateX +-amp, dur 7-9s))
+tests: web bundle 200; tsc clean; JS: GÖ lila 46px + 4Fun grau 46px (Badge weg), 3 Wellen-Paths, 12 svgs
+KNOWN-LIMIT: Wellen-Bewegung im versteckten Test-Pane nicht sichtbar (rAF pausiert); laeuft am Geraet
