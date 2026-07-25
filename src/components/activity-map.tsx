@@ -13,13 +13,26 @@ import { useAuth } from '@/lib/auth-context';
 import { openRoute } from '@/lib/open-maps';
 import { type MapActivity, useMapActivities } from '@/lib/use-map-activities';
 
-// Grober Startausschnitt (Deutschland), bis echte Pins geladen sind.
+// Grober Startausschnitt (Deutschland), bis der Standort da ist.
 const DEFAULT_REGION: Region = {
   latitude: 51.1657,
   longitude: 10.4515,
   latitudeDelta: 8,
   longitudeDelta: 8,
 };
+
+// Wie weit die Karte um den eigenen Standort herum zeigt (Radius in km).
+const RADIUS_KM = 5;
+
+type LatLng = { latitude: number; longitude: number };
+
+// Baut einen Kartenausschnitt, der ~radiusKm um den Punkt herum zeigt.
+function regionAround(c: LatLng, radiusKm: number): Region {
+  const latitudeDelta = (radiusKm * 2) / 111.32; // 1° Breite ≈ 111,32 km
+  const longitudeDelta =
+    (radiusKm * 2) / (111.32 * Math.max(0.1, Math.cos((c.latitude * Math.PI) / 180)));
+  return { latitude: c.latitude, longitude: c.longitude, latitudeDelta, longitudeDelta };
+}
 
 export default function MapScreen() {
   const theme = useTheme();
@@ -28,9 +41,10 @@ export default function MapScreen() {
   const { items, loading, error } = useMapActivities(token);
 
   const mapRef = useRef<MapView>(null);
+  const didCenter = useRef(false);
   const [selected, setSelected] = useState<MapActivity | null>(null);
   const [showUser, setShowUser] = useState(false);
-  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [userCoords, setUserCoords] = useState<LatLng | null>(null);
 
   // Standort-Berechtigung beim Öffnen anfragen und Position holen – erst dann
   // zeigt die Karte den blauen „Ich bin hier"-Punkt.
@@ -73,22 +87,27 @@ export default function MapScreen() {
       });
       const here = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
       setUserCoords(here);
-      mapRef.current?.animateToRegion({ ...here, latitudeDelta: 0.05, longitudeDelta: 0.05 }, 500);
+      mapRef.current?.animateToRegion(regionAround(here, RADIUS_KM), 500);
     } catch {
       // Standort nicht verfügbar – still ignorieren.
     }
   }, [showUser]);
 
-  // Kartenausschnitt so einpassen, dass Pins UND der eigene Standort zu sehen sind.
+  // Beim ersten bekannten Standort einmalig auf den 5-km-Radius um mich zoomen.
+  // (Nicht auf die Aktivitäten – der User will seinen eigenen Umkreis sehen.)
   useEffect(() => {
+    if (didCenter.current || !userCoords) return;
+    didCenter.current = true;
+    mapRef.current?.animateToRegion(regionAround(userCoords, RADIUS_KM), 600);
+  }, [userCoords]);
+
+  // Kein Standort verfügbar (z. B. Berechtigung abgelehnt): grob auf die Pins
+  // einpassen, damit man überhaupt etwas sieht.
+  useEffect(() => {
+    if (userCoords || didCenter.current || items.length === 0) return;
     const coords = items.map((a) => ({ latitude: a.coords.lat, longitude: a.coords.lng }));
-    if (userCoords) coords.push(userCoords);
-    if (coords.length === 0) return;
     if (coords.length === 1) {
-      mapRef.current?.animateToRegion(
-        { ...coords[0], latitudeDelta: 0.08, longitudeDelta: 0.08 },
-        500,
-      );
+      mapRef.current?.animateToRegion(regionAround(coords[0], RADIUS_KM), 500);
       return;
     }
     mapRef.current?.fitToCoordinates(coords, {
