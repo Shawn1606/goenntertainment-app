@@ -30,14 +30,28 @@ export default function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const [selected, setSelected] = useState<MapActivity | null>(null);
   const [showUser, setShowUser] = useState(false);
+  const [userCoords, setUserCoords] = useState<{ latitude: number; longitude: number } | null>(null);
 
-  // Standort-Berechtigung beim Öffnen anfragen – erst dann zeigt die Karte
-  // den blauen „Ich bin hier"-Punkt.
+  // Standort-Berechtigung beim Öffnen anfragen und Position holen – erst dann
+  // zeigt die Karte den blauen „Ich bin hier"-Punkt.
   useEffect(() => {
     let active = true;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
-      if (active) setShowUser(status === 'granted');
+      if (!active) return;
+      const granted = status === 'granted';
+      setShowUser(granted);
+      if (!granted) return;
+      try {
+        const pos = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        if (active) {
+          setUserCoords({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        }
+      } catch {
+        // Position gerade nicht verfügbar – kein Problem.
+      }
     })();
     return () => {
       active = false;
@@ -57,29 +71,31 @@ export default function MapScreen() {
       const pos = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
-      mapRef.current?.animateToRegion(
-        {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        },
-        500,
-      );
+      const here = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      setUserCoords(here);
+      mapRef.current?.animateToRegion({ ...here, latitudeDelta: 0.05, longitudeDelta: 0.05 }, 500);
     } catch {
       // Standort nicht verfügbar – still ignorieren.
     }
   }, [showUser]);
 
-  // Sobald Pins da sind, den Kartenausschnitt darauf einpassen.
+  // Kartenausschnitt so einpassen, dass Pins UND der eigene Standort zu sehen sind.
   useEffect(() => {
-    if (items.length === 0) return;
     const coords = items.map((a) => ({ latitude: a.coords.lat, longitude: a.coords.lng }));
+    if (userCoords) coords.push(userCoords);
+    if (coords.length === 0) return;
+    if (coords.length === 1) {
+      mapRef.current?.animateToRegion(
+        { ...coords[0], latitudeDelta: 0.08, longitudeDelta: 0.08 },
+        500,
+      );
+      return;
+    }
     mapRef.current?.fitToCoordinates(coords, {
-      edgePadding: { top: 80, right: 80, bottom: 240, left: 80 },
+      edgePadding: { top: 100, right: 80, bottom: 260, left: 80 },
       animated: true,
     });
-  }, [items]);
+  }, [items, userCoords]);
 
   // Falls die ausgewählte Activity aus der Liste fällt: Karte schließen.
   useEffect(() => {
