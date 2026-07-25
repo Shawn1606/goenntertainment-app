@@ -169,7 +169,14 @@ export default function CreateActivityScreen() {
 
   return (
     <View style={styles.screen}>
-      <Stack.Screen options={{ headerShown: true, title: 'Activity erstellen', headerTintColor: Brand.purple }} />
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: 'Activity erstellen',
+          headerTintColor: Brand.purple,
+          headerBackTitle: 'Zurück',
+        }}
+      />
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
           contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.six }]}
