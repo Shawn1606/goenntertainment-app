@@ -33,7 +33,13 @@
           "imageWidth": 76
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Damit wir dir deinen Standort auf der Karte und Aktivitäten in deiner Nähe zeigen können."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

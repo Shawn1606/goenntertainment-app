@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import * as Location from 'expo-location';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import MapView, { Marker, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,6 +29,47 @@ export default function MapScreen() {
 
   const mapRef = useRef<MapView>(null);
   const [selected, setSelected] = useState<MapActivity | null>(null);
+  const [showUser, setShowUser] = useState(false);
+
+  // Standort-Berechtigung beim Öffnen anfragen – erst dann zeigt die Karte
+  // den blauen „Ich bin hier"-Punkt.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (active) setShowUser(status === 'granted');
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  // Karte auf den eigenen Standort zentrieren (fragt bei Bedarf erneut nach).
+  const centerOnUser = useCallback(async () => {
+    try {
+      let granted = showUser;
+      if (!granted) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        granted = status === 'granted';
+        setShowUser(granted);
+      }
+      if (!granted) return;
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      mapRef.current?.animateToRegion(
+        {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        },
+        500,
+      );
+    } catch {
+      // Standort nicht verfügbar – still ignorieren.
+    }
+  }, [showUser]);
 
   // Sobald Pins da sind, den Kartenausschnitt darauf einpassen.
   useEffect(() => {
@@ -52,6 +94,8 @@ export default function MapScreen() {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         initialRegion={DEFAULT_REGION}
+        showsUserLocation={showUser}
+        showsMyLocationButton={false}
         onPress={() => setSelected(null)}>
         {items.map((activity) => (
           <Marker
@@ -98,6 +142,20 @@ export default function MapScreen() {
           </View>
         </View>
       ) : null}
+
+      {/* Auf meinen Standort zentrieren */}
+      <Pressable
+        onPress={centerOnUser}
+        style={({ pressed }) => [
+          styles.locateButton,
+          {
+            backgroundColor: theme.background,
+            bottom: (selected ? 220 : 0) + insets.bottom + BottomTabInset + Spacing.three,
+            opacity: pressed ? 0.8 : 1,
+          },
+        ]}>
+        <ThemedText style={[styles.locateIcon, { color: theme.tint }]}>◎</ThemedText>
+      </Pressable>
 
       {/* Ausgewählte Activity als Karte unten + Route-Button */}
       {selected ? (
@@ -150,6 +208,25 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
+  },
+  locateButton: {
+    position: 'absolute',
+    right: Spacing.three,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  locateIcon: {
+    fontSize: 24,
+    lineHeight: 28,
+    fontWeight: '600',
   },
   sheet: {
     position: 'absolute',
