@@ -22,16 +22,30 @@ import { api, ApiError, type Interest } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 const MAX_INTERESTS = 5;
-const DATE_RE = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+const DATE_RE = /^(\d{1,2})\.(\d{1,2})$/;
 const TIME_RE = /^(\d{1,2}):(\d{2})$/;
 
-/** Baut aus „TT.MM.JJJJ" + „HH:MM" ein ISO-Datum. Null bei ungültiger Eingabe. */
+/**
+ * Baut aus „TT.MM" (ohne Jahr) + „HH:MM" ein ISO-Datum. Das Jahr wird automatisch
+ * gesetzt: aktuelles Jahr – liegt Tag+Monat aber schon in der Vergangenheit, das
+ * nächste Jahr. Null bei ungültiger Eingabe.
+ */
 function toIso(dateStr: string, timeStr: string): string | null {
   const dm = dateStr.trim().match(DATE_RE);
   const tm = timeStr.trim().match(TIME_RE);
   if (!dm || !tm) return null;
-  const date = new Date(Number(dm[3]), Number(dm[2]) - 1, Number(dm[1]), Number(tm[1]), Number(tm[2]));
-  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  const now = new Date();
+  const month = Number(dm[2]) - 1;
+  const day = Number(dm[1]);
+  const hour = Number(tm[1]);
+  const minute = Number(tm[2]);
+  let date = new Date(now.getFullYear(), month, day, hour, minute);
+  if (Number.isNaN(date.getTime())) return null;
+  // Tag/Monat dieses Jahr schon vorbei? Dann fürs nächste Jahr anlegen.
+  if (date.getTime() < now.getTime()) {
+    date = new Date(now.getFullYear() + 1, month, day, hour, minute);
+  }
+  return date.toISOString();
 }
 
 type Banner = { uri: string; name: string; type: string };
@@ -120,7 +134,7 @@ export default function CreateActivityScreen() {
     if (!description.trim()) local.description = ['Bitte gib eine Beschreibung ein.'];
     if (!location.trim()) local.location = ['Bitte gib einen Ort ein.'];
     const startsAt = toIso(date, time);
-    if (!startsAt) local.starts_at = ['Bitte Datum (TT.MM.JJJJ) und Uhrzeit (HH:MM) korrekt eingeben.'];
+    if (!startsAt) local.starts_at = ['Bitte Datum (TT.MM) und Uhrzeit (HH:MM) korrekt eingeben.'];
     if (Object.keys(local).length > 0) {
       setErrors(local);
       return;
@@ -193,7 +207,7 @@ export default function CreateActivityScreen() {
 
           <View style={styles.row}>
             <View style={styles.rowItem}>
-              <BrandTextField label="Datum" value={date} onChangeText={setDate} placeholder="TT.MM.JJJJ" keyboardType="numbers-and-punctuation" />
+              <BrandTextField label="Datum" value={date} onChangeText={setDate} placeholder="TT.MM" keyboardType="numbers-and-punctuation" />
             </View>
             <View style={styles.rowItem}>
               <BrandTextField label="Uhrzeit" value={time} onChangeText={setTime} placeholder="HH:MM" keyboardType="numbers-and-punctuation" />

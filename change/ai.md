@@ -124,3 +124,24 @@ files:
   ~ src/components/brand-logo.tsx (Zweiton RAUS -> ein Wortbild "GÖ4Fun" in fontFamily Pacifico_400Regular + BrandGradientText, fontSize 54/24, lineHeight *1.45)
 tests: web bundle 200; tsc clean; JS: logo fontFamily=Pacifico_400Regular 54px, document.fonts hat pacifico=true
 note: GÖ sticht durch Grossbuchstaben im Script heraus; Verlauf via MaskedView (native), Web-Fallback solid lila
+
+STEP 9 · app · branch fix/create-activity-remount · Bugfix Event-Formular + Datum TT.MM
+grund: User (Handy): Foto-Auswahl wird sofort geloescht, Tastatur schliesst bei jedem Zeichen,
+       Interessen laden nie. Diagnose per Ausschluss: Problem NUR im Event-Screen, Login/Register ok
+       => nicht reactCompiler (traefe alle Screens), sondern presentation:'modal'.
+ursache: _layout.tsx:31 Stack.Screen create-activity mit presentation:'modal'. Android baut den
+       Modal-Screen bei jeder Tastatur-/Layout-Aenderung neu auf => lokaler State (banner, interests-
+       Ladezustand) + TextInput-Fokus gehen verloren. Register (normaler Screen) daher unauffaellig.
+files:
+  ~ src/app/_layout.tsx (presentation:'modal' entfernt; create-activity ist jetzt normaler Push-Screen,
+     eigener Header bleibt via Stack.Screen im Screen selbst)
+  ~ src/app/create-activity.tsx (Datum jetzt TT.MM ohne Jahr: DATE_RE /^(\d{1,2})\.(\d{1,2})$/;
+     toIso setzt Jahr automatisch = aktuelles Jahr, bei vergangenem Tag/Monat naechstes Jahr;
+     placeholder + Fehlermeldung auf TT.MM)
+decisions:
+  - reactCompiler NICHT angefasst (nicht die Ursache; weniger Aenderung = besser)
+  - Datum ohne Jahr auf User-Wunsch; +1-Jahr-Fallback verhindert Events in der Vergangenheit
+tests: tsc: eigene Dateien clean (restliche Fehler vorbestehend = Beta-SDK-Typen app-tabs/explore/use-theme)
+verify-open: Handy-Test durch User (Android-Remount nur am Geraet reproduzierbar, nicht auf Web)
+open (weiter offen, eigene Tickets): Interessen bei Kontoerstellung (register.tsx); expo-image-picker
+     als Plugin in app.json (fuer gebauten Build noetig); Event beitreten; Datums-Picker

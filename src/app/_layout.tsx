@@ -28,7 +28,10 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
     <Stack screenOptions={{ headerShown: false }}>
       <Stack.Protected guard={!!token}>
         <Stack.Screen name="(app)" />
-        <Stack.Screen name="create-activity" options={{ presentation: 'modal' }} />
+        {/* Kein 'modal': Auf Android baute der Modal-Screen sich bei jeder
+            Tastatur-/Layout-Änderung neu auf (Foto/Fokus/Interessen gingen
+            verloren). Als normaler Screen bleibt der Zustand erhalten. */}
+        <Stack.Screen name="create-activity" />
       </Stack.Protected>
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
