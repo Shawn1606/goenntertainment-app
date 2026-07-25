@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 
 import { BrandButton } from '@/components/ui/brand-button';
 import { BrandTextField } from '@/components/ui/brand-text-field';
@@ -22,30 +23,40 @@ import { api, ApiError, type Interest } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 const MAX_INTERESTS = 5;
-const DATE_RE = /^(\d{1,2})\.(\d{1,2})$/;
-const TIME_RE = /^(\d{1,2}):(\d{2})$/;
+const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 
-/**
- * Baut aus „TT.MM" (ohne Jahr) + „HH:MM" ein ISO-Datum. Das Jahr wird automatisch
- * gesetzt: aktuelles Jahr – liegt Tag+Monat aber schon in der Vergangenheit, das
- * nächste Jahr. Null bei ungültiger Eingabe.
- */
-function toIso(dateStr: string, timeStr: string): string | null {
-  const dm = dateStr.trim().match(DATE_RE);
-  const tm = timeStr.trim().match(TIME_RE);
-  if (!dm || !tm) return null;
-  const now = new Date();
-  const month = Number(dm[2]) - 1;
-  const day = Number(dm[1]);
-  const hour = Number(tm[1]);
-  const minute = Number(tm[2]);
-  let date = new Date(now.getFullYear(), month, day, hour, minute);
-  if (Number.isNaN(date.getTime())) return null;
-  // Tag/Monat dieses Jahr schon vorbei? Dann fürs nächste Jahr anlegen.
-  if (date.getTime() < now.getTime()) {
-    date = new Date(now.getFullYear() + 1, month, day, hour, minute);
-  }
-  return date.toISOString();
+/** „Fr, 25.07.2026" */
+function formatDate(d: Date): string {
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  return `${WEEKDAYS[d.getDay()]}, ${dd}.${mm}.${d.getFullYear()}`;
+}
+
+/** „14:30" */
+function formatTime(d: Date): string {
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mi}`;
+}
+
+/** Sinnvoller Startwert für den Picker: heute, nächste volle Stunde. */
+function defaultWhen(): Date {
+  const d = new Date();
+  d.setMinutes(0, 0, 0);
+  d.setHours(d.getHours() + 1);
+  return d;
+}
+
+/** Nimmt Datum-Teil aus `picked`, behält Uhrzeit aus `base`. */
+function withDate(base: Date | null, picked: Date): Date {
+  const b = base ?? defaultWhen();
+  return new Date(picked.getFullYear(), picked.getMonth(), picked.getDate(), b.getHours(), b.getMinutes());
+}
+
+/** Nimmt Uhrzeit-Teil aus `picked`, behält Datum aus `base`. */
+function withTime(base: Date | null, picked: Date): Date {
+  const b = base ?? defaultWhen();
+  return new Date(b.getFullYear(), b.getMonth(), b.getDate(), picked.getHours(), picked.getMinutes());
 }
 
 type Banner = { uri: string; name: string; type: string };
@@ -58,8 +69,8 @@ export default function CreateActivityScreen() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [location, setLocation] = useState('');
-  const [date, setDate] = useState('');
-  const [time, setTime] = useState('');
+  const [when, setWhen] = useState<Date | null>(null);
+  const [picker, setPicker] = useState<null | 'date' | 'time'>(null);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [interests, setInterests] = useState<Interest[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
@@ -87,6 +98,16 @@ export default function CreateActivityScreen() {
       }
       return [...prev, id];
     });
+  }
+
+  function onPickerChange(event: DateTimePickerEvent, picked?: Date) {
+    // Android: Dialog schließt sich selbst; „dismissed" = abgebrochen.
+    if (Platform.OS === 'android') {
+      setPicker(null);
+      if (event.type !== 'set' || !picked) return;
+    }
+    if (!picked) return;
+    setWhen((prev) => (picker === 'date' ? withDate(prev, picked) : withTime(prev, picked)));
   }
 
   function useAsset(result: ImagePicker.ImagePickerResult) {
@@ -133,8 +154,7 @@ export default function CreateActivityScreen() {
     if (!title.trim()) local.title = ['Bitte gib einen Namen ein.'];
     if (!description.trim()) local.description = ['Bitte gib eine Beschreibung ein.'];
     if (!location.trim()) local.location = ['Bitte gib einen Ort ein.'];
-    const startsAt = toIso(date, time);
-    if (!startsAt) local.starts_at = ['Bitte Datum (TT.MM) und Uhrzeit (HH:MM) korrekt eingeben.'];
+    if (!when) local.starts_at = ['Bitte Datum und Uhrzeit auswählen.'];
     if (Object.keys(local).length > 0) {
       setErrors(local);
       return;
@@ -146,7 +166,7 @@ export default function CreateActivityScreen() {
         title: title.trim(),
         description: description.trim(),
         location: location.trim(),
-        starts_at: startsAt as string,
+        starts_at: (when as Date).toISOString(),
         interests: selected,
         banner,
       });

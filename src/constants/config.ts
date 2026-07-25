@@ -13,7 +13,10 @@ import Constants from 'expo-constants';
  * Wenn das Raten mal nicht passt, trage die URL hier fest ein, z. B.:
  *   const HARDCODED_API_URL = 'http://192.168.178.44:8000';
  */
-const HARDCODED_API_URL: string | null = null;
+// Fest auf die WLAN-IP dieses PCs gesetzt, damit das Handy das Backend sicher
+// erreicht (der PC hat mehrere Netz-Adressen; Auto-Raten kann die falsche treffen).
+// Ändert sich die PC-IP (DHCP), hier anpassen. Für Emulator/Web ggf. auf null zurück.
+const HARDCODED_API_URL: string | null = 'http://192.168.178.25:8000';
 
 const BACKEND_PORT = 8000;
 

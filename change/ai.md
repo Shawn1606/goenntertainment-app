@@ -145,3 +145,16 @@ tests: tsc: eigene Dateien clean (restliche Fehler vorbestehend = Beta-SDK-Typen
 verify-open: Handy-Test durch User (Android-Remount nur am Geraet reproduzierbar, nicht auf Web)
 open (weiter offen, eigene Tickets): Interessen bei Kontoerstellung (register.tsx); expo-image-picker
      als Plugin in app.json (fuer gebauten Build noetig); Event beitreten; Datums-Picker
+
+STEP 10 · meta · Richtungswechsel im Workflow (User-Entscheidung 2026-07-25)
+grund: User-Vorgabe: ab jetzt AUSSCHLIESSLICH in diesem App-Projekt arbeiten.
+entscheidung: Backend wird komplett von PHP/Laravel nach JS/TS hierher migriert
+       (Expo-Router API-Routes). Ziel: Laravel voll abloesen.
+       Laravel = nur noch Uebergangs-Datenquelle/Vorlage, kein Feature/Fix mehr dort.
+       Rueckverfolgung laeuft nur noch hier (change/ai.md + change/human.md).
+       Checks: expo lint + tsc + JS-Tests statt Pint/Pest.
+files:
+  ~ CLAUDE.md (App) — neuer Abschnitt "0. RICHTUNGSWECHSEL" + Workflow/5-Regeln uebernommen
+  ~ ../goenntertainment/CLAUDE.md (Laravel) — gleicher "0. RICHTUNGSWECHSEL"-Block oben ergaenzt
+offen (eigene Tickets): Backend-Umbau selbst (Auth/Google-Login, Activities, Teilnehmer/Beitreten)
+       Stueck fuer Stueck in JS neu; Entscheidung ueber offenen Laravel-PR #25 (Beitreten-API)
