@@ -9,13 +9,14 @@ import { BrandButton } from '@/components/ui/brand-button';
 import { BrandTextField } from '@/components/ui/brand-text-field';
 import { MailIcon } from '@/components/ui/icons';
 import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
+import { api, ApiError } from '@/lib/api';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * „Passwort vergessen": nimmt die E-Mail entgegen und bestätigt den Versand.
- * Der echte Mail-Versand kommt als eigenes Backend-Ticket (/api/forgot-password);
- * bis dahin zeigt der Screen eine neutrale Bestätigung ohne Fehler.
+ * „Passwort vergessen": schickt die E-Mail ans Backend (/api/forgot-password) und
+ * bestätigt den Versand neutral. Die API verrät nicht, ob die Adresse existiert;
+ * der eigentliche Mail-Versand (SMTP) ist im Backend noch ein eigenes Ticket.
  */
 export default function ForgotPasswordScreen() {
   const insets = useSafeAreaInsets();
@@ -24,14 +25,27 @@ export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  function onSubmit() {
+  async function onSubmit() {
     if (!EMAIL_RE.test(email.trim())) {
       setError('Bitte gib eine gültige E-Mail-Adresse ein.');
       return;
     }
     setError(null);
-    setSent(true);
+    setLoading(true);
+    try {
+      await api.forgotPassword(email.trim());
+      setSent(true);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.firstError()
+          : 'Etwas ist schiefgelaufen. Bitte versuch es später erneut.',
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -83,7 +97,7 @@ export default function ForgotPasswordScreen() {
                   leftIcon={<MailIcon />}
                   error={error ?? undefined}
                 />
-                <BrandButton title="Link senden" onPress={onSubmit} />
+                <BrandButton title="Link senden" onPress={onSubmit} loading={loading} />
               </>
             )}
           </View>

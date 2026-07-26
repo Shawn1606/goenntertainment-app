@@ -1,14 +1,14 @@
 import Constants from 'expo-constants';
 
 /**
- * Basis-URL des Laravel-Backends.
+ * Basis-URL des JS-Backends (Ordner `server/`, ersetzt das alte Laravel).
  *
  * Fürs Handy zählt NICHT `localhost` (das wäre das Handy selbst), sondern die
  * LAN-IP deines PCs. Im Dev-Betrieb raten wir sie automatisch aus der Metro-
  * Adresse (gleiche Adresse wie Expo, nur Port 8000).
  *
- * Backend dafür so starten (im Laravel-Ordner):
- *   php artisan serve --host=0.0.0.0 --port=8000
+ * Backend dafür so starten (im Ordner `server/`):
+ *   npm run dev        (oder: npm start)
  *
  * Wenn das Raten mal nicht passt, trage die URL hier fest ein, z. B.:
  *   const HARDCODED_API_URL = 'http://192.168.178.44:8000';

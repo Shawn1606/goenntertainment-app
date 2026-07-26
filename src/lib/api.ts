@@ -132,6 +132,17 @@ export const api = {
 
   me: (token: string) => request<{ user: User; profile_complete: boolean }>('/user', { token }),
 
+  /**
+   * Fordert eine „Passwort vergessen"-Mail an. Antwortet immer neutral (die API
+   * verrät nicht, ob die Adresse registriert ist) – ein 422 kommt nur bei einer
+   * ungültigen E-Mail-Eingabe.
+   */
+  forgotPassword: (email: string) =>
+    request<{ status: string; message: string }>('/forgot-password', {
+      method: 'POST',
+      body: { email },
+    }),
+
   interests: () => request<{ data: Interest[] }>('/interests'),
 
   activities: (token: string) => request<{ data: Activity[] }>('/activities', { token }),

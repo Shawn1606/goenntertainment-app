@@ -116,3 +116,9 @@ Ehrlich / noch offen:
   neue Backend aber noch nicht auf. Kann ich als nächstes anbinden, wenn du willst.
 
 Damit kann das alte Laravel jetzt komplett weg – alles läuft in `server/`.
+
+## 10) „Passwort vergessen" hängt jetzt am echten Backend
+
+Der Screen zeigt nicht mehr nur eine Bestätigung, sondern schickt die E-Mail wirklich an
+den neuen Server. Läuft und ist geprüft. (Der echte Mail-Versand per SMTP bleibt der letzte
+offene Schritt.)
