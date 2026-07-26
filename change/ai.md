@@ -189,3 +189,12 @@ tests (echt, Port 8077, gegen laufende MySQL):
   - schema.sql fehlerfrei gegen DB ausgefuehrt (No-Op dank IF NOT EXISTS)
 offen (eigene Tickets): SMTP-Mailversand fuer Reset; forgot-password.tsx an /api/forgot-password
     anbinden (Screen zeigt bisher nur eine neutrale Bestaetigung ohne echten Aufruf)
+
+STEP 12 · app · branch feature/backend-node-migration · App an neues Backend gebunden
+files:
+  ~ src/lib/api.ts            (api.forgotPassword -> POST /api/forgot-password)
+  ~ src/app/(auth)/forgot-password.tsx (onSubmit ruft jetzt echt api.forgotPassword; loading+Fehler)
+  ~ src/constants/config.ts   (Kommentar: Laravel -> JS-Backend server/, Start via npm run dev)
+tests: tsc sauber fuer geaenderte Dateien; expo lint ohne Meldung fuer diese Dateien
+       (uebrige Lint/tsc-Fehler vorbestehend in create-activity, Beta-SDK-Typen)
+note: join/leave bewusst NICHT im Client ergaenzt (kein Screen als Konsument -> waere toter Code)
