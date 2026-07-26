@@ -1,0 +1,19 @@
+{
+  "name": "goenntertainment-server",
+  "version": "1.0.0",
+  "description": "JS/TS-Backend fuer Goenntertainment (ersetzt das Laravel-Backend, gleiche API).",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "seed": "node src/seed.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "multer": "^2.0.1",
+    "mysql2": "^3.11.5"
+  }
+}
