@@ -145,3 +145,47 @@ tests: tsc: eigene Dateien clean (restliche Fehler vorbestehend = Beta-SDK-Typen
 verify-open: Handy-Test durch User (Android-Remount nur am Geraet reproduzierbar, nicht auf Web)
 open (weiter offen, eigene Tickets): Interessen bei Kontoerstellung (register.tsx); expo-image-picker
      als Plugin in app.json (fuer gebauten Build noetig); Event beitreten; Datums-Picker
+
+STEP 10 · meta · Richtungswechsel im Workflow (User-Entscheidung 2026-07-25)
+grund: User-Vorgabe: ab jetzt AUSSCHLIESSLICH in diesem App-Projekt arbeiten.
+entscheidung: Backend wird komplett von PHP/Laravel nach JS/TS hierher migriert
+       (Expo-Router API-Routes). Ziel: Laravel voll abloesen.
+       Laravel = nur noch Uebergangs-Datenquelle/Vorlage, kein Feature/Fix mehr dort.
+       Rueckverfolgung laeuft nur noch hier (change/ai.md + change/human.md).
+       Checks: expo lint + tsc + JS-Tests statt Pint/Pest.
+files:
+  ~ CLAUDE.md (App) — neuer Abschnitt "0. RICHTUNGSWECHSEL" + Workflow/5-Regeln uebernommen
+  ~ ../goenntertainment/CLAUDE.md (Laravel) — gleicher "0. RICHTUNGSWECHSEL"-Block oben ergaenzt
+offen (eigene Tickets): Backend-Umbau selbst (Auth/Google-Login, Activities, Teilnehmer/Beitreten)
+       Stueck fuer Stueck in JS neu; Entscheidung ueber offenen Laravel-PR #25 (Beitreten-API)
+
+STEP 11 · backend · branch feature/backend-node-migration · Restliche Laravel-Teile nach JS portiert
+grund: User-Wunsch: alles was ins App-Projekt passt aus Laravel hierher ziehen und sichtbar machen.
+befund: Controller (Auth/Google/Interests/Activities inkl. join/leave) waren bereits in server/src
+        portiert. Es fehlten noch: DB-Schema, Seeds, Passwort-Reset.
+files:
+  + server/schema.sql            (alle Tabellen aus den Laravel-Migrations; CREATE TABLE IF NOT EXISTS;
+                                  users inkl. Profilfelder, interests, interest_user, activities,
+                                  activity_interest, activity_user, personal_access_tokens,
+                                  password_reset_tokens; FKs mit ON DELETE CASCADE)
+  + server/src/seed.js           (portiert InterestSeeder + AdminUserSeeder; idempotent via
+                                  ON DUPLICATE KEY / SELECT-dann-UPDATE; slugify wie Str::slug;
+                                  Admin nur wenn ADMIN_EMAIL/ADMIN_PASSWORD gesetzt)
+  + server/src/routes/password.js (POST /api/forgot-password + /api/reset-password; Token gehasht in
+                                  password_reset_tokens, 60-Min-Ablauf, neutrale Antwort ohne Leak)
+  ~ server/src/index.js          (passwordRouter unter /api eingehaengt)
+  ~ server/package.json          (script "seed": node src/seed.js)
+  ~ server/.env.example          (ADMIN_EMAIL/ADMIN_PASSWORD ergaenzt)
+decisions:
+  - schema.sql idempotent (IF NOT EXISTS) => gefahrlos gegen bestehende Laravel-DB.
+  - Passwort-Reset auf DB-Ebene komplett; ECHTER Mail-Versand (SMTP) bleibt eigenes Ticket,
+    Token wird bis dahin nur in die Server-Konsole geloggt.
+tests (echt, Port 8077, gegen laufende MySQL):
+  - health OK; forgot: neutral bei Unbekannt, 422 bei ungueltiger Mail
+  - Happy-Path mit Wegwerf-Nutzer: register -> forgot (Token aus Log) -> reset -> login neu OK,
+    login alt abgelehnt; Testnutzer danach geloescht
+  - reset mit falschem Token -> 422
+  - seed idempotent: interests bleiben 10, keine Duplikate (Slugs matchen Laravel-Daten)
+  - schema.sql fehlerfrei gegen DB ausgefuehrt (No-Op dank IF NOT EXISTS)
+offen (eigene Tickets): SMTP-Mailversand fuer Reset; forgot-password.tsx an /api/forgot-password
+    anbinden (Screen zeigt bisher nur eine neutrale Bestaetigung ohne echten Aufruf)

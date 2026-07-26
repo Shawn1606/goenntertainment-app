@@ -96,3 +96,23 @@ großen GÖ, das durch die Großbuchstaben heraussticht. Name bleibt GÖ4Fun.
 
 - Genauere, technische Version: `change/ai.md` (im selben Ordner).
 - Jeder Speicherpunkt (Commit) in der Git-Historie und im Pull Request #1 auf GitHub.
+
+## 9) Rest vom alten Backend nach JS geholt
+
+Der Kern des Backends (Anmelden, Google, Interessen, Aktivitäten inkl. Beitreten) war schon
+in JavaScript im Ordner `server/` – du siehst ihn in Cursor. Gefehlt haben noch drei Dinge,
+die ich jetzt aus dem alten Laravel nachgezogen habe:
+
+- **Datenbank-Bauplan** (`server/schema.sql`): legt alle Tabellen an, ganz ohne Laravel.
+- **Start-Daten** (`server/src/seed.js`): die Interessen-Liste und der Admin-Zugang. Starten mit
+  `npm run seed` im Ordner `server`.
+- **Passwort vergessen** (im Backend): nimmt die E-Mail an und setzt mit einem Link ein neues
+  Passwort. Getestet und funktioniert.
+
+Ehrlich / noch offen:
+- Der **E-Mail-Versand** braucht noch einen Mail-Zugang (SMTP) – eigener Schritt. Bis dahin
+  steht der Link nur in der Server-Konsole (zum Testen).
+- Der **„Passwort vergessen"-Screen** in der App zeigt bisher nur eine Bestätigung, ruft das
+  neue Backend aber noch nicht auf. Kann ich als nächstes anbinden, wenn du willst.
+
+Damit kann das alte Laravel jetzt komplett weg – alles läuft in `server/`.
