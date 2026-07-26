@@ -33,12 +33,13 @@ router.post('/forgot-password', async (req, res, next) => {
     const user = await first('SELECT id FROM users WHERE email = ?', [b.email]);
     if (user) {
       const token = makeResetToken();
+      const tokenHash = await hashPassword(token);
       // Token gehasht speichern; created_at fuer die Ablauf-Pruefung.
       await pool.query(
         `INSERT INTO password_reset_tokens (email, token, created_at)
            VALUES (?, ?, NOW())
          ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = NOW()`,
-        [b.email, hashPassword(token)],
+        [b.email, tokenHash],
       );
       // TODO(eigenes Ticket): echten Mail-Versand anbinden (SMTP).
       console.log(`[forgot-password] Reset-Token fuer ${b.email}: ${token}`);
@@ -84,7 +85,7 @@ router.post('/reset-password', async (req, res, next) => {
         email: ['Dieser Link zum Zuruecksetzen ist ungueltig.'],
       });
 
-    if (!row || !checkPassword(String(b.token), row.token)) {
+    if (!row || !(await checkPassword(String(b.token), row.token))) {
       throw invalid();
     }
 
@@ -95,8 +96,9 @@ router.post('/reset-password', async (req, res, next) => {
     }
 
     // Neues Passwort setzen + alle bestehenden Tokens/Reset-Zeile entwerten.
+    const newHash = await hashPassword(String(b.password));
     await pool.query('UPDATE users SET password = ?, remember_token = NULL, updated_at = NOW() WHERE email = ?', [
-      hashPassword(String(b.password)),
+      newHash,
       b.email,
     ]);
     await pool.query('DELETE FROM password_reset_tokens WHERE email = ?', [b.email]);

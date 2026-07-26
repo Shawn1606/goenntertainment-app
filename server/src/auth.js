@@ -34,17 +34,28 @@ export async function createToken(userId, name = 'mobile') {
   return `${result.insertId}|${plain}`;
 }
 
-/** Prueft bcrypt-Passwoerter; normalisiert Laravels $2y$-Praefix fuer bcryptjs. */
+/**
+ * Kostenfaktor fuer bcrypt. 10 ist weiterhin sicher (Laravel-Standard) und rund
+ * 4x schneller als 12 (~80 ms statt ~310 ms mit reinem bcryptjs).
+ */
+const BCRYPT_ROUNDS = 10;
+
+/**
+ * Prueft bcrypt-Passwoerter; normalisiert Laravels $2y$-Praefix fuer bcryptjs.
+ * Async (bcrypt.compare statt compareSync), damit der Event-Loop nicht blockiert –
+ * sonst haengen waehrend eines Logins ALLE anderen Anfragen.
+ */
 export function checkPassword(plain, hash) {
   if (!hash) {
-    return false;
+    return Promise.resolve(false);
   }
   const normalized = hash.startsWith('$2y$') ? `$2b$${hash.slice(4)}` : hash;
-  return bcrypt.compareSync(plain, normalized);
+  return bcrypt.compare(plain, normalized);
 }
 
+/** Async (bcrypt.hash statt hashSync) – blockiert den Event-Loop nicht. */
 export function hashPassword(plain) {
-  return bcrypt.hashSync(plain, 12);
+  return bcrypt.hash(plain, BCRYPT_ROUNDS);
 }
 
 /** Entfernt sensible Felder aus einer User-Zeile (wie Laravels $hidden). */

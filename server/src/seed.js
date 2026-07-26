@@ -58,7 +58,7 @@ async function seedAdmin() {
   }
 
   // Wie Laravels updateOrCreate: nur ueber die E-Mail matchen.
-  const hashed = hashPassword(String(password));
+  const hashed = await hashPassword(String(password));
   const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
 
   if (existing.length > 0) {

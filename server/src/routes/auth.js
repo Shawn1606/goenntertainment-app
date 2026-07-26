@@ -59,10 +59,11 @@ router.post('/register', async (req, res, next) => {
 
     v.throwIfFails();
 
+    const passwordHash = await hashPassword(String(b.password));
     const [result] = await pool.query(
       `INSERT INTO users (name, username, email, password, account_type, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-      [b.name, b.username, b.email, hashPassword(String(b.password)), b.account_type],
+      [b.name, b.username, b.email, passwordHash, b.account_type],
     );
 
     if (interests.length > 0) {
@@ -91,7 +92,7 @@ router.post('/login', async (req, res, next) => {
     v.throwIfFails();
 
     const user = await first('SELECT * FROM users WHERE email = ?', [b.email]);
-    if (!user || !checkPassword(String(b.password), user.password)) {
+    if (!user || !(await checkPassword(String(b.password), user.password))) {
       throw new HttpError(422, 'Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.', {
         email: ['Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.'],
       });
