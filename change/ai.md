@@ -241,3 +241,18 @@ gotcha: server NUR mit cwd=server starten (npm run server). Manueller Start aus 
   kein Code-Bug.
 decisions: cost 10 = Laravel-Default, weiterhin sicher, ~4x schneller als 12. Bewusst KEIN
   natives bcrypt / kein concurrently (keine neue Dep-Baustelle).
+
+STEP 15 · app/config · branch fix/backend-connectivity-and-perf · Login-Timeout: falsch gerateter API-Host
+symptom: "einloggen dauert ewig" am echten Handy (Expo Go). Backend selbst ~4ms.
+diagnose:
+  - Expo-Manifest hostUri = 127.0.0.1:8081 -> guessDevHost() => http://127.0.0.1:8000
+    (aus Handy-Sicht = das Handy selbst).
+  - PC hat 2 externe IPv4: Hamachi 25.36.112.94 (ZUERST) vor WLAN 192.168.178.25.
+    LAN-Guess wuerde die VPN-IP nehmen -> vom Handy nicht/langsam erreichbar -> TCP-Timeout.
+  - Server bindet '::' + 0.0.0.0, auf 192.168.178.25:8000 lokal 200/4ms erreichbar (keine Regression).
+fix:
+  ~ src/constants/config.ts  HARDCODED_API_URL = 'http://192.168.178.25:8000' (Raten abgeschaltet).
+offen/Hinweis (kein Code): Windows-Firewall fuer Node/Port 8000 inbound (private) muss erlaubt sein;
+  Handy im selben 192.168.178.x-WLAN. Phone-Test: GET http://192.168.178.25:8000/api/health.
+  Bei wechselnder PC-IP config.ts anpassen (langfristig: guessDevHost koennte 192.168/10.x vor
+  VPN-Ranges bevorzugen -> eigenes Ticket).

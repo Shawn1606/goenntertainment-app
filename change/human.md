@@ -170,3 +170,26 @@ den kompletten Server lahm, auch für alle anderen. Jetzt läuft sie nebenher
 Am Rande gelernt: Den Server **immer** mit `npm run server` starten (nicht per Hand
 aus dem Hauptordner) – sonst findet er die Zugangsdaten in `server/.env` nicht und
 meldet „Access denied … using password: NO".
+
+## 13) Login am echten Handy „dauerte ewig" → falsch geratene Backend-Adresse
+
+Nicht die DB und nicht der Server – die App hat die **falsche Server-Adresse geraten**:
+- Expo lieferte `127.0.0.1` – das ist aus Sicht des Handys aber das Handy selbst.
+- Dein PC hat zusätzlich eine Hamachi-VPN-Adresse (`25.x`), die im WLAN nicht
+  erreichbar ist.
+
+In beiden Fällen läuft die App in einen Netzwerk-Timeout, bevor überhaupt eine
+Antwort kommt → „einloggen dauert ewig". Der Server selbst antwortet in ~4 ms.
+
+**Fix:** In `src/constants/config.ts` die Backend-Adresse fest auf die WLAN-IP
+deines PCs gesetzt: `http://192.168.178.25:8000`. Damit rät die App nicht mehr.
+
+**Wichtig:**
+- Dein **Handy muss im selben WLAN** (Fritzbox, 192.168.178.x) sein – nicht über VPN/mobil.
+- **Schnelltest:** im Handy-Browser `http://192.168.178.25:8000/api/health` öffnen.
+  Kommt sofort `{"ok":true}` → alles gut. Hängt es → Windows-Firewall blockt Node
+  (beim Start „Zugriff zulassen" für **private** Netzwerke wählen) oder das Handy
+  ist im falschen Netz.
+- Ändert sich mal die PC-IP (`ipconfig` → IPv4 des WLAN-Adapters), muss die Adresse
+  in `config.ts` angepasst werden.
+- Nach der Änderung die App in Expo Go **neu laden** (schütteln → Reload).
