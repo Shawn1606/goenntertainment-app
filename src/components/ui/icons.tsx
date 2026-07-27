@@ -104,6 +104,44 @@ export function UserIcon({ size = 20, color = '#9b6dff', ...rest }: IconProps) {
   );
 }
 
+/** Karten-Pin – öffnet die Ortsauswahl auf der Karte. */
+export function MapPinIcon({ size = 20, color = '#9b6dff', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Path
+        d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11Z"
+        stroke={color}
+        strokeWidth={1.7}
+        strokeLinejoin="round"
+      />
+      <Circle cx={12} cy={10} r={2.6} stroke={color} strokeWidth={1.7} />
+    </Svg>
+  );
+}
+
+/** Papierkorb – Event löschen (Admin). */
+export function TrashIcon({ size = 20, color = '#ef4444', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Path d="M4 7h16" stroke={color} strokeWidth={1.7} strokeLinecap="round" />
+      <Path
+        d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"
+        stroke={color}
+        strokeWidth={1.7}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M6 7h12l-.8 11.2A2 2 0 0 1 15.2 20H8.8a2 2 0 0 1-2-1.8L6 7Z"
+        stroke={color}
+        strokeWidth={1.7}
+        strokeLinejoin="round"
+      />
+      <Path d="M10 11v5M14 11v5" stroke={color} strokeWidth={1.7} strokeLinecap="round" />
+    </Svg>
+  );
+}
+
 /** @-Zeichen für das Benutzernamen-Feld. */
 export function AtIcon({ size = 20, color = '#9b6dff', ...rest }: IconProps) {
   return (

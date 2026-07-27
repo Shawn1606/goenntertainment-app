@@ -59,10 +59,11 @@ router.post('/register', async (req, res, next) => {
 
     v.throwIfFails();
 
+    const passwordHash = await hashPassword(String(b.password));
     const [result] = await pool.query(
       `INSERT INTO users (name, username, email, password, account_type, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-      [b.name, b.username, b.email, hashPassword(String(b.password)), b.account_type],
+      [b.name, b.username, b.email, passwordHash, b.account_type],
     );
 
     if (interests.length > 0) {
@@ -91,7 +92,7 @@ router.post('/login', async (req, res, next) => {
     v.throwIfFails();
 
     const user = await first('SELECT * FROM users WHERE email = ?', [b.email]);
-    if (!user || !checkPassword(String(b.password), user.password)) {
+    if (!user || !(await checkPassword(String(b.password), user.password))) {
       throw new HttpError(422, 'Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.', {
         email: ['Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.'],
       });
@@ -119,6 +120,74 @@ router.get('/user', requireAuth, async (req, res, next) => {
     res.json({
       user: serializeUser(req.user),
       profile_complete: await profileComplete(req.user),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/user  (geschuetzt) – Profil bearbeiten (Name, Benutzername, E-Mail).
+// Teil-Update: nur mitgeschickte Felder werden geaendert.
+router.patch('/user', requireAuth, async (req, res, next) => {
+  try {
+    const b = req.body ?? {};
+    const v = new Validator(b);
+    const updates = {};
+
+    if (b.name !== undefined) {
+      if (!b.name || typeof b.name !== 'string') {
+        v.add('name', 'Der Name ist erforderlich.');
+      } else {
+        updates.name = b.name.trim();
+      }
+    }
+
+    if (b.username !== undefined) {
+      if (!b.username || typeof b.username !== 'string') {
+        v.add('username', 'Der Benutzername ist erforderlich.');
+      } else if (b.username.length < 3 || b.username.length > 30 || !isAlphaDash(b.username)) {
+        v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+      } else {
+        updates.username = b.username;
+      }
+    }
+
+    if (b.email !== undefined) {
+      if (!isEmail(b.email)) {
+        v.add('email', 'Bitte eine gueltige E-Mail-Adresse angeben.');
+      } else {
+        updates.email = b.email;
+      }
+    }
+
+    // Eindeutigkeit pruefen (andere Nutzer), nur wenn Feld sich aendert.
+    if (updates.username && updates.username !== req.user.username) {
+      if (await first('SELECT id FROM users WHERE username = ? AND id <> ?', [updates.username, req.user.id])) {
+        v.add('username', 'Dieser Benutzername ist bereits vergeben.');
+      }
+    }
+    if (updates.email && updates.email !== req.user.email) {
+      if (await first('SELECT id FROM users WHERE email = ? AND id <> ?', [updates.email, req.user.id])) {
+        v.add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
+      }
+    }
+
+    v.throwIfFails();
+
+    const fields = Object.keys(updates);
+    if (fields.length > 0) {
+      const setClause = fields.map((f) => `${f} = ?`).join(', ');
+      const params = fields.map((f) => updates[f]);
+      await pool.query(`UPDATE users SET ${setClause}, updated_at = NOW() WHERE id = ?`, [
+        ...params,
+        req.user.id,
+      ]);
+    }
+
+    const user = await first('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    res.json({
+      user: serializeUser(user),
+      profile_complete: await profileComplete(user),
     });
   } catch (err) {
     next(err);

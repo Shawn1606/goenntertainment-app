@@ -39,7 +39,8 @@
         {
           "locationWhenInUsePermission": "Damit wir dir deinen Standort auf der Karte und Aktivitäten in deiner Nähe zeigen können."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

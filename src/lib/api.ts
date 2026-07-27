@@ -15,6 +15,12 @@ export type ActivityHost = {
   username: string | null;
 };
 
+export type ActivityParticipant = {
+  id: number;
+  name: string;
+  username: string | null;
+};
+
 export type Activity = {
   id: number;
   title: string;
@@ -22,8 +28,18 @@ export type Activity = {
   location: string;
   starts_at: string | null;
   banner_url: string | null;
+  /** Maximale Teilnehmerzahl; null = unbegrenzt. */
+  max_participants: number | null;
   host: ActivityHost | null;
   interests: Interest[];
+  /** Teilnehmer:innen (Namen für die Anzeige im Popup). */
+  participants: ActivityParticipant[];
+  /** Anzahl der Teilnehmer:innen – praktisch für die Liste. */
+  participants_count: number;
+  /** true, wenn der:die aktuelle Nutzer:in bereits beigetreten ist. */
+  is_joined: boolean;
+  /** ISO-Zeitpunkt des Beitritts der:des aktuellen Nutzer:in; null = nicht beigetreten. */
+  joined_at: string | null;
 };
 
 export type CreateActivityInput = {
@@ -32,6 +48,8 @@ export type CreateActivityInput = {
   location: string;
   /** ISO-8601 String. */
   starts_at: string;
+  /** Maximale Teilnehmerzahl; null/leer = unbegrenzt. */
+  max_participants?: number | null;
   interests: number[];
   /** Ausgewähltes Bild (aus Galerie/Kamera); optional. */
   banner?: { uri: string; name: string; type: string } | null;
@@ -44,7 +62,19 @@ export type User = {
   email: string;
   account_type: AccountType | null;
   avatar: string | null;
+  /** true = Admin (darf jedes Event löschen, sieht den Admin-Tab). */
+  is_admin?: boolean;
   interests?: Interest[];
+};
+
+/** Ein Tagespunkt im Admin-Verlaufsgraphen. */
+export type AdminStatsPoint = { date: string; count: number };
+
+/** Antwort von GET /api/admin/stats – Kennzahlen + Tages-Verlauf. */
+export type AdminStats = {
+  totals: { users: number; activities: number; joins: number };
+  recent: { days: number; new_users: number; joins: number };
+  series: { days: number; signups: AdminStatsPoint[]; joins: AdminStatsPoint[] };
 };
 
 export type AuthResult = {
@@ -84,9 +114,15 @@ export class ApiError extends Error {
 }
 
 type RequestOptions = {
-  method?: 'GET' | 'POST';
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   token?: string | null;
+};
+
+export type UpdateProfileInput = {
+  name?: string;
+  username?: string;
+  email?: string;
 };
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -132,6 +168,14 @@ export const api = {
 
   me: (token: string) => request<{ user: User; profile_complete: boolean }>('/user', { token }),
 
+  /** Profil bearbeiten (Name/Benutzername/E-Mail). Nur gesetzte Felder werden geändert. */
+  updateProfile: (token: string, input: UpdateProfileInput) =>
+    request<{ user: User; profile_complete: boolean }>('/user', {
+      method: 'PATCH',
+      body: input,
+      token,
+    }),
+
   /**
    * Fordert eine „Passwort vergessen"-Mail an. Antwortet immer neutral (die API
    * verrät nicht, ob die Adresse registriert ist) – ein 422 kommt nur bei einer
@@ -147,6 +191,21 @@ export const api = {
 
   activities: (token: string) => request<{ data: Activity[] }>('/activities', { token }),
 
+  /** Löscht ein beliebiges Event. Nur Admins dürfen das (Backend prüft, sonst 403). */
+  deleteActivity: (token: string, id: number) =>
+    request<{ message: string }>(`/activities/${id}`, { method: 'DELETE', token }),
+
+  /** Tritt einem Event bei (idempotent). Liefert die aktualisierte Activity. */
+  joinActivity: (token: string, id: number) =>
+    request<{ data: Activity }>(`/activities/${id}/join`, { method: 'POST', token }),
+
+  /** Verlässt ein Event wieder. Liefert die aktualisierte Activity. */
+  leaveActivity: (token: string, id: number) =>
+    request<{ data: Activity }>(`/activities/${id}/join`, { method: 'DELETE', token }),
+
+  /** Admin-Kennzahlen + Tages-Verlauf (Anmeldungen/Beitritte) für das Admin-Panel. */
+  adminStats: (token: string) => request<AdminStats>('/admin/stats', { token }),
+
   /**
    * Legt eine Activity an. Wegen des optionalen Banner-Bildes als multipart/form-data
    * (nicht JSON) – Content-Type wird von fetch automatisch mit Boundary gesetzt.
@@ -157,6 +216,9 @@ export const api = {
     form.append('description', input.description);
     form.append('location', input.location);
     form.append('starts_at', input.starts_at);
+    if (input.max_participants != null) {
+      form.append('max_participants', String(input.max_participants));
+    }
     input.interests.forEach((id) => form.append('interests[]', String(id)));
     if (input.banner) {
       form.append('banner', input.banner as unknown as Blob);

@@ -198,3 +198,61 @@ files:
 tests: tsc sauber fuer geaenderte Dateien; expo lint ohne Meldung fuer diese Dateien
        (uebrige Lint/tsc-Fehler vorbestehend in create-activity, Beta-SDK-Typen)
 note: join/leave bewusst NICHT im Client ergaenzt (kein Screen als Konsument -> waere toter Code)
+
+STEP 13 · ops/docs · branch main · Fix: App konnte Backend nicht erreichen (Server nicht gestartet)
+symptom: App laedt keine Accounts/Activities; ApiError "Keine Verbindung zum Server." (status 0)
+root-cause:
+  - Nach Laravel->Node-Migration muss server/ manuell gestartet werden (kein Herd-Autostart mehr).
+  - Nichts lauschte auf :8000. MySQL (Herd) lief korrekt auf :3306 (Diagnose anfangs verfaelscht
+    durch dt. netstat-Locale: "ABHOEREN" statt "LISTENING").
+diagnosis (echt, gegen laufende MySQL + kurz gestartetes Backend):
+  - :3306 mysqld ABHOEREN (Herd) OK; :8000 nicht vorhanden.
+  - node src/index.js startet sauber; GET /api/health {ok:true}; GET /api/interests 10 Eintraege;
+    POST /api/login liefert korrekte 422 bei falschen Daten.
+  - DB-Zaehlung via mysql2: users=5, activities=1, interests=10. => Daten vorhanden, kein Code-Bug.
+  - git show HEAD -- config.ts: nur Kommentare geaendert (kein funktionaler Regress).
+files:
+  ~ package.json          (scripts: "server" -> npm --prefix server run dev; "server:seed")
+  ~ README.md             (Get started: Backend zuerst starten; Verweis auf change/human.md)
+  ~ change/human.md,ai.md (Doku)
+decisions:
+  - Kein concurrently/neue Dep: Zwei-Terminal-Flow (Backend + expo) bleibt, nur bequemer per
+    Root-Script. server/.env war bereits korrekt (DB_PASSWORD gesetzt) -> nicht angefasst.
+tests: npm run server startet Backend; /api/health OK nach Start.
+
+STEP 14 · server/perf · branch main · Backend-Latenz: localhost-IPv6 + blockierendes bcrypt behoben
+symptom: "Backend unfassbar langsam".
+diagnose (gemessen):
+  - 127.0.0.1/api/health ~5ms; localhost/api/health connect=209ms (Windows loest localhost
+    zuerst auf ::1 auf, Server band nur 0.0.0.0 -> IPv6-Fehlversuch + Fallback).
+  - bcryptjs cost12 SYNC: compareSync 313ms, hashSync 317ms -> blockt Event-Loop (alle Requests).
+  - activities-Query sauber (kein N+1); DB via 127.0.0.1 schnell -> nicht die DB.
+fixes:
+  ~ server/src/index.js   listen('::') statt '0.0.0.0' => Dual-Stack; localhost 210ms -> ~4ms.
+  ~ server/src/auth.js    checkPassword/hashPassword async (bcrypt.compare/hash), ROUNDS 12->10.
+  ~ server/src/routes/auth.js      register/login: await hashPassword/checkPassword.
+  ~ server/src/routes/password.js  forgot/reset: await hash/compare (3 Stellen).
+  ~ server/src/seed.js             await hashPassword.
+verifiziert (echt, via npm-Start cwd=server, gegen laufende MySQL):
+  - localhost/health total ~4ms (vorher ~210).
+  - register 201 131ms; login 200 85ms; login-falsch 422 82ms; Testnutzer danach geloescht.
+gotcha: server NUR mit cwd=server starten (npm run server). Manueller Start aus Repo-Root laedt
+  dotenv aus Root -> kein DB_PASSWORD -> ER_ACCESS_DENIED (using password: NO). War Testfehler,
+  kein Code-Bug.
+decisions: cost 10 = Laravel-Default, weiterhin sicher, ~4x schneller als 12. Bewusst KEIN
+  natives bcrypt / kein concurrently (keine neue Dep-Baustelle).
+
+STEP 15 · app/config · branch fix/backend-connectivity-and-perf · Login-Timeout: falsch gerateter API-Host
+symptom: "einloggen dauert ewig" am echten Handy (Expo Go). Backend selbst ~4ms.
+diagnose:
+  - Expo-Manifest hostUri = 127.0.0.1:8081 -> guessDevHost() => http://127.0.0.1:8000
+    (aus Handy-Sicht = das Handy selbst).
+  - PC hat 2 externe IPv4: Hamachi 25.36.112.94 (ZUERST) vor WLAN 192.168.178.25.
+    LAN-Guess wuerde die VPN-IP nehmen -> vom Handy nicht/langsam erreichbar -> TCP-Timeout.
+  - Server bindet '::' + 0.0.0.0, auf 192.168.178.25:8000 lokal 200/4ms erreichbar (keine Regression).
+fix:
+  ~ src/constants/config.ts  HARDCODED_API_URL = 'http://192.168.178.25:8000' (Raten abgeschaltet).
+offen/Hinweis (kein Code): Windows-Firewall fuer Node/Port 8000 inbound (private) muss erlaubt sein;
+  Handy im selben 192.168.178.x-WLAN. Phone-Test: GET http://192.168.178.25:8000/api/health.
+  Bei wechselnder PC-IP config.ts anpassen (langfristig: guessDevHost koennte 192.168/10.x vor
+  VPN-Ranges bevorzugen -> eigenes Ticket).

@@ -34,17 +34,28 @@ export async function createToken(userId, name = 'mobile') {
   return `${result.insertId}|${plain}`;
 }
 
-/** Prueft bcrypt-Passwoerter; normalisiert Laravels $2y$-Praefix fuer bcryptjs. */
+/**
+ * Kostenfaktor fuer bcrypt. 10 ist weiterhin sicher (Laravel-Standard) und rund
+ * 4x schneller als 12 (~80 ms statt ~310 ms mit reinem bcryptjs).
+ */
+const BCRYPT_ROUNDS = 10;
+
+/**
+ * Prueft bcrypt-Passwoerter; normalisiert Laravels $2y$-Praefix fuer bcryptjs.
+ * Async (bcrypt.compare statt compareSync), damit der Event-Loop nicht blockiert –
+ * sonst haengen waehrend eines Logins ALLE anderen Anfragen.
+ */
 export function checkPassword(plain, hash) {
   if (!hash) {
-    return false;
+    return Promise.resolve(false);
   }
   const normalized = hash.startsWith('$2y$') ? `$2b$${hash.slice(4)}` : hash;
-  return bcrypt.compareSync(plain, normalized);
+  return bcrypt.compare(plain, normalized);
 }
 
+/** Async (bcrypt.hash statt hashSync) – blockiert den Event-Loop nicht. */
 export function hashPassword(plain) {
-  return bcrypt.hashSync(plain, 12);
+  return bcrypt.hash(plain, BCRYPT_ROUNDS);
 }
 
 /** Entfernt sensible Felder aus einer User-Zeile (wie Laravels $hidden). */
@@ -53,7 +64,8 @@ export function serializeUser(row) {
     return null;
   }
   const { password, remember_token, ...safe } = row;
-  return safe;
+  // is_admin kommt aus der DB als 0/1 (oder fehlt bei alten DBs) -> echter Boolean.
+  return { ...safe, is_admin: Boolean(safe.is_admin) };
 }
 
 /** Profil vollstaendig: Username + Kontotyp gesetzt und mind. 3 Interessen. */
@@ -106,4 +118,15 @@ export async function requireAuth(req, res, next) {
   } catch (err) {
     return next(err);
   }
+}
+
+/**
+ * Express-Middleware: verlangt einen Admin. Muss NACH requireAuth laufen
+ * (nutzt req.user). Antwortet mit 403, wenn der Nutzer kein Admin ist.
+ */
+export function requireAdmin(req, res, next) {
+  if (!req.user || !req.user.is_admin) {
+    return res.status(403).json({ message: 'Kein Admin-Zugang.' });
+  }
+  return next();
 }

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { api, ApiError, type RegisterInput, type User } from '@/lib/api';
+import { api, ApiError, type RegisterInput, type UpdateProfileInput, type User } from '@/lib/api';
 import { clearToken, loadToken, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
@@ -10,6 +10,7 @@ type AuthContextValue = {
   user: User | null;
   login: (email: string, password: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
+  updateProfile: (input: UpdateProfileInput) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -68,6 +69,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       register: async (input) => {
         const result = await api.register(input);
         await applyAuth(result);
+      },
+      updateProfile: async (input) => {
+        if (!token) throw new Error('Nicht angemeldet.');
+        const { user: updated } = await api.updateProfile(token, input);
+        setUser(updated);
       },
       logout: async () => {
         if (token) {

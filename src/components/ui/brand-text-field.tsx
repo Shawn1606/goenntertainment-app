@@ -10,13 +10,16 @@ export type BrandTextFieldProps = TextInputProps & {
   error?: string;
   /** Icon links im Feld (z. B. Brief oder Schloss). */
   leftIcon?: ReactNode;
+  /** Bedienbares Element rechts im Feld (z. B. Karten-Pin). Bei Passwörtern
+   * hat der Augen-Umschalter Vorrang. */
+  rightAccessory?: ReactNode;
 };
 
 /**
  * Eingabefeld im hellen Marken-Stil (weiße Karte), wie `auth-input` im Web.
  * Neu: optionales Icon links, Augen-Umschalter bei Passwörtern, Fokus-Rahmen.
  */
-export function BrandTextField({ label, error, leftIcon, style, secureTextEntry, ...rest }: BrandTextFieldProps) {
+export function BrandTextField({ label, error, leftIcon, rightAccessory, style, secureTextEntry, ...rest }: BrandTextFieldProps) {
   const [focused, setFocused] = useState(false);
   const [hidden, setHidden] = useState(!!secureTextEntry);
 
@@ -45,6 +48,8 @@ export function BrandTextField({ label, error, leftIcon, style, secureTextEntry,
           <Pressable onPress={() => setHidden((v) => !v)} hitSlop={10} style={styles.rightIcon}>
             {hidden ? <EyeIcon /> : <EyeOffIcon />}
           </Pressable>
+        ) : rightAccessory ? (
+          <View style={styles.rightIcon}>{rightAccessory}</View>
         ) : null}
       </View>
       {error ? <Text style={styles.error}>{error}</Text> : null}

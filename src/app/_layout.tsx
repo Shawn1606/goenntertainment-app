@@ -3,9 +3,9 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
-import { useColorScheme } from 'react-native';
 
 import { AuthProvider, useAuth } from '@/lib/auth-context';
+import { ThemePreferenceProvider, useResolvedScheme } from '@/lib/theme-preference';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -32,6 +32,8 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
             Tastatur-/Layout-Änderung neu auf (Foto/Fokus/Interessen gingen
             verloren). Als normaler Screen bleibt der Zustand erhalten. */}
         <Stack.Screen name="create-activity" />
+        {/* Karten-Ortsauswahl aus dem „Activity erstellen"-Formular. */}
+        <Stack.Screen name="pick-location" />
       </Stack.Protected>
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
@@ -42,15 +44,25 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
   );
 }
 
+/** Navigations-Theme an das aufgelöste Farbschema (inkl. Dark-Mode-Setting) koppeln. */
+function ThemedNavigation({ fontsReady }: { fontsReady: boolean }) {
+  const scheme = useResolvedScheme();
+
+  return (
+    <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <RootNavigator fontsReady={fontsReady} />
+    </ThemeProvider>
+  );
+}
+
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
   const [fontsLoaded] = useFonts({ Pacifico_400Regular });
 
   return (
     <AuthProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <RootNavigator fontsReady={fontsLoaded} />
-      </ThemeProvider>
+      <ThemePreferenceProvider>
+        <ThemedNavigation fontsReady={fontsLoaded} />
+      </ThemePreferenceProvider>
     </AuthProvider>
   );
 }

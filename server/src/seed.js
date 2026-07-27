@@ -34,6 +34,35 @@ const INTERESTS = [
   { name: 'Fitness', icon: 'fitness' },
 ];
 
+/**
+ * Ruestet Spalten nach, die spaeter dazukamen (fuer DBs, die vor der Schema-
+ * Aenderung angelegt wurden). Idempotent: prueft erst information_schema, damit es
+ * auf MySQL wie MariaDB laeuft (MySQL kennt kein `ADD COLUMN IF NOT EXISTS`).
+ */
+async function ensureSchema() {
+  const col = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'is_admin'`,
+  );
+  if (col[0].length === 0) {
+    await pool.query(
+      "ALTER TABLE users ADD COLUMN is_admin TINYINT(1) NOT NULL DEFAULT 0 AFTER password",
+    );
+    console.log('Schema: Spalte users.is_admin nachgeruestet.');
+  }
+
+  const maxCol = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'activities' AND column_name = 'max_participants'`,
+  );
+  if (maxCol[0].length === 0) {
+    await pool.query(
+      'ALTER TABLE activities ADD COLUMN max_participants INT UNSIGNED NULL AFTER banner_path',
+    );
+    console.log('Schema: Spalte activities.max_participants nachgeruestet.');
+  }
+}
+
 async function seedInterests() {
   for (const interest of INTERESTS) {
     const slug = slugify(interest.name);
@@ -58,29 +87,30 @@ async function seedAdmin() {
   }
 
   // Wie Laravels updateOrCreate: nur ueber die E-Mail matchen.
-  const hashed = hashPassword(String(password));
+  const hashed = await hashPassword(String(password));
   const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
 
   if (existing.length > 0) {
     await pool.query(
       `UPDATE users
-          SET name = 'Admin', username = 'admin', password = ?, account_type = 'personal', updated_at = NOW()
+          SET name = 'Admin', username = 'admin', password = ?, account_type = 'personal', is_admin = 1, updated_at = NOW()
         WHERE id = ?`,
       [hashed, existing[0].id],
     );
-    console.log(`Admin: Konto fuer ${email} aktualisiert.`);
+    console.log(`Admin: Konto fuer ${email} aktualisiert (is_admin = 1).`);
   } else {
     await pool.query(
-      `INSERT INTO users (name, username, email, password, account_type, created_at, updated_at)
-         VALUES ('Admin', 'admin', ?, ?, 'personal', NOW(), NOW())`,
+      `INSERT INTO users (name, username, email, password, account_type, is_admin, created_at, updated_at)
+         VALUES ('Admin', 'admin', ?, ?, 'personal', 1, NOW(), NOW())`,
       [email, hashed],
     );
-    console.log(`Admin: Konto fuer ${email} angelegt.`);
+    console.log(`Admin: Konto fuer ${email} angelegt (is_admin = 1).`);
   }
 }
 
 async function main() {
   try {
+    await ensureSchema();
     await seedInterests();
     await seedAdmin();
     console.log('Seed fertig.');

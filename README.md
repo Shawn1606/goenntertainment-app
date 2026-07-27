@@ -10,11 +10,28 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npm install
    ```
 
-2. Start the app
+2. Start the backend (required — the app loads accounts/activities from it)
+
+   The app talks to the Node backend in [`server/`](server/) on port `8000`.
+   It does **not** start automatically. Run it in its own terminal:
+
+   ```bash
+   npm run server
+   ```
+
+   First-time DB setup (creates tables + seed data): apply `server/schema.sql`
+   to the MySQL database `goenntertainment`, then run `npm run server:seed`.
+   Config lives in `server/.env` (see `server/.env.example`).
+
+3. Start the app (in a second terminal)
 
    ```bash
    npx expo start
    ```
+
+If the app shows "Keine Verbindung zum Server", the backend in step 2 is not
+running (or unreachable). See the "app can't reach the backend" section in
+[`change/human.md`](change/human.md).
 
 In the output, you'll find options to open the app in a
 

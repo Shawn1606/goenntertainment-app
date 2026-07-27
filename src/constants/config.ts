@@ -13,7 +13,12 @@ import Constants from 'expo-constants';
  * Wenn das Raten mal nicht passt, trage die URL hier fest ein, z. B.:
  *   const HARDCODED_API_URL = 'http://192.168.178.44:8000';
  */
-const HARDCODED_API_URL: string | null = null;
+// Fest auf die WLAN-IP dieses PCs gesetzt: Das automatische Raten aus der Expo-
+// Adresse liefert hier eine unbrauchbare Adresse (127.0.0.1 = das Handy selbst,
+// oder die Hamachi-VPN-IP 25.x, die das Handy im WLAN nicht erreicht) -> Login
+// lief in einen Timeout. Das Handy muss im selben Fritzbox-WLAN (192.168.178.x) sein.
+// Aendert sich die PC-IP, hier anpassen (ipconfig -> IPv4 des WLAN-Adapters).
+const HARDCODED_API_URL: string | null = 'http://192.168.178.25:8000';
 
 const BACKEND_PORT = 8000;
 
