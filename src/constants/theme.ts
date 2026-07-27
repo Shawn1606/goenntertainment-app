@@ -49,6 +49,37 @@ export const Brand = {
 
 export const BrandGradient = [Brand.purple, Brand.pink] as const;
 
+/**
+ * Marken-Oberflächen (Karten, Chips, Texte) in hell UND dunkel. Der helle Satz
+ * entspricht exakt dem bisherigen `Brand`-Look; der dunkle kippt in transluzente
+ * Nacht-Violett-Töne, damit die Tab-Inhalte im Dark-Mode mitziehen statt als
+ * weiße Karten auf dunklem Grund zu „schweben“.
+ */
+export const BrandSurfaces = {
+  light: {
+    card: Brand.card,
+    cardBorder: Brand.inputBorder,
+    text: Brand.text,
+    textMuted: Brand.textMuted,
+    chipBg: Brand.lavender,
+    chipText: Brand.purple,
+    accent: Brand.purple,
+    accentText: '#ffffff',
+  },
+  dark: {
+    card: 'rgba(32,24,52,0.72)',
+    cardBorder: 'rgba(159,103,255,0.28)',
+    text: '#f5f3ff',
+    textMuted: '#b9b1cc',
+    chipBg: 'rgba(159,103,255,0.18)',
+    chipText: '#c4b5fd',
+    accent: '#9f67ff',
+    accentText: '#ffffff',
+  },
+} as const;
+
+export type BrandSurface = (typeof BrandSurfaces)['light'];
+
 export const Fonts = Platform.select({
   ios: {
     /** iOS `UIFontDescriptorSystemDesignDefault` */

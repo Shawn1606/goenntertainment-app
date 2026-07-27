@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
   email             VARCHAR(255)    NOT NULL,
   email_verified_at TIMESTAMP       NULL,
   password          VARCHAR(255)    NULL,          -- nullable: reine Google-Konten
+  is_admin          TINYINT(1)      NOT NULL DEFAULT 0, -- 1 = Admin (darf jedes Event loeschen, sieht Admin-Tab)
   remember_token    VARCHAR(100)    NULL,
   created_at        TIMESTAMP       NULL,
   updated_at        TIMESTAMP       NULL,
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS activities (
   location    VARCHAR(255)    NOT NULL,
   starts_at   DATETIME        NOT NULL,
   banner_path VARCHAR(255)    NULL,
+  max_participants INT UNSIGNED NULL,               -- NULL = unbegrenzt
   created_at  TIMESTAMP       NULL,
   updated_at  TIMESTAMP       NULL,
   PRIMARY KEY (id),

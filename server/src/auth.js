@@ -64,7 +64,8 @@ export function serializeUser(row) {
     return null;
   }
   const { password, remember_token, ...safe } = row;
-  return safe;
+  // is_admin kommt aus der DB als 0/1 (oder fehlt bei alten DBs) -> echter Boolean.
+  return { ...safe, is_admin: Boolean(safe.is_admin) };
 }
 
 /** Profil vollstaendig: Username + Kontotyp gesetzt und mind. 3 Interessen. */
@@ -117,4 +118,15 @@ export async function requireAuth(req, res, next) {
   } catch (err) {
     return next(err);
   }
+}
+
+/**
+ * Express-Middleware: verlangt einen Admin. Muss NACH requireAuth laufen
+ * (nutzt req.user). Antwortet mit 403, wenn der Nutzer kein Admin ist.
+ */
+export function requireAdmin(req, res, next) {
+  if (!req.user || !req.user.is_admin) {
+    return res.status(403).json({ message: 'Kein Admin-Zugang.' });
+  }
+  return next();
 }

@@ -126,4 +126,72 @@ router.get('/user', requireAuth, async (req, res, next) => {
   }
 });
 
+// PATCH /api/user  (geschuetzt) – Profil bearbeiten (Name, Benutzername, E-Mail).
+// Teil-Update: nur mitgeschickte Felder werden geaendert.
+router.patch('/user', requireAuth, async (req, res, next) => {
+  try {
+    const b = req.body ?? {};
+    const v = new Validator(b);
+    const updates = {};
+
+    if (b.name !== undefined) {
+      if (!b.name || typeof b.name !== 'string') {
+        v.add('name', 'Der Name ist erforderlich.');
+      } else {
+        updates.name = b.name.trim();
+      }
+    }
+
+    if (b.username !== undefined) {
+      if (!b.username || typeof b.username !== 'string') {
+        v.add('username', 'Der Benutzername ist erforderlich.');
+      } else if (b.username.length < 3 || b.username.length > 30 || !isAlphaDash(b.username)) {
+        v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+      } else {
+        updates.username = b.username;
+      }
+    }
+
+    if (b.email !== undefined) {
+      if (!isEmail(b.email)) {
+        v.add('email', 'Bitte eine gueltige E-Mail-Adresse angeben.');
+      } else {
+        updates.email = b.email;
+      }
+    }
+
+    // Eindeutigkeit pruefen (andere Nutzer), nur wenn Feld sich aendert.
+    if (updates.username && updates.username !== req.user.username) {
+      if (await first('SELECT id FROM users WHERE username = ? AND id <> ?', [updates.username, req.user.id])) {
+        v.add('username', 'Dieser Benutzername ist bereits vergeben.');
+      }
+    }
+    if (updates.email && updates.email !== req.user.email) {
+      if (await first('SELECT id FROM users WHERE email = ? AND id <> ?', [updates.email, req.user.id])) {
+        v.add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
+      }
+    }
+
+    v.throwIfFails();
+
+    const fields = Object.keys(updates);
+    if (fields.length > 0) {
+      const setClause = fields.map((f) => `${f} = ?`).join(', ');
+      const params = fields.map((f) => updates[f]);
+      await pool.query(`UPDATE users SET ${setClause}, updated_at = NOW() WHERE id = ?`, [
+        ...params,
+        req.user.id,
+      ]);
+    }
+
+    const user = await first('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    res.json({
+      user: serializeUser(user),
+      profile_complete: await profileComplete(user),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

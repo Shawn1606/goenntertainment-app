@@ -8,6 +8,7 @@ import authRouter from './routes/auth.js';
 import passwordRouter from './routes/password.js';
 import googleRouter from './routes/google.js';
 import activitiesRouter from './routes/activities.js';
+import adminRouter from './routes/admin.js';
 
 const app = express();
 app.use(express.json());
@@ -32,6 +33,7 @@ app.use('/api', passwordRouter); // /forgot-password, /reset-password
 app.use('/api/auth', googleRouter); // /auth/google
 app.use('/api/interests', interestsRouter);
 app.use('/api/activities', activitiesRouter);
+app.use('/api/admin', adminRouter); // /stats (nur Admin)
 
 // 404 fuer unbekannte API-Pfade
 app.use('/api', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));
