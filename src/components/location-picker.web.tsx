@@ -2,7 +2,7 @@ import { Stack, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { BrandTextField } from '@/components/ui/brand-text-field';
+import { TextField } from '@/components/ui/text-field';
 import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
 import { geocode } from '@/lib/geocode';
 import { setPickedLocation } from '@/lib/pending-location';
@@ -45,7 +45,7 @@ export default function LocationPickerWeb() {
           headerShown: true,
           title: 'Ort auswählen',
           headerTintColor: Brand.purple,
-          headerBackTitle: 'zurück',
+          headerBackTitle: 'Zurück',
         }}
       />
       <View style={styles.content}>
@@ -53,7 +53,7 @@ export default function LocationPickerWeb() {
           Die tippbare Karte läuft in der Handy-App. Hier kannst du die Adresse eingeben – wir
           suchen den passenden Ort dazu.
         </Text>
-        <BrandTextField
+        <TextField
           label="Adresse"
           value={query}
           onChangeText={(t) => {

@@ -1,9 +1,29 @@
 :root {
+  /* Schrift der Oberfläche – dieselbe Familie wie auf cira.systems. Die
+     Schriftdateien lädt _layout.tsx über expo-font; hier stehen nur die
+     Web-Variablen samt Rückfallkette. */
   --font-display:
-    Spline Sans, Inter, ui-sans-serif, system-ui, sans-serif, Apple Color Emoji, Segoe UI Emoji,
-    Segoe UI Symbol, Noto Color Emoji;
+    InstrumentSans_400Regular, 'Instrument Sans', ui-sans-serif, system-ui, sans-serif,
+    Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol, Noto Color Emoji;
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
-  --font-rounded: 'SF Pro Rounded', 'Hiragino Maru Gothic ProN', Meiryo, 'MS PGothic', sans-serif;
+  --font-rounded: InstrumentSans_500Medium, 'Instrument Sans', ui-sans-serif, system-ui, sans-serif;
   --font-serif: Georgia, 'Times New Roman', serif;
+}
+
+/* Ohne diese Regel erbt alles ohne eigene Schriftangabe die Standard-
+   Serifenschrift des Browsers (Times) – im Web deutlich sichtbar. */
+html,
+body,
+#root {
+  font-family: var(--font-display);
+  background-color: #fafafa;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body,
+  #root {
+    background-color: #0a0a0a;
+  }
 }

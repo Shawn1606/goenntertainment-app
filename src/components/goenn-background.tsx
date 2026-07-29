@@ -1,14 +1,20 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef } from 'react';
-import { Animated, Easing, Platform, StyleSheet, useWindowDimensions, View, type ViewProps } from 'react-native';
-import Svg, { Circle, Defs, Path, RadialGradient, Stop } from 'react-native-svg';
+import { useEffect, useRef, useState } from 'react';
+import { Animated, Dimensions, Easing, Platform, StyleSheet, View, type ViewProps } from 'react-native';
+import Svg, { Circle, Defs, Line, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
+
+import { Palette } from '@/constants/theme';
 
 /**
- * Hintergrund nach Referenz: heller Pastell-Verlauf, weicher Pfirsich-Schein
- * oben rechts, zwei schwebende Kreise und unten mehrere lila Wellen, die sich
- * langsam hin und her bewegen (fließend). Animation via nativem Treiber am
- * Gerät; im Web JS-Treiber.
+ * Hintergrund der Anmelde-Screens – gleiche helle Leinwand wie in der App
+ * (fast weiß + feines Raster + ein Indigo-Schein), aber mit Bewegung: zwei
+ * schwebende Scheine und eine sehr weiche Welle unten.
+ *
+ * Bewusst zurückhaltend: die Bewegung soll man eher spüren als sehen. Animation
+ * via nativem Treiber am Gerät; im Web JS-Treiber.
  */
+
+const GRID_SIZE = 32;
 
 const NATIVE = Platform.OS !== 'web';
 
@@ -56,7 +62,7 @@ function Orb({ id, color, size, x, y, dx, dy, duration }: { id: string; color: s
       <Svg width={size} height={size}>
         <Defs>
           <RadialGradient id={id} cx="50%" cy="50%" r="50%">
-            <Stop offset="0" stopColor={color} stopOpacity="0.8" />
+            <Stop offset="0" stopColor={color} stopOpacity="0.22" />
             <Stop offset="1" stopColor={color} stopOpacity="0" />
           </RadialGradient>
         </Defs>
@@ -66,44 +72,60 @@ function Orb({ id, color, size, x, y, dx, dy, duration }: { id: string; color: s
   );
 }
 
+/**
+ * Bewusst OHNE `useWindowDimensions()`: Unter dem ab SDK 54 erzwungenen
+ * edge-to-edge ändert sich die Fenstergröße bei JEDEM Auf- und Zugehen der
+ * Tastatur. Hing der Hintergrund daran, wurden auf den Anmelde-Screens beim
+ * Tippen das komplette SVG, drei animierte Scheine und zwei Wellen neu
+ * aufgebaut – sichtbares Flackern genau dort, wo man gerade schreibt.
+ *
+ * Flächen nehmen deshalb Prozentwerte (skalieren nativ ohne Re-Render), und die
+ * Positionen der Scheine/Wellen stehen auf einem Maß, das beim Einhängen einmal
+ * gelesen wird. Die App ist auf Hochformat festgelegt, also ändert sich dieses
+ * Maß im Betrieb ohnehin nicht. `home-background.tsx` ist genauso gebaut.
+ */
 export function GoennBackground({ children, style, ...rest }: ViewProps) {
-  const { width, height } = useWindowDimensions();
+  const [{ width, height }] = useState(() => Dimensions.get('window'));
 
   return (
     <View style={[styles.container, style]} {...rest}>
-      {/* Basis-Verlauf – kräftiger als vorher (Pfirsich → Pink → Lila) */}
+      {/* Fast weißer Grund mit einem Hauch Verlauf */}
       <LinearGradient
-        colors={['#ffdcc4', '#ffcbe6', '#dcc0ff']}
+        colors={[Palette.canvas, '#f7f7f8', Palette.canvasAlt]}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
 
-      {/* Farbige Scheine: Pfirsich oben rechts, Pink unten links */}
+      {/* Feines Raster + zwei dezente Scheine (Indigo oben rechts, Cyan unten links) */}
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%" pointerEvents="none">
         <Defs>
-          <RadialGradient id="peachGlow" cx="88%" cy="6%" r="60%">
-            <Stop offset="0" stopColor="#ffb28c" stopOpacity="0.95" />
-            <Stop offset="0.7" stopColor="#ffb28c" stopOpacity="0" />
+          <Pattern id="auth-grid" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
+            <Line x1="0" y1="0" x2={GRID_SIZE} y2="0" stroke={Palette.grid} strokeWidth="1" />
+            <Line x1="0" y1="0" x2="0" y2={GRID_SIZE} stroke={Palette.grid} strokeWidth="1" />
+          </Pattern>
+          <RadialGradient id="indigoGlow" cx="86%" cy="4%" r="62%">
+            <Stop offset="0" stopColor={Palette.indigo} stopOpacity="0.14" />
+            <Stop offset="0.75" stopColor={Palette.indigo} stopOpacity="0" />
           </RadialGradient>
-          <RadialGradient id="pinkGlow" cx="8%" cy="70%" r="55%">
-            <Stop offset="0" stopColor="#ff9ecf" stopOpacity="0.6" />
-            <Stop offset="0.75" stopColor="#ff9ecf" stopOpacity="0" />
+          <RadialGradient id="cyanGlow" cx="6%" cy="72%" r="55%">
+            <Stop offset="0" stopColor={Palette.cyan} stopOpacity="0.08" />
+            <Stop offset="0.8" stopColor={Palette.cyan} stopOpacity="0" />
           </RadialGradient>
         </Defs>
-        <Path d={`M0 0 H${width} V${height} H0 Z`} fill="url(#peachGlow)" />
-        <Path d={`M0 0 H${width} V${height} H0 Z`} fill="url(#pinkGlow)" />
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#auth-grid)" />
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#indigoGlow)" />
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#cyanGlow)" />
       </Svg>
 
-      {/* schwebende Kreise – satter */}
-      <Orb id="c-purple" color="#c39bf5" size={100} x={-24} y={height * 0.42} dx={16} dy={20} duration={6000} />
-      <Orb id="c-peach" color="#ffb495" size={78} x={width - 44} y={height * 0.34} dx={-14} dy={22} duration={7200} />
-      <Orb id="c-pink" color="#ff9ecf" size={64} x={width * 0.5} y={height * 0.2} dx={12} dy={-16} duration={8400} />
+      {/* Schwebende Scheine – sehr leise */}
+      <Orb id="c-indigo" color={Palette.indigo} size={110} x={-30} y={height * 0.42} dx={16} dy={20} duration={6000} />
+      <Orb id="c-violet" color={Palette.violet} size={84} x={width - 48} y={height * 0.34} dx={-14} dy={22} duration={7200} />
+      <Orb id="c-cyan" color={Palette.cyan} size={68} x={width * 0.5} y={height * 0.2} dx={12} dy={-16} duration={8400} />
 
-      {/* lila/pinke Wellen unten – kräftiger */}
-      <Wave color="#f0cdf5" height={height * 0.32} bottom={0} amp={22} duration={9000} />
-      <Wave color="#d9a6f0" height={height * 0.24} bottom={0} amp={30} duration={7000} />
-      <Wave color="#b578e6" height={height * 0.16} bottom={0} amp={26} duration={8000} />
+      {/* Eine weiche Welle unten statt drei bunter */}
+      <Wave color="rgba(99,102,241,0.09)" height={height * 0.26} bottom={0} amp={24} duration={9000} />
+      <Wave color="rgba(6,182,212,0.05)" height={height * 0.18} bottom={0} amp={30} duration={7000} />
 
       {children}
     </View>
@@ -113,7 +135,7 @@ export function GoennBackground({ children, style, ...rest }: ViewProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffdcc4',
+    backgroundColor: Palette.canvas,
     overflow: 'hidden',
   },
 });

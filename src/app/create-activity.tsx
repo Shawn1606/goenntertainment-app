@@ -6,24 +6,31 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { HomeBackground } from '@/components/home-background';
 import { BrandButton } from '@/components/ui/brand-button';
-import { BrandTextField } from '@/components/ui/brand-text-field';
+import { Icon } from '@/components/ui/icon';
 import { MapPinIcon } from '@/components/ui/icons';
-import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
+import { KeyboardForm } from '@/components/ui/keyboard-form';
+import { TextField } from '@/components/ui/text-field';
+import { MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
+import { accountAbilities } from '@/domain/account';
+import { POINTS_PER_ACTIVITY } from '@/domain/rewards';
+import { useBrandSurface, useTheme } from '@/hooks/use-theme';
 import { api, ApiError, type Interest } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { notifyUser } from '@/lib/confirm';
+import { goBack } from '@/lib/go-back';
 import { takePickedLocation } from '@/lib/pending-location';
+import { useResolvedScheme } from '@/lib/theme-preference';
 
 const MAX_INTERESTS = 5;
 
@@ -38,6 +45,13 @@ const pad = (n: number) => String(n).padStart(2, '0');
 const fmtDate = (d: Date) => `${WEEKDAYS[d.getDay()]}, ${d.getDate()}. ${MONTHS[d.getMonth()]}`;
 const fmtTime = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())} Uhr`;
 
+/** Ende einer Sperre lesbar ausgeben („27.07.2026, 14:05 Uhr"). */
+function fmtBanUntil(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getDate()}. ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${fmtTime(d)}`;
+}
+
 /** Nächste volle Viertelstunde ab jetzt – sinnvoller Startwert für den Picker. */
 function roundedNow(): Date {
   const d = new Date();
@@ -51,7 +65,13 @@ type Banner = { uri: string; name: string; type: string };
 export default function CreateActivityScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { token } = useAuth();
+  const { token, logout, user } = useAuth();
+  const colors = useTheme();
+  const surface = useBrandSurface();
+  const isDark = useResolvedScheme() === 'dark';
+
+  /** Events erstellen gibt es ab dem Creator-Konto (siehe src/domain/account.ts). */
+  const canCreate = accountAbilities(user).canCreateActivities;
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -152,9 +172,7 @@ export default function CreateActivityScreen() {
         mode,
         is24Hour: true,
         minimumDate: mode === 'date' ? new Date() : undefined,
-        // Heller Dialog + Marken-Akzent, damit Ziffern auch im Dunkelmodus
-        // des Handys lesbar sind (sonst weiße Schrift auf hellem Grund).
-        positiveButton: { textColor: Brand.purple },
+        positiveButton: { textColor: colors.tint },
         onChange: (event, picked) => {
           if (event.type === 'set' && picked) applyPart(mode, picked);
         },
@@ -238,17 +256,44 @@ export default function CreateActivityScreen() {
         starts_at: (startsAt as Date).toISOString(),
         max_participants: maxParticipants.trim() ? Number(maxParticipants.trim()) : null,
         // Nur die vordefinierten Interessen (IDs) gehen an die DB.
-        // Eigene, selbst eingetippte Interessen bleiben absichtlich nur im Frontend.
+        // Eigene, selbst eingetippte Interessen werden nicht gespeichert, gehen
+        // aber zur KI-Prüfung mit (freier Text muss jugendfrei sein).
         interests: selected,
+        customInterests,
         banner,
       });
-      if (router.canGoBack()) {
-        router.back();
-      } else {
-        router.replace('/');
-      }
+      // Die Punkte gehören genannt: Der Server bucht sie beim Anlegen
+      // (server/src/rewards.js), und wer nicht erfährt, dass es sie gibt, sucht
+      // sie auch nicht auf der Prämien-Karte. Ein Satz reicht – der Stand steht
+      // gleich danach auf der Startseite.
+      await notifyUser(
+        'Event steht',
+        `Deine Aktivität ist online – dafür gibt es ${POINTS_PER_ACTIVITY} Prämien-Punkte.`,
+        'Weiter',
+      );
+      // Dieselbe Regel wie überall: Ohne Verlauf tut `back()` nichts, dann ersetzen
+      // wir durch die Startseite (siehe `src/lib/go-back.ts`).
+      goBack();
     } catch (error) {
       if (error instanceof ApiError) {
+        // Nicht jugendfreier Inhalt + automatische Sperre: Der Token ist ab
+        // sofort entwertet. Grund zeigen und lokal abmelden, sonst laufen alle
+        // weiteren Anfragen ins Leere.
+        const ban = error.status === 403 ? error.body?.ban : undefined;
+        if (ban) {
+          await notifyUser(
+            'Konto gesperrt',
+            [
+              ban.reason ?? 'Dein Inhalt war nicht jugendfrei.',
+              ban.banned_until ? `\nGesperrt bis: ${fmtBanUntil(ban.banned_until)}` : null,
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            'Verstanden',
+          );
+          await logout();
+          return;
+        }
         setErrors(error.errors);
         if (Object.keys(error.errors).length === 0) setGeneralError(error.firstError());
       } else {
@@ -259,41 +304,92 @@ export default function CreateActivityScreen() {
     }
   }
 
+  // Ohne Creator-Konto gibt es hier nichts zu holen: Der ＋-Knopf ist dann
+  // ausgeblendet, aber ein Link oder ein alter Verlauf kann trotzdem hier
+  // landen. Der Server lehnt das Anlegen mit 403 ab – also sagen wir es gleich,
+  // statt ein Formular zu zeigen, das sich nicht abschicken lässt.
+  //
+  // Steht bewusst NACH allen Hooks: Ein früherer Ausstieg würde die
+  // Hook-Reihenfolge zwischen zwei Durchläufen ändern.
+  if (!canCreate) {
+    return (
+      <HomeBackground style={styles.screen}>
+        <Stack.Screen
+          options={{
+            headerShown: true,
+            title: 'Activity erstellen',
+            headerTintColor: colors.tint,
+            headerBackTitle: 'Zurück',
+            headerStyle: { backgroundColor: colors.background },
+            headerTitleStyle: { color: colors.text },
+          }}
+        />
+        <View style={styles.locked}>
+          <Icon name="lock" size={44} color={colors.tint} />
+          <Text style={[styles.lockedTitle, { color: colors.text }]}>Erstellen gibt es ab Creator</Text>
+          <Text style={[styles.lockedText, { color: colors.textSecondary }]}>
+            {'Mit einem Creator-Konto legst du eigene Events an. Das Upgrade findest du über das ' +
+              'Feld „Upgrade" oben links auf der Startseite.'}
+          </Text>
+          <BrandButton title="Upgrade ansehen" onPress={() => router.replace('/upgrade')} />
+        </View>
+      </HomeBackground>
+    );
+  }
+
   return (
-    <View style={styles.screen}>
+    <HomeBackground style={styles.screen}>
       <Stack.Screen
         options={{
           headerShown: true,
           title: 'Activity erstellen',
-          headerTintColor: Brand.purple,
-          headerBackTitle: 'zurück',
+          headerTintColor: colors.tint,
+          headerBackTitle: 'Zurück',
+          headerStyle: { backgroundColor: colors.background },
+          headerTitleStyle: { color: colors.text },
         }}
       />
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
-          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.six }]}
-          keyboardShouldPersistTaps="handled">
+      {/* Die Tastatur-Freistellung macht `KeyboardForm`. Frühere Anläufe hier
+          scheiterten daran, dass RNs `KeyboardAvoidingView` ohne `behavior` gar
+          nichts tut (die Tastatur legte sich einfach über das Feld) und mit
+          `behavior="padding"` über `LayoutAnimation` die Views neu aufbaut (der
+          Fokus ging verloren). Die Annahme „Android schiebt selbst frei" gilt
+          unter dem ab SDK 54 erzwungenen edge-to-edge nicht mehr. */}
+      <View style={styles.flex}>
+        <KeyboardForm
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.six }]}>
           {generalError ? <Text style={styles.generalError}>{generalError}</Text> : null}
 
           {/* Banner */}
-          <Pressable onPress={chooseBanner} style={styles.banner}>
+          <Pressable
+            onPress={chooseBanner}
+            style={[
+              styles.banner,
+              banner
+                ? { backgroundColor: colors.backgroundElement, borderColor: surface.fieldBorder }
+                : // Leerer Platzhalter im Kachel-Blau statt Grau – so liest er sich
+                  // als Fläche, die auf einen Tipp wartet.
+                  { backgroundColor: surface.chipBg, borderColor: surface.chipBorder },
+            ]}>
             {banner ? (
               <Image source={{ uri: banner.uri }} style={styles.bannerImage} resizeMode="cover" />
             ) : (
               <View style={styles.bannerEmpty}>
-                <Text style={styles.bannerPlus}>＋</Text>
-                <Text style={styles.bannerText}>Foto hinzufügen (Galerie oder Kamera)</Text>
+                <Icon name="plus" size={32} color={colors.tint} />
+                <Text style={[styles.bannerText, { color: colors.textSecondary }]}>
+                  Foto hinzufügen (Galerie oder Kamera)
+                </Text>
               </View>
             )}
           </Pressable>
           {banner ? (
             <Pressable onPress={() => setBanner(null)} style={styles.removeBanner}>
-              <Text style={styles.removeBannerText}>Foto entfernen</Text>
+              <Text style={[styles.removeBannerText, { color: colors.tint }]}>Foto entfernen</Text>
             </Pressable>
           ) : null}
 
-          <BrandTextField label="Name" value={title} onChangeText={setTitle} placeholder="z. B. Feierabend-Fußball" error={errors.title?.[0]} />
-          <BrandTextField
+          <TextField label="Name" value={title} onChangeText={setTitle} placeholder="z. B. Feierabend-Fußball" error={errors.title?.[0]} />
+          <TextField
             label="Beschreibung"
             value={description}
             onChangeText={setDescription}
@@ -305,7 +401,7 @@ export default function CreateActivityScreen() {
 
           {/* Ort & Straße: beide Pflicht. Per Pin lässt sich die Karte öffnen,
               die beide Felder automatisch ausfüllt. */}
-          <BrandTextField
+          <TextField
             label="Ort / Stadt"
             value={place}
             onChangeText={setPlace}
@@ -316,11 +412,11 @@ export default function CreateActivityScreen() {
                 onPress={() => router.push('/pick-location')}
                 hitSlop={10}
                 accessibilityLabel="Ort auf der Karte auswählen">
-                <MapPinIcon size={22} color={Brand.purple} />
+                <MapPinIcon size={22} color={colors.tint} />
               </Pressable>
             }
           />
-          <BrandTextField
+          <TextField
             label="Straße & Hausnummer"
             value={street}
             onChangeText={setStreet}
@@ -331,17 +427,21 @@ export default function CreateActivityScreen() {
           {/* Datum & Uhrzeit als Picker */}
           <View style={styles.row}>
             <View style={styles.rowItem}>
-              <Text style={styles.label}>Datum</Text>
-              <Pressable onPress={() => openPicker('date')} style={styles.pickerField}>
-                <Text style={startsAt ? styles.pickerValue : styles.pickerPlaceholder}>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Datum</Text>
+              <Pressable
+                onPress={() => openPicker('date')}
+                style={[styles.pickerField, { backgroundColor: surface.fieldBg, borderColor: surface.fieldBorder }]}>
+                <Text style={[styles.pickerValue, { color: startsAt ? colors.text : surface.fieldPlaceholder }]}>
                   {startsAt ? fmtDate(startsAt) : 'Datum wählen'}
                 </Text>
               </Pressable>
             </View>
             <View style={styles.rowItem}>
-              <Text style={styles.label}>Uhrzeit</Text>
-              <Pressable onPress={() => openPicker('time')} style={styles.pickerField}>
-                <Text style={startsAt ? styles.pickerValue : styles.pickerPlaceholder}>
+              <Text style={[styles.label, { color: colors.textSecondary }]}>Uhrzeit</Text>
+              <Pressable
+                onPress={() => openPicker('time')}
+                style={[styles.pickerField, { backgroundColor: surface.fieldBg, borderColor: surface.fieldBorder }]}>
+                <Text style={[styles.pickerValue, { color: startsAt ? colors.text : surface.fieldPlaceholder }]}>
                   {startsAt ? fmtTime(startsAt) : 'Uhrzeit wählen'}
                 </Text>
               </Pressable>
@@ -350,7 +450,7 @@ export default function CreateActivityScreen() {
           {errors.starts_at?.[0] ? <Text style={styles.fieldError}>{errors.starts_at[0]}</Text> : null}
 
           {/* Maximale Teilnehmerzahl (optional) */}
-          <BrandTextField
+          <TextField
             label="Max. Teilnehmer (optional)"
             value={maxParticipants}
             onChangeText={(t) => setMaxParticipants(t.replace(/[^0-9]/g, ''))}
@@ -361,9 +461,9 @@ export default function CreateActivityScreen() {
 
           {/* Interessen */}
           <View>
-            <Text style={styles.label}>Interessen (max. 5)</Text>
+            <Text style={[styles.label, { color: colors.textSecondary }]}>Interessen (max. 5)</Text>
             {interests.length === 0 ? (
-              <Text style={styles.hint}>Lade Interessen…</Text>
+              <Text style={[styles.hint, { color: colors.textSecondary }]}>Lade Interessen…</Text>
             ) : (
               <View style={styles.chips}>
                 {interests.map((interest) => {
@@ -372,8 +472,8 @@ export default function CreateActivityScreen() {
                     <Pressable
                       key={interest.id}
                       onPress={() => toggleInterest(interest.id)}
-                      style={[styles.chip, { borderColor: on ? Brand.purple : Brand.inputBorder, backgroundColor: on ? '#f5f3ff' : '#ffffff' }]}>
-                      <Text style={[styles.chipText, { color: on ? Brand.purple : Brand.text }]}>{interest.name}</Text>
+                      style={[styles.chip, { borderColor: on ? surface.accent : surface.fieldBorder, backgroundColor: on ? surface.chipBg : surface.fieldBg }]}>
+                      <Text style={[styles.chipText, { color: on ? surface.accent : colors.text }]}>{interest.name}</Text>
                     </Pressable>
                   );
                 })}
@@ -382,9 +482,9 @@ export default function CreateActivityScreen() {
                   <Pressable
                     key={`custom-${name}`}
                     onPress={() => removeCustomInterest(name)}
-                    style={[styles.chip, styles.customChip]}>
-                    <Text style={[styles.chipText, { color: Brand.purple }]}>{name}</Text>
-                    <Text style={styles.customChipX}>×</Text>
+                    style={[styles.chip, styles.customChip, { borderColor: surface.accent, backgroundColor: surface.chipBg }]}>
+                    <Text style={[styles.chipText, { color: surface.accent }]}>{name}</Text>
+                    <Text style={[styles.customChipX, { color: surface.accent }]}>×</Text>
                   </Pressable>
                 ))}
               </View>
@@ -393,7 +493,7 @@ export default function CreateActivityScreen() {
             {/* Eigenes Interesse hinzufügen */}
             <View style={styles.customRow}>
               <View style={styles.flex}>
-                <BrandTextField
+                <TextField
                   value={customInput}
                   onChangeText={setCustomInput}
                   placeholder="Eigenes Interesse…"
@@ -406,32 +506,41 @@ export default function CreateActivityScreen() {
                 disabled={!customInput.trim() || totalInterests >= MAX_INTERESTS}
                 style={({ pressed }) => [
                   styles.addButton,
+                  { backgroundColor: surface.accent },
                   { opacity: !customInput.trim() || totalInterests >= MAX_INTERESTS ? 0.4 : pressed ? 0.85 : 1 },
                 ]}>
-                <Text style={styles.addButtonText}>＋</Text>
+                <Icon name="plus" size={24} color={surface.accentText} />
               </Pressable>
             </View>
-            <Text style={styles.hint}>Eigene Interessen sind nur für dich sichtbar.</Text>
+            <Text style={[styles.hint, { color: colors.textSecondary }]}>
+              Eigene Interessen sind nur für dich sichtbar.
+            </Text>
           </View>
 
           <BrandButton title="Activity erstellen" onPress={onSubmit} loading={submitting} />
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardForm>
+      </View>
 
       {/* iOS: Picker in einem kleinen Blatt unten (Android nutzt den System-Dialog) */}
       {Platform.OS === 'ios' && iosPicker ? (
         <Modal transparent animationType="fade" onRequestClose={() => setIosPicker(null)}>
           <Pressable style={styles.modalBackdrop} onPress={() => setIosPicker(null)} />
-          <View style={[styles.modalSheet, { paddingBottom: insets.bottom + Spacing.three }]}>
+          <View
+            style={[
+              styles.modalSheet,
+              { backgroundColor: colors.background, paddingBottom: insets.bottom + Spacing.three },
+            ]}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{iosPicker === 'date' ? 'Datum wählen' : 'Uhrzeit wählen'}</Text>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>
+                {iosPicker === 'date' ? 'Datum wählen' : 'Uhrzeit wählen'}
+              </Text>
               <Pressable onPress={() => setIosPicker(null)} hitSlop={10}>
-                <Text style={styles.modalDone}>Fertig</Text>
+                <Text style={[styles.modalDone, { color: colors.tint }]}>Fertig</Text>
               </Pressable>
             </View>
             {/* Klartext-Anzeige des aktuell gewählten Zeitpunkts – immer sichtbar,
                 unabhängig davon, wie der Picker seine Ziffern darstellt. */}
-            <Text style={styles.modalPreview}>
+            <Text style={[styles.modalPreview, { color: colors.tint }]}>
               {fmtDate(startsAt ?? roundedNow())} · {fmtTime(startsAt ?? roundedNow())}
             </Text>
             <DateTimePicker
@@ -440,11 +549,10 @@ export default function CreateActivityScreen() {
               // Datum als Kalender (kein Dreh-Rad), Uhrzeit weiter als Rad.
               display={iosPicker === 'date' ? 'inline' : 'spinner'}
               locale="de-DE"
-              // Fest auf hell + dunkle Textfarbe: sonst sind die Ziffern im
-              // Dunkelmodus des Handys weiß und auf dem hellen Blatt unsichtbar.
-              themeVariant="light"
-              textColor={Brand.text}
-              accentColor={Brand.purple}
+              // Folgt dem App-Schema: dunkles Blatt → helle Ziffern, helles Blatt → dunkle.
+              themeVariant={isDark ? 'dark' : 'light'}
+              textColor={colors.text}
+              accentColor={colors.tint}
               minimumDate={iosPicker === 'date' ? new Date() : undefined}
               onChange={(_event, picked) => picked && applyPart(iosPicker, picked)}
             />
@@ -453,16 +561,18 @@ export default function CreateActivityScreen() {
       ) : null}
 
       {submitting ? (
-        <View style={styles.overlay} pointerEvents="none">
-          <ActivityIndicator color={Brand.purple} size="large" />
+        <View
+          style={[styles.overlay, { backgroundColor: isDark ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.4)' }]}
+          pointerEvents="none">
+          <ActivityIndicator color={colors.tint} size="large" />
         </View>
       ) : null}
-    </View>
+    </HomeBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#faf9fe' },
+  screen: { flex: 1 },
   flex: { flex: 1 },
   content: {
     padding: Spacing.four,
@@ -472,81 +582,95 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   generalError: { color: '#ef4444', textAlign: 'center' },
+  /** Hinweis-Seite für Konten, die (noch) nicht erstellen dürfen. */
+  locked: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: Spacing.three,
+    padding: Spacing.five,
+    maxWidth: MaxContentWidth,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  lockedEmoji: { fontSize: 40, lineHeight: 46 },
+  lockedTitle: {
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '800',
+    textAlign: 'center',
+    fontFamily: FontFamily.bold,
+  },
+  lockedText: {
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    fontFamily: FontFamily.regular,
+  },
   banner: {
     height: 160,
     borderRadius: 20,
     overflow: 'hidden',
     borderWidth: 1.5,
-    borderColor: Brand.inputBorder,
-    backgroundColor: '#ffffff',
   },
   bannerImage: { width: '100%', height: '100%' },
   bannerEmpty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.one },
-  bannerPlus: { fontSize: 34, color: Brand.purple, fontWeight: '700' },
-  bannerText: { fontSize: 13, color: Brand.textMuted },
+  bannerText: { fontSize: 13 },
   removeBanner: { alignSelf: 'center' },
-  removeBannerText: { color: Brand.purple, fontSize: 13, fontWeight: '600' },
+  removeBannerText: { fontSize: 13, fontWeight: '600' },
   multiline: { minHeight: 80, textAlignVertical: 'top' },
   row: { flexDirection: 'row', gap: Spacing.three },
   rowItem: { flex: 1, gap: Spacing.one },
   fieldError: { color: '#ef4444', fontSize: 13, marginLeft: Spacing.one },
-  label: { marginLeft: Spacing.one, marginBottom: Spacing.two, fontSize: 13, fontWeight: '700', color: Brand.textMuted },
-  hint: { marginLeft: Spacing.one, marginTop: Spacing.two, color: Brand.textMuted, fontSize: 13 },
-  // Feld-Optik wie BrandTextField, aber als antippbarer Auslöser für den Picker.
+  label: { marginLeft: Spacing.one, marginBottom: Spacing.two, fontSize: 13, fontWeight: '700' },
+  hint: { marginLeft: Spacing.one, marginTop: Spacing.two, fontSize: 13 },
+  // Feld-Optik wie TextField, aber als antippbarer Auslöser für den Picker.
   pickerField: {
-    borderRadius: 16,
+    borderRadius: Radius.field,
     borderWidth: 1.5,
-    borderColor: Brand.inputBorder,
-    backgroundColor: Brand.inputBg,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     justifyContent: 'center',
   },
-  pickerValue: { fontSize: 16, color: Brand.text },
-  pickerPlaceholder: { fontSize: 16, color: '#9ca3af' },
+  pickerValue: { fontSize: 16 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  chip: { borderRadius: 14, borderWidth: 1.5, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
+  chip: { borderRadius: Radius.chip, borderWidth: 1.5, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
   chipText: { fontSize: 14, fontWeight: '600' },
   customChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
-    borderColor: Brand.purple,
-    backgroundColor: '#f5f3ff',
     borderStyle: 'dashed',
   },
-  customChipX: { fontSize: 16, fontWeight: '700', color: Brand.purple, lineHeight: 16 },
+  customChipX: { fontSize: 16, fontWeight: '700', lineHeight: 16 },
   customRow: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.two, marginTop: Spacing.three },
   addButton: {
     width: 52,
     height: 52,
-    borderRadius: 16,
-    backgroundColor: Brand.purple,
+    borderRadius: Radius.field,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addButtonText: { color: '#ffffff', fontSize: 26, fontWeight: '700', lineHeight: 28 },
-  overlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.4)' },
+  overlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)' },
   modalSheet: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  modalTitle: { fontSize: 15, fontWeight: '700', color: Brand.text },
-  modalDone: { fontSize: 16, fontWeight: '700', color: Brand.purple },
+  modalTitle: { fontSize: 15, fontWeight: '700' },
+  modalDone: { fontSize: 16, fontWeight: '700' },
   modalPreview: {
     marginTop: Spacing.two,
     textAlign: 'center',
     fontSize: 18,
     fontWeight: '700',
-    color: Brand.purple,
+    fontFamily: FontFamily.bold,
   },
 });

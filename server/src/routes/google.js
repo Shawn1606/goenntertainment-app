@@ -53,7 +53,7 @@ router.post('/google', async (req, res, next) => {
 
     const token = await createToken(user.id, b.device_name || 'mobile');
     res.json({
-      user: serializeUser(user),
+      user: serializeUser(user, req),
       token,
       profile_complete: await profileComplete(user),
     });

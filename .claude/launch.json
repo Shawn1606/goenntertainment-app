@@ -1,0 +1,80 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "api",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "server", "run", "dev"],
+      "port": 8000
+    },
+    {
+      "name": "expo-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8082"],
+      "port": 8082
+    },
+    {
+      "name": "expo-web-alt",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8095"],
+      "port": 8095,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-tiers",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8098"],
+      "port": 8098,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-profile",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8099"],
+      "port": 8099,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-fields",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8097"],
+      "port": 8097,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-polish",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8093"],
+      "port": 8093,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-settings",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8090"],
+      "port": 8090,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-social",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8091"],
+      "port": 8091,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-admin",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8094"],
+      "port": 8094,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-images",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8096"],
+      "port": 8096,
+      "autoPort": false
+    }
+  ]
+}

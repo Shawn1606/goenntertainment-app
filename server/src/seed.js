@@ -51,6 +51,24 @@ async function ensureSchema() {
     console.log('Schema: Spalte users.is_admin nachgeruestet.');
   }
 
+  const banCol = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'banned_until'`,
+  );
+  if (banCol[0].length === 0) {
+    await pool.query('ALTER TABLE users ADD COLUMN banned_until DATETIME NULL AFTER is_admin');
+    console.log('Schema: Spalte users.banned_until nachgeruestet.');
+  }
+
+  const reasonCol = await pool.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'ban_reason'`,
+  );
+  if (reasonCol[0].length === 0) {
+    await pool.query('ALTER TABLE users ADD COLUMN ban_reason VARCHAR(255) NULL AFTER banned_until');
+    console.log('Schema: Spalte users.ban_reason nachgeruestet.');
+  }
+
   const maxCol = await pool.query(
     `SELECT 1 FROM information_schema.columns
       WHERE table_schema = DATABASE() AND table_name = 'activities' AND column_name = 'max_participants'`,
@@ -61,6 +79,26 @@ async function ensureSchema() {
     );
     console.log('Schema: Spalte activities.max_participants nachgeruestet.');
   }
+
+  // Beweismittel-Tabelle (Bild-Beweise je Sperre) – fuer bestehende DBs nachziehen.
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS ban_evidence (
+       id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+       user_id      BIGINT UNSIGNED NOT NULL,
+       admin_id     BIGINT UNSIGNED NULL,
+       action       VARCHAR(20)     NOT NULL,
+       reason       VARCHAR(255)    NOT NULL,
+       banned_until DATETIME        NULL,
+       image_path   VARCHAR(255)    NULL,
+       created_at   TIMESTAMP       NULL,
+       PRIMARY KEY (id),
+       KEY ban_evidence_user_id_idx (user_id),
+       CONSTRAINT ban_evidence_user_id_fk
+         FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+       CONSTRAINT ban_evidence_admin_id_fk
+         FOREIGN KEY (admin_id) REFERENCES users (id) ON DELETE SET NULL
+     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  );
 }
 
 async function seedInterests() {
@@ -91,17 +129,23 @@ async function seedAdmin() {
   const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
 
   if (existing.length > 0) {
+    // `COALESCE` statt fest 'business_plus': Ein erneuter Seed-Lauf soll die
+    // eingestellte Kontostufe nicht zurueckdrehen – wer zum Pruefen auf
+    // Standard gewechselt ist, bleibt dort.
     await pool.query(
       `UPDATE users
-          SET name = 'Admin', username = 'admin', password = ?, account_type = 'personal', is_admin = 1, updated_at = NOW()
+          SET name = 'Admin', username = 'admin', password = ?,
+              account_type = COALESCE(account_type, 'business_plus'), is_admin = 1, updated_at = NOW()
         WHERE id = ?`,
       [hashed, existing[0].id],
     );
     console.log(`Admin: Konto fuer ${email} aktualisiert (is_admin = 1).`);
   } else {
+    // Hoechste Stufe: So sieht das Admin-Konto von Anfang an alles (inkl.
+    // Business-Bereich) und kann zum Pruefen nach unten wechseln.
     await pool.query(
       `INSERT INTO users (name, username, email, password, account_type, is_admin, created_at, updated_at)
-         VALUES ('Admin', 'admin', ?, ?, 'personal', 1, NOW(), NOW())`,
+         VALUES ('Admin', 'admin', ?, ?, 'business_plus', 1, NOW(), NOW())`,
       [email, hashed],
     );
     console.log(`Admin: Konto fuer ${email} angelegt (is_admin = 1).`);

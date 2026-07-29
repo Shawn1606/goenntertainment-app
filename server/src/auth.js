@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { pool, first } from './db.js';
+import { mediaUrl } from './media.js';
 
 const TOKENABLE_TYPE = 'App\\Models\\User';
 
@@ -58,14 +59,106 @@ export function hashPassword(plain) {
   return bcrypt.hash(plain, BCRYPT_ROUNDS);
 }
 
-/** Entfernt sensible Felder aus einer User-Zeile (wie Laravels $hidden). */
-export function serializeUser(row) {
+// Ein „echter" Bann setzt banned_until weit in die Zukunft; ein Timeout einen
+// konkreten Zeitpunkt. NULL bedeutet aktiv.
+export const PERMANENT_BAN_UNTIL = '9999-12-31 00:00:00';
+
+/** Ist der Nutzer aktuell gesperrt? (banned_until liegt in der Zukunft, UTC.) */
+export function isBanned(user) {
+  if (!user || !user.banned_until) {
+    return false;
+  }
+  // banned_until kommt als UTC-String 'YYYY-MM-DD HH:MM:SS' (dateStrings:true).
+  const until = new Date(`${String(user.banned_until).replace(' ', 'T')}Z`);
+  return until.getTime() > Date.now();
+}
+
+/**
+ * Sperr-Details fuer die Anzeige beim Login: Grund, Ende (ISO) und ob dauerhaft.
+ * permanent = banned_until liegt >100 Jahre in der Zukunft (echter Bann).
+ */
+export function banInfo(user) {
+  const untilMs = user?.banned_until
+    ? new Date(`${String(user.banned_until).replace(' ', 'T')}Z`).getTime()
+    : 0;
+  const permanent = untilMs > Date.now() + 100 * 365 * 24 * 3600 * 1000;
+  return {
+    reason: user?.ban_reason ?? null,
+    permanent,
+    banned_until: permanent || !untilMs ? null : `${String(user.banned_until).replace(' ', 'T')}Z`,
+  };
+}
+
+/**
+ * Sperrt einen Nutzer bis `until` (SQL-String 'YYYY-MM-DD HH:MM:SS', UTC) mit Grund
+ * und meldet ihn sofort ab. Wird vom Admin-Panel und von der KI-Moderation genutzt.
+ */
+export async function setBan(userId, until, reason) {
+  await pool.query('UPDATE users SET banned_until = ?, ban_reason = ?, updated_at = NOW() WHERE id = ?', [
+    until,
+    reason,
+    userId,
+  ]);
+  // Bestehende Tokens entwerten -> sofort abgemeldet.
+  await pool.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [userId]);
+}
+
+/**
+ * Legt einen Beweis-Datensatz zu einer Sperr-Aktion an.
+ * `source`: 'admin' = von Hand gesetzt, 'ai' = automatisch durch die KI-Moderation
+ * (dann ist adminId null). `until` nur bei Timeouts.
+ */
+export async function recordBanEvidence({ userId, adminId, source = 'admin', action, reason, until, imagePath }) {
+  await pool.query(
+    `INSERT INTO ban_evidence (user_id, admin_id, source, action, reason, banned_until, image_path, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+    [userId, adminId ?? null, source, action, reason, until ?? null, imagePath ?? null],
+  );
+}
+
+/**
+ * Entfernt sensible Felder aus einer User-Zeile (wie Laravels $hidden).
+ *
+ * `req` ist optional, sollte aber immer mitkommen: Nur damit werden Profilbild
+ * und Banner zu fertigen Adressen (siehe src/media.js). Ohne `req` bleiben die
+ * rohen Spaltenwerte stehen – brauchbar fuer Aufrufer ausserhalb einer Anfrage,
+ * fuer eine API-Antwort aber zu wenig.
+ */
+export function serializeUser(row, req = null) {
   if (!row) {
     return null;
   }
   const { password, remember_token, ...safe } = row;
   // is_admin kommt aus der DB als 0/1 (oder fehlt bei alten DBs) -> echter Boolean.
-  return { ...safe, is_admin: Boolean(safe.is_admin) };
+  return {
+    ...safe,
+    is_admin: Boolean(safe.is_admin),
+    ...(req
+      ? { avatar: mediaUrl(req, safe.avatar), banner: mediaUrl(req, safe.banner ?? null) }
+      : {}),
+  };
+}
+
+/** Laedt die Interessen eines Nutzers (id, name, slug, icon) als Array. */
+export async function loadUserInterests(userId) {
+  const [rows] = await pool.query(
+    `SELECT i.id, i.name, i.slug, i.icon
+       FROM interest_user iu
+       JOIN interests i ON i.id = iu.interest_id
+      WHERE iu.user_id = ?
+      ORDER BY i.name`,
+    [userId],
+  );
+  return rows;
+}
+
+/** User-Objekt fuer API-Antworten – wie serializeUser, aber inkl. Interessen. */
+export async function userPayload(row, req = null) {
+  const safe = serializeUser(row, req);
+  if (!safe) {
+    return null;
+  }
+  return { ...safe, interests: await loadUserInterests(row.id) };
 }
 
 /** Profil vollstaendig: Username + Kontotyp gesetzt und mind. 3 Interessen. */
@@ -108,6 +201,12 @@ export async function requireAuth(req, res, next) {
     const user = await first('SELECT * FROM users WHERE id = ?', [token.tokenable_id]);
     if (!user) {
       return res.status(401).json({ message: 'Unauthenticated.' });
+    }
+
+    // Gesperrte Nutzer: Token entwerten und abweisen.
+    if (isBanned(user)) {
+      await pool.query('DELETE FROM personal_access_tokens WHERE id = ?', [id]);
+      return res.status(403).json({ message: 'Dein Konto ist gesperrt.' });
     }
 
     await pool.query('UPDATE personal_access_tokens SET last_used_at = NOW() WHERE id = ?', [id]);

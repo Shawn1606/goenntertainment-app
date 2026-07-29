@@ -1,21 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Animated,
-  PanResponder,
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { Animated, Dimensions, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AuthIllustration } from '@/components/auth-illustration';
 import { BrandLogo } from '@/components/brand-logo';
 import { GoennBackground } from '@/components/goenn-background';
 import { LoginPanel } from '@/components/login-panel';
-import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Brand, MaxContentWidth, Spacing, FontFamily } from '@/constants/theme';
 
 type Mode = 'welcome' | 'login';
 
@@ -24,7 +15,16 @@ const NATIVE = Platform.OS !== 'web';
 
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
-  const { height } = useWindowDimensions();
+  /**
+   * Höhe EINMALIG beim Einhängen lesen, nicht über `useWindowDimensions()`.
+   *
+   * Unter dem ab SDK 54 erzwungenen edge-to-edge schrumpft das Fenster, sobald
+   * die Tastatur aufgeht. Hing die Schiebe-Strecke daran, wurden bei jedem
+   * Tastendruck im Login beide `interpolate`-Knoten neu gebaut und dem
+   * Animated.View untergeschoben – das Panel zuckte unter den Fingern weg.
+   * Die App ist auf Hochformat festgelegt, also ist dieses Maß ohnehin fest.
+   */
+  const [{ height }] = useState(() => Dimensions.get('window'));
   const [mode, setMode] = useState<Mode>('welcome');
 
   // progress: 0 = Start-Screen sichtbar, 1 = Login sichtbar.
@@ -100,14 +100,21 @@ export default function WelcomeScreen() {
           <View style={styles.top}>
             <Text style={styles.welcome}>Willkommen bei</Text>
             <BrandLogo size="large" />
+          </View>
+
+          {/* Bewusst mit Abstand unter der Wortmarke: das Logo bekommt Luft,
+              der Aufruf steht für sich statt direkt darunter zu kleben. */}
+          <View style={styles.taglineWrap}>
             <Text style={styles.tagline}>Lege direkt los!</Text>
           </View>
 
           <View style={styles.spacer} />
 
           <View style={styles.mascot}>
-            <AuthIllustration size="large" />
+            <AuthIllustration size={height >= 720 ? 'large' : 'normal'} />
           </View>
+
+          <View style={styles.spacer} />
 
           <Pressable onPress={openLogin} hitSlop={12} style={styles.hint}>
             <Text style={styles.hintArrow}>↑</Text>
@@ -145,12 +152,22 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: '#4b5563',
     marginBottom: Spacing.two,
+    fontFamily: FontFamily.medium,
+  },
+  taglineWrap: {
+    alignItems: 'center',
+    marginTop: Spacing.five,
   },
   tagline: {
-    fontSize: 18,
-    fontWeight: '500',
-    color: '#4b5563',
-    marginTop: Spacing.three,
+    fontSize: 17,
+    fontWeight: '600',
+    color: Brand.purple,
+    fontFamily: FontFamily.semibold,
+    backgroundColor: 'rgba(99,102,241,0.10)',
+    borderRadius: 999,
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.two,
+    overflow: 'hidden',
   },
   spacer: {
     flex: 1,
@@ -158,7 +175,6 @@ const styles = StyleSheet.create({
   mascot: {
     width: '100%',
     alignItems: 'center',
-    marginBottom: Spacing.five,
   },
   hint: {
     alignItems: 'center',
@@ -169,10 +185,12 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     color: Brand.purple,
     fontWeight: '700',
+    fontFamily: FontFamily.bold,
   },
   hintText: {
     fontSize: 15,
     fontWeight: '600',
     color: Brand.textMuted,
+    fontFamily: FontFamily.semibold,
   },
 });

@@ -15,11 +15,33 @@ type ThemePreferenceContextValue = {
   isDark: boolean;
   /** Dark-Mode an/aus schalten – setzt eine feste Voreinstellung. */
   setDark: (dark: boolean) => void;
-  /** Zurück auf „dem System folgen“. */
-  useSystem: () => void;
+  /**
+   * Zurück auf „dem System folgen“.
+   *
+   * Heißt bewusst nicht `useSystem`: alles mit `use…` gilt der Lint-Regel für
+   * Hooks als Hook und darf dann nicht in einem Callback aufgerufen werden.
+   */
+  followSystem: () => void;
 };
 
 const ThemePreferenceContext = createContext<ThemePreferenceContextValue | null>(null);
+
+/**
+ * Erzwungenes Schema für einen Teilbaum. Nötig für die Anmelde-Screens: deren
+ * Hintergrund ist bewusst immer hell, also müssen auch Felder, Karten und
+ * Texte darin hell bleiben – selbst wenn im Konto Dark-Mode gewählt ist.
+ */
+const SchemeOverrideContext = createContext<'light' | 'dark' | null>(null);
+
+export function ForceScheme({
+  scheme,
+  children,
+}: {
+  scheme: 'light' | 'dark';
+  children: ReactNode;
+}) {
+  return <SchemeOverrideContext.Provider value={scheme}>{children}</SchemeOverrideContext.Provider>;
+}
 
 export function ThemePreferenceProvider({ children }: { children: ReactNode }) {
   const systemScheme = useColorScheme();
@@ -52,7 +74,7 @@ export function ThemePreferenceProvider({ children }: { children: ReactNode }) {
       scheme,
       isDark: scheme === 'dark',
       setDark: (dark) => apply(dark ? 'dark' : 'light'),
-      useSystem: () => apply(null),
+      followSystem: () => apply(null),
     };
   }, [preference, systemScheme]);
 
@@ -66,8 +88,10 @@ export function ThemePreferenceProvider({ children }: { children: ReactNode }) {
  * System-Schema zurück, damit einzelne Komponenten nie crashen.
  */
 export function useResolvedScheme(): 'light' | 'dark' {
+  const override = useContext(SchemeOverrideContext);
   const ctx = useContext(ThemePreferenceContext);
   const systemScheme = useColorScheme();
+  if (override) return override;
   if (ctx) return ctx.scheme;
   return systemScheme === 'dark' ? 'dark' : 'light';
 }

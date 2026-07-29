@@ -3,7 +3,7 @@
  * https://docs.expo.dev/guides/color-schemes/
  */
 
-import { BrandSurfaces, Colors } from '@/constants/theme';
+import { BrandSurfaces, Colors, Glass, Signals } from '@/constants/theme';
 import { useResolvedScheme } from '@/lib/theme-preference';
 
 export function useTheme() {
@@ -22,4 +22,25 @@ export function useBrandSurface() {
   const scheme = useResolvedScheme();
 
   return BrandSurfaces[scheme];
+}
+
+/** Glas-Werte (Füllung, Kanten, Lichtsaum) passend zum aufgelösten Schema. */
+export function useGlass() {
+  const scheme = useResolvedScheme();
+
+  return Glass[scheme];
+}
+
+/**
+ * Zustandsfarben („läuft ab", „geschafft") passend zum aufgelösten Schema.
+ *
+ * Absichtlich ein eigener Hook und nicht Teil von `useBrandSurface()`: Wer
+ * diese Farben holt, trifft damit eine Aussage über einen Zustand. Steckten sie
+ * in den Oberflächen-Werten, würden sie irgendwann als „hübsches Gelb" für
+ * Dekoration benutzt – und dann sagt Gelb nichts mehr.
+ */
+export function useSignals() {
+  const scheme = useResolvedScheme();
+
+  return Signals[scheme];
 }

@@ -1,47 +1,58 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { StyleSheet, useWindowDimensions, View, type ViewProps } from 'react-native';
-import Svg, { Defs, Path, RadialGradient, Stop } from 'react-native-svg';
+import { StyleSheet, View, type ViewProps } from 'react-native';
+import Svg, { Defs, Line, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 
+import { Palette } from '@/constants/theme';
 import { useResolvedScheme } from '@/lib/theme-preference';
 
 /**
- * Home-Hintergrund in derselben Farbpalette wie der Pre-Login-Screen
- * (GoennBackground): Pfirsich → Pink → Lavendel plus weiche Pfirsich-/Pink-
- * Scheine. Bewusst minimalistisch – hier statisch, ohne die animierten
- * Wellen und Kreise des Login-Screens.
+ * Leinwand der App – gebaut wie der Hintergrund von cira.systems, nur hell.
  *
- * Im Dark-Mode (App-Einstellung) kippt die Palette in dunkle Violett-/Nacht-
- * Töne, damit der Hintergrund spürbar abdunkelt.
+ * Drei Schichten:
+ *   1. fast weißer Grund (#fafafa) mit einem Hauch Verlauf,
+ *   2. ein feines 1px-Raster (bei der Referenz weiß auf schwarz, hier dunkel
+ *      auf weiß) – gibt Struktur, ohne aufzufallen,
+ *   3. ein sehr dezenter Indigo-Schein oben rechts als einzige Farbe.
+ *
+ * Im Dunkelmodus liegen die Werte fast auf dem Original der Referenz.
  */
 
-// Heller Modus: Pfirsich → Pink → Lavendel.
+const GRID_SIZE = 32;
+
 const LIGHT = {
-  base: '#ffdcc4',
-  gradient: ['#ffdcc4', '#ffcbe6', '#dcc0ff'] as const,
-  peach: '#ffb28c',
-  peachOpacity: 0.9,
-  pink: '#ff9ecf',
-  pinkOpacity: 0.55,
+  base: Palette.canvas,
+  gradient: [Palette.canvas, '#f7f7f8', Palette.canvasAlt] as const,
+  grid: Palette.grid,
+  glow: Palette.indigo,
+  glowOpacity: 0.1,
+  glow2: Palette.cyan,
+  glow2Opacity: 0.06,
 };
 
-// Dunkler Modus: tiefe Nacht-Violett-Töne, gleiche Komposition.
 const DARK = {
-  base: '#0d0b16',
-  gradient: ['#151022', '#1c1330', '#241a3d'] as const,
-  peach: '#7c3aed',
-  peachOpacity: 0.45,
-  pink: '#9f67ff',
-  pinkOpacity: 0.35,
+  base: Palette.canvasDark,
+  gradient: [Palette.canvasDark, '#0d0d0d', Palette.canvasAltDark] as const,
+  grid: Palette.gridDark,
+  glow: Palette.indigoLight,
+  glowOpacity: 0.16,
+  glow2: Palette.cyan,
+  glow2Opacity: 0.08,
 };
 
+/**
+ * Bewusst OHNE `useWindowDimensions`: Die Fenstergröße ändert sich jedes Mal,
+ * wenn die Tastatur auf- oder zugeht (Android läuft seit Expo SDK 54 zwingend
+ * randlos). Hing die Leinwand daran, wurde bei jedem Tastendruck das komplette
+ * SVG neu gezeichnet – Raster und Scheine flackerten sichtbar, während man ein
+ * Formular ausfüllte. Prozentangaben überlässt das Skalieren dem nativen SVG,
+ * ohne dass React neu rendern muss.
+ */
 export function HomeBackground({ children, style, ...rest }: ViewProps) {
-  const { width, height } = useWindowDimensions();
   const scheme = useResolvedScheme();
   const p = scheme === 'dark' ? DARK : LIGHT;
 
   return (
     <View style={[styles.container, { backgroundColor: p.base }, style]} {...rest}>
-      {/* Basis-Verlauf */}
       <LinearGradient
         colors={p.gradient}
         start={{ x: 0.1, y: 0 }}
@@ -49,20 +60,25 @@ export function HomeBackground({ children, style, ...rest }: ViewProps) {
         style={StyleSheet.absoluteFill}
       />
 
-      {/* Weiche Farbscheine: oben rechts, unten links */}
       <Svg style={StyleSheet.absoluteFill} width="100%" height="100%" pointerEvents="none">
         <Defs>
-          <RadialGradient id="home-peach" cx="88%" cy="6%" r="60%">
-            <Stop offset="0" stopColor={p.peach} stopOpacity={String(p.peachOpacity)} />
-            <Stop offset="0.7" stopColor={p.peach} stopOpacity="0" />
+          {/* Feines Raster – zwei 1px-Linien, gekachelt. */}
+          <Pattern id="grid" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
+            <Line x1="0" y1="0" x2={GRID_SIZE} y2="0" stroke={p.grid} strokeWidth="1" />
+            <Line x1="0" y1="0" x2="0" y2={GRID_SIZE} stroke={p.grid} strokeWidth="1" />
+          </Pattern>
+          <RadialGradient id="home-glow" cx="86%" cy="4%" r="62%">
+            <Stop offset="0" stopColor={p.glow} stopOpacity={String(p.glowOpacity)} />
+            <Stop offset="0.75" stopColor={p.glow} stopOpacity="0" />
           </RadialGradient>
-          <RadialGradient id="home-pink" cx="8%" cy="72%" r="55%">
-            <Stop offset="0" stopColor={p.pink} stopOpacity={String(p.pinkOpacity)} />
-            <Stop offset="0.75" stopColor={p.pink} stopOpacity="0" />
+          <RadialGradient id="home-glow-2" cx="6%" cy="78%" r="55%">
+            <Stop offset="0" stopColor={p.glow2} stopOpacity={String(p.glow2Opacity)} />
+            <Stop offset="0.8" stopColor={p.glow2} stopOpacity="0" />
           </RadialGradient>
         </Defs>
-        <Path d={`M0 0 H${width} V${height} H0 Z`} fill="url(#home-peach)" />
-        <Path d={`M0 0 H${width} V${height} H0 Z`} fill="url(#home-pink)" />
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#grid)" />
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#home-glow)" />
+        <Rect x="0" y="0" width="100%" height="100%" fill="url(#home-glow-2)" />
       </Svg>
 
       {children}

@@ -2,6 +2,11 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "noEmit": true,
+    // Die Tests in src/domain laufen direkt mit `node --test` (Node 22+ liest
+    // TypeScript nativ). Node braucht dort die vollstaendige Dateiendung im
+    // Import – genau das erlaubt diese Option.
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": [
         "./src/*"
