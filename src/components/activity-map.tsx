@@ -4,11 +4,14 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import MapView, { Marker, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ActivityCard } from '@/components/activity-card';
+import { ActivityDetailModal } from '@/components/activity-detail-modal';
+import { Mascot, MascotEmpty, MascotError } from '@/components/mascot';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, Spacing } from '@/constants/theme';
-import { useTheme } from '@/hooks/use-theme';
+import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
+import { reactionFor } from '@/domain/mascot-mood';
+import { useBrandSurface, useTheme } from '@/hooks/use-theme';
+import { type Activity } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { openRoute } from '@/lib/open-maps';
 import { type MapActivity, useMapActivities } from '@/lib/use-map-activities';
@@ -36,9 +39,14 @@ function regionAround(c: LatLng, radiusKm: number): Region {
 
 export default function MapScreen() {
   const theme = useTheme();
+  const surface = useBrandSurface();
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
   const { items, loading, error } = useMapActivities(token);
+
+  // Hinweis-Pillen tragen dasselbe Blau wie die Kategorie-Kacheln – hier in der
+  // deckenden Variante, weil sie über den Kartenkacheln liegen.
+  const pillStyle = { backgroundColor: surface.chipBgSolid, borderColor: surface.chipBorder };
 
   const mapRef = useRef<MapView>(null);
   const didCenter = useRef(false);
@@ -92,6 +100,18 @@ export default function MapScreen() {
       // Standort nicht verfügbar – still ignorieren.
     }
   }, [showUser]);
+
+  // Route zur ausgewählten Activity in Google/Apple Maps öffnen.
+  const handleRoute = useCallback(() => {
+    if (selected) openRoute(selected.coords, selected.location || selected.title);
+  }, [selected]);
+
+  // Nach Beitreten/Verlassen: die offene Auswahl mit den frischen Daten
+  // aktualisieren (Koordinaten behalten). Die Marker selbst zeigen keine
+  // Teilnehmerzahl, daher reicht das Aktualisieren der Auswahl.
+  const handleChanged = useCallback((updated: Activity) => {
+    setSelected((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+  }, []);
 
   // Beim ersten bekannten Standort einmalig auf den 5-km-Radius um mich zoomen.
   // (Nicht auf die Aktivitäten – der User will seinen eigenen Umkreis sehen.)
@@ -148,9 +168,20 @@ export default function MapScreen() {
         ))}
       </MapView>
 
-      {/* Kopf-Hinweis */}
+      {/* Kopf-Hinweis. Goenni sitzt mit in der Pille und schaut hier nachdenklich
+          („wo ist was?") – die Stimmung kommt aus `src/domain/mascot-mood.ts`,
+          damit jeder Tab eine andere hat und keine zweimal dieselbe. */}
       <View style={[styles.header, { top: insets.top + Spacing.two }]} pointerEvents="none">
-        <View style={[styles.headerPill, { backgroundColor: theme.backgroundElement }]}>
+        <View style={[styles.headerPill, styles.headerRow, pillStyle]}>
+          {/* Stimmung UND Geste aus der Tabelle: Auf der Karte sieht sie sich
+              deutlich um – dort ist Suchen die Tätigkeit und nicht bloß ein
+              Lebenszeichen. */}
+          <Mascot
+            mood={reactionFor('map').mood}
+            gesture={reactionFor('map').gesture}
+            size={30}
+            color={theme.tint}
+          />
           <ThemedText type="smallBold">Aktivitäten in der Nähe</ThemedText>
         </View>
       </View>
@@ -158,22 +189,26 @@ export default function MapScreen() {
       {/* Lade-/Fehleranzeige */}
       {loading && items.length === 0 ? (
         <View style={[styles.center, { top: insets.top }]} pointerEvents="none">
-          <View style={[styles.headerPill, { backgroundColor: theme.backgroundElement }]}>
+          <View style={[styles.headerPill, pillStyle]}>
             <ActivityIndicator color={theme.tint} />
           </View>
         </View>
       ) : null}
       {!loading && error ? (
         <View style={[styles.center, { top: insets.top }]} pointerEvents="none">
-          <View style={[styles.headerPill, { backgroundColor: theme.backgroundElement }]}>
-            <ThemedText themeColor="textSecondary">{error}</ThemedText>
+          <View style={[styles.headerPill, styles.centerCard, pillStyle]}>
+            <MascotError detail={error} size={72} />
           </View>
         </View>
       ) : null}
       {!loading && !error && items.length === 0 ? (
         <View style={[styles.center, { top: insets.top }]} pointerEvents="none">
-          <View style={[styles.headerPill, { backgroundColor: theme.backgroundElement }]}>
-            <ThemedText themeColor="textSecondary">Noch keine Aktivitäten mit Ort.</ThemedText>
+          <View style={[styles.headerPill, styles.centerCard, pillStyle]}>
+            <MascotEmpty mood="asleep" size={72} color={theme.tint}>
+              <ThemedText themeColor="textSecondary" style={styles.centerText}>
+                Noch keine Aktivitäten mit Ort.
+              </ThemedText>
+            </MascotEmpty>
           </View>
         </View>
       ) : null}
@@ -185,33 +220,21 @@ export default function MapScreen() {
           styles.locateButton,
           {
             backgroundColor: theme.background,
-            bottom: (selected ? 220 : 0) + insets.bottom + BottomTabInset + Spacing.three,
+            bottom: insets.bottom + BottomTabInset + Spacing.three,
             opacity: pressed ? 0.8 : 1,
           },
         ]}>
         <ThemedText style={[styles.locateIcon, { color: theme.tint }]}>◎</ThemedText>
       </Pressable>
 
-      {/* Ausgewählte Activity als Karte unten + Route-Button */}
-      {selected ? (
-        <View
-          style={[
-            styles.sheet,
-            { bottom: insets.bottom + BottomTabInset + Spacing.three },
-          ]}>
-          <ActivityCard activity={selected} />
-          <Pressable
-            onPress={() => openRoute(selected.coords, selected.location || selected.title)}
-            style={({ pressed }) => [
-              styles.routeButton,
-              { backgroundColor: theme.tint, opacity: pressed ? 0.85 : 1 },
-            ]}>
-            <ThemedText style={[styles.routeText, { color: theme.tintText }]}>
-              Route anzeigen
-            </ThemedText>
-          </Pressable>
-        </View>
-      ) : null}
+      {/* Detail-Popup mit allen Infos + Beitreten/Verlassen (wie auf Home),
+          zusätzlich mit „Route anzeigen". */}
+      <ActivityDetailModal
+        activity={selected}
+        onClose={() => setSelected(null)}
+        onChanged={handleChanged}
+        onRoute={handleRoute}
+      />
     </ThemedView>
   );
 }
@@ -234,16 +257,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  /** Figur und Text nebeneinander in der Kopf-Pille. */
+  headerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   headerPill: {
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.two,
     borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth * 2,
     shadowColor: '#000',
     shadowOpacity: 0.15,
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 3,
   },
+  /**
+   * Dieselbe Fläche, aber als Karte statt als Pille.
+   *
+   * Nötig, seit in der Mitte eine Figur mit zwei Zeilen Text steht: `borderRadius:
+   * 999` macht aus einem hohen Kasten eine Linse, und die sah aus wie ein
+   * Darstellungsfehler. Eine Pille ist eine Pille, solange sie eine Zeile hoch ist.
+   */
+  centerCard: {
+    borderRadius: Radius.panel,
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.three,
+    maxWidth: 320,
+  },
+  centerText: { textAlign: 'center' },
   locateButton: {
     position: 'absolute',
     right: Spacing.three,
@@ -261,26 +301,6 @@ const styles = StyleSheet.create({
   locateIcon: {
     fontSize: 24,
     lineHeight: 28,
-    fontWeight: '600',
-  },
-  sheet: {
-    position: 'absolute',
-    left: Spacing.three,
-    right: Spacing.three,
-    gap: Spacing.two,
-  },
-  routeButton: {
-    borderRadius: 16,
-    paddingVertical: Spacing.three,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
-  },
-  routeText: {
-    fontSize: 16,
     fontWeight: '600',
   },
 });

@@ -1,13 +1,14 @@
 import { Stack } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandGradientText } from '@/components/brand-gradient-text';
 import { BrandButton } from '@/components/ui/brand-button';
-import { BrandTextField } from '@/components/ui/brand-text-field';
 import { LockIcon, MailIcon } from '@/components/ui/icons';
-import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
+import { KeyboardForm } from '@/components/ui/keyboard-form';
+import { TextField } from '@/components/ui/text-field';
+import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
 import { api, ApiError, type User } from '@/lib/api';
 
 // Vorerst wird der Admin nur an dieser E-Mail erkannt. Eine echte Admin-Rolle
@@ -58,9 +59,10 @@ function AdminLogin({ onSuccess, topInset }: { onSuccess: (u: User) => void; top
     }
   }
 
+  // Tastatur-Freistellung übernimmt `KeyboardForm` (siehe dort).
   return (
-    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <ScrollView contentContainerStyle={[styles.centered, { paddingTop: topInset + Spacing.six }]} keyboardShouldPersistTaps="handled">
+    <View style={styles.flex}>
+      <KeyboardForm contentContainerStyle={[styles.centered, { paddingTop: topInset + Spacing.six }]}>
         <View style={styles.card}>
           <View style={styles.header}>
             <Text style={styles.badge}>ADMIN</Text>
@@ -70,7 +72,7 @@ function AdminLogin({ onSuccess, topInset }: { onSuccess: (u: User) => void; top
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          <BrandTextField
+          <TextField
             label="E-Mail"
             value={email}
             onChangeText={setEmail}
@@ -80,7 +82,7 @@ function AdminLogin({ onSuccess, topInset }: { onSuccess: (u: User) => void; top
             autoComplete="email"
             leftIcon={<MailIcon />}
           />
-          <BrandTextField
+          <TextField
             label="Passwort"
             value={password}
             onChangeText={setPassword}
@@ -92,8 +94,8 @@ function AdminLogin({ onSuccess, topInset }: { onSuccess: (u: User) => void; top
 
           <BrandButton title="Anmelden" onPress={onLogin} loading={loading} />
         </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+      </KeyboardForm>
+    </View>
   );
 }
 
@@ -151,7 +153,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 420,
     backgroundColor: '#ffffff',
-    borderRadius: 24,
+    borderRadius: Radius.panel,
     borderWidth: 1,
     borderColor: '#ece9fe',
     padding: Spacing.four,
@@ -159,7 +161,7 @@ const styles = StyleSheet.create({
     ...Platform.select({
       android: { elevation: 3 },
       default: {
-        shadowColor: '#7c3aed',
+        shadowColor: '#4f46e5',
         shadowOpacity: 0.12,
         shadowRadius: 24,
         shadowOffset: { width: 0, height: 8 },
@@ -176,20 +178,23 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 2,
     color: Brand.purple,
-    backgroundColor: '#f5f3ff',
+    backgroundColor: 'rgba(99,102,241,0.10)',
     borderRadius: 999,
     paddingHorizontal: Spacing.two,
     paddingVertical: 2,
     overflow: 'hidden',
+    fontFamily: FontFamily.bold,
   },
   title: {
     fontSize: 28,
     fontWeight: '800',
     textAlign: 'center',
+    fontFamily: FontFamily.bold,
   },
   subtitle: {
     fontSize: 14,
     color: Brand.textMuted,
+    fontFamily: FontFamily.regular,
   },
   error: {
     color: '#ef4444',
@@ -211,9 +216,10 @@ const styles = StyleSheet.create({
   dashTitle: {
     fontSize: 30,
     fontWeight: '800',
+    fontFamily: FontFamily.bold,
   },
   logout: {
-    borderRadius: 14,
+    borderRadius: Radius.field,
     borderWidth: 1,
     borderColor: '#e5e7eb',
     backgroundColor: '#ffffff',
@@ -227,6 +233,7 @@ const styles = StyleSheet.create({
   hello: {
     fontSize: 14,
     color: Brand.textMuted,
+    fontFamily: FontFamily.regular,
   },
   grid: {
     flexDirection: 'row',
@@ -247,18 +254,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: Brand.text,
+    fontFamily: FontFamily.bold,
   },
   statValue: {
     fontSize: 32,
     fontWeight: '800',
     color: Brand.purple,
+    fontFamily: FontFamily.bold,
   },
   statHint: {
     fontSize: 12,
     color: Brand.textMuted,
+    fontFamily: FontFamily.regular,
   },
   note: {
     fontSize: 13,
     color: Brand.textMuted,
+    fontFamily: FontFamily.regular,
   },
 });

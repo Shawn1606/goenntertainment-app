@@ -18,13 +18,22 @@ CREATE TABLE IF NOT EXISTS users (
   id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name              VARCHAR(255)    NOT NULL,
   username          VARCHAR(255)    NULL,
-  account_type      VARCHAR(255)    NULL,
+  account_type      VARCHAR(255)    NULL,               -- Kontostufe: standard|creator|business|business_plus (siehe src/accounts.js)
   google_id         VARCHAR(255)    NULL,
-  avatar            VARCHAR(255)    NULL,
+  avatar            VARCHAR(255)    NULL,               -- Profilbild: eigener Upload ('avatars/…') ODER fremde URL (Google), siehe src/media.js
+  banner            VARCHAR(255)    NULL,               -- Bild hinter der Profil-Karte; wird in der App weichgezeichnet gezeigt
   email             VARCHAR(255)    NOT NULL,
   email_verified_at TIMESTAMP       NULL,
   password          VARCHAR(255)    NULL,          -- nullable: reine Google-Konten
   is_admin          TINYINT(1)      NOT NULL DEFAULT 0, -- 1 = Admin (darf jedes Event loeschen, sieht Admin-Tab)
+  banned_until      DATETIME        NULL,               -- NULL = aktiv; Zeitpunkt = gesperrt bis dahin (Bann = weit in der Zukunft)
+  ban_reason        VARCHAR(255)    NULL,               -- Grund der Sperre (wird dem Nutzer beim Login gezeigt)
+  -- Welchen Stand der Nutzungsbedingungen dieses Konto bestaetigt hat (siehe
+  -- src/domain/legal.ts in der App). Die VERSION und nicht bloss ein Ja/Nein:
+  -- Nur damit laesst sich nach einer Aenderung erkennen, wer noch dem alten
+  -- Stand zugestimmt hat. NULL = Bestandskonto von vor der Zustimmung.
+  terms_version     VARCHAR(20)     NULL,
+  terms_accepted_at DATETIME        NULL,
   remember_token    VARCHAR(100)    NULL,
   created_at        TIMESTAMP       NULL,
   updated_at        TIMESTAMP       NULL,
@@ -98,6 +107,7 @@ CREATE TABLE IF NOT EXISTS activities (
   starts_at   DATETIME        NOT NULL,
   banner_path VARCHAR(255)    NULL,
   max_participants INT UNSIGNED NULL,               -- NULL = unbegrenzt
+  boosted_until DATETIME      NULL,                 -- hervorgehoben bis (Business-Stufen); NULL = normal
   created_at  TIMESTAMP       NULL,
   updated_at  TIMESTAMP       NULL,
   PRIMARY KEY (id),
@@ -129,5 +139,439 @@ CREATE TABLE IF NOT EXISTS activity_user (
   CONSTRAINT activity_user_activity_id_fk
     FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
   CONSTRAINT activity_user_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Aufrufe je Aktivitaet: eine Zeile pro Person und Event. Dadurch zaehlt die
+-- Statistik "von wie vielen Leuten gesehen" statt roher Klicks.
+CREATE TABLE IF NOT EXISTS activity_views (
+  activity_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (activity_id, user_id),
+  KEY activity_views_user_id_idx (user_id),
+  CONSTRAINT activity_views_activity_id_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+  CONSTRAINT activity_views_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Verlauf: welche Events ein:e Nutzer:in erstellt/besucht hat. Enthaelt einen
+-- Schnappschuss (Titel/Ort/Datum/Banner), damit der Eintrag auch nach dem
+-- Loeschen des Events angezeigt werden kann. `activity_id` -> SET NULL beim
+-- Loeschen (Verweis weg, Schnappschuss bleibt). `removed_at` = Zeitpunkt, ab dem
+-- die 7-Tage-Frist laeuft (Event geloescht ODER Nutzer:in ausgetreten); NULL =
+-- noch aktiv (bleibt dauerhaft sichtbar, solange das Event existiert).
+CREATE TABLE IF NOT EXISTS activity_history (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  activity_id BIGINT UNSIGNED NULL,
+  role        ENUM('host','participant') NOT NULL,
+  title       VARCHAR(255)    NOT NULL,
+  location    VARCHAR(255)    NOT NULL,
+  starts_at   DATETIME        NULL,
+  banner_path VARCHAR(255)    NULL,
+  removed_at  TIMESTAMP       NULL,
+  created_at  TIMESTAMP       NULL,
+  updated_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY activity_history_user_activity_uq (user_id, activity_id),
+  KEY activity_history_user_id_idx (user_id),
+  KEY activity_history_removed_at_idx (removed_at),
+  CONSTRAINT activity_history_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT activity_history_activity_id_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Beweismittel je Sperr-Aktion (Bann/Timeout): Grund + optionaler Screenshot.
+-- Bleibt als Nachweis erhalten, auch nach Aufheben der Sperre.
+-- `source` = 'admin' (von Hand) oder 'ai' (automatisch durch die KI-Moderation;
+-- dann ist admin_id NULL und image_path enthaelt das beanstandete Bild).
+CREATE TABLE IF NOT EXISTS ban_evidence (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      BIGINT UNSIGNED NOT NULL,             -- betroffener Nutzer
+  admin_id     BIGINT UNSIGNED NULL,                 -- wer die Sperre gesetzt hat
+  source       VARCHAR(10)     NOT NULL DEFAULT 'admin', -- 'admin' | 'ai'
+  action       VARCHAR(20)     NOT NULL,             -- 'ban' | 'timeout'
+  reason       VARCHAR(255)    NOT NULL,
+  banned_until DATETIME        NULL,                 -- bei Timeout: Ende
+  image_path   VARCHAR(255)    NULL,                 -- Screenshot/Foto als Beweis
+  created_at   TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  KEY ban_evidence_user_id_idx (user_id),
+  CONSTRAINT ban_evidence_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT ban_evidence_admin_id_fk
+    FOREIGN KEY (admin_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Berichte der KI-Verifizierung (Jugendschutz). Jede Pruefung eines Nutzer-
+-- Inhalts landet hier – auch die unauffaelligen, damit die Trefferquote und
+-- jede automatische Sperre nachvollziehbar bleiben.
+--   verdict: 'ok' | 'auffaellig' | 'abgelehnt' | 'refusal' | 'error'
+--   severity: 0 unbedenklich · 1 grenzwertig · 2 nicht jugendfrei · 3 schwer
+--   action: 'none' (durchgelassen) | 'blocked' (abgelehnt) | 'timeout' (+ Sperre)
+-- user_id -> SET NULL, damit Berichte eine Konto-Loeschung ueberdauern.
+CREATE TABLE IF NOT EXISTS moderation_reports (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     BIGINT UNSIGNED NULL,
+  context     VARCHAR(20)     NOT NULL,             -- 'activity'
+  verdict     VARCHAR(20)     NOT NULL,
+  severity    TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  categories  VARCHAR(255)    NULL,                 -- z. B. 'sexuell,nacktheit'
+  fields      VARCHAR(255)    NULL,                 -- betroffene Felder
+  reason      VARCHAR(500)    NULL,                 -- Begruendung der KI
+  action      VARCHAR(20)     NOT NULL,
+  title       VARCHAR(255)    NULL,                 -- geprueftes Material (Schnappschuss)
+  body        TEXT            NULL,
+  interests   VARCHAR(500)    NULL,
+  image_path  VARCHAR(255)    NULL,                 -- nur bei automatischer Sperre
+  model       VARCHAR(60)     NULL,
+  latency_ms  INT UNSIGNED    NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  KEY moderation_reports_user_id_idx (user_id),
+  KEY moderation_reports_created_at_idx (created_at),
+  CONSTRAINT moderation_reports_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Aktive Tage je Nutzer:in – Grundlage der Serie ("Streak").
+-- Eine Zeile pro Person und Kalendertag, an dem die App benutzt wurde. Der Tag
+-- kommt vom Gerät (Header X-Local-Date), damit die Serie in der Zeitzone der
+-- Nutzer:in stimmt und nicht in UTC; ohne Header faellt der Server auf sein
+-- eigenes Datum zurueck. Bewusst OHNE Zeit und ohne Zaehler: Wir wollen nur
+-- wissen "an diesem Tag war jemand da", nicht wie oft oder wie lange.
+CREATE TABLE IF NOT EXISTS user_active_days (
+  user_id BIGINT UNSIGNED NOT NULL,
+  day     DATE            NOT NULL,
+  PRIMARY KEY (user_id, day),
+  KEY user_active_days_day_idx (day),
+  CONSTRAINT user_active_days_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Beitraege auf der oeffentlichen Profilseite ("Community Post").
+-- Nur Konten mit oeffentlichem Profil (ab Creator, siehe src/accounts.js)
+-- duerfen schreiben; gelesen werden sie von allen. Text ist Pflicht, das Bild
+-- optional. Beides geht vor dem Speichern durch die KI-Verifizierung
+-- (moderation.js, context 'post') – wie bei den Events.
+CREATE TABLE IF NOT EXISTS posts (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  body       VARCHAR(1000)   NOT NULL,
+  image_path VARCHAR(255)    NULL,
+  created_at TIMESTAMP       NULL,
+  updated_at TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  KEY posts_user_created_idx (user_id, created_at),
+  CONSTRAINT posts_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Punkte-Buchungen ("Praemien"). Eine Zeile pro Ereignis, das Punkte bringt –
+-- derzeit nur 'activity' (10 Punkte je erstelltem Event, siehe src/rewards.js).
+-- `activity_id` -> SET NULL beim Loeschen: Verdiente Punkte bleiben verdient,
+-- auch wenn das Event weg ist. Der eindeutige Schluessel macht die Buchung
+-- idempotent (kein doppeltes Gutschreiben beim Nachtragen).
+CREATE TABLE IF NOT EXISTS reward_points (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  points      INT             NOT NULL,
+  reason      VARCHAR(30)     NOT NULL,             -- 'activity'
+  activity_id BIGINT UNSIGNED NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY reward_points_reason_ref_uq (user_id, reason, activity_id),
+  KEY reward_points_user_id_idx (user_id),
+  CONSTRAINT reward_points_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT reward_points_activity_id_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Eingeloeste Coupons. `coupon_slug` verweist auf den Katalog im Code
+-- (src/rewards.js) – der Preis steht als `points` mit in der Zeile, damit eine
+-- spaetere Preisaenderung alte Einloesungen nicht rueckwirkend verteuert.
+CREATE TABLE IF NOT EXISTS reward_redemptions (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  coupon_slug VARCHAR(40)     NOT NULL,
+  code        VARCHAR(40)     NOT NULL,             -- wird beim Partner vorgezeigt
+  points      INT             NOT NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY reward_redemptions_code_uq (code),
+  KEY reward_redemptions_user_id_idx (user_id),
+  CONSTRAINT reward_redemptions_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Storys: Bild + optionale Unterschrift, laeuft nach 24 h ab (siehe
+-- src/routes/stories.js). Anlegen darf, wer ein oeffentliches Profil hat
+-- (ab Creator); gelesen wird von allen Angemeldeten.
+CREATE TABLE IF NOT EXISTS stories (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  caption    VARCHAR(200)    NULL,
+  image_path VARCHAR(255)    NOT NULL,
+  created_at TIMESTAMP       NULL,
+  expires_at DATETIME        NOT NULL,
+  PRIMARY KEY (id),
+  KEY stories_expires_at_idx (expires_at),
+  KEY stories_user_id_idx (user_id),
+  CONSTRAINT stories_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Wer welche Story gesehen hat – Grundlage der Reihenfolge in der Story-Leiste
+-- (ungesehene zuerst).
+CREATE TABLE IF NOT EXISTS story_views (
+  story_id   BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP       NULL,
+  PRIMARY KEY (story_id, user_id),
+  KEY story_views_user_id_idx (user_id),
+  CONSTRAINT story_views_story_id_fk
+    FOREIGN KEY (story_id) REFERENCES stories (id) ON DELETE CASCADE,
+  CONSTRAINT story_views_user_id_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Freundschaften. EINE Zeile pro Beziehung, keine Spiegelzeile: dadurch kann
+-- eine Freundschaft nie halb bestehen. Wer die Freunde einer Person sucht, muss
+-- beide Spalten pruefen (siehe src/routes/friends.js).
+--   status: 'pending' (angefragt) | 'accepted' (bestaetigt)
+CREATE TABLE IF NOT EXISTS friendships (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  requester_id BIGINT UNSIGNED NOT NULL,
+  addressee_id BIGINT UNSIGNED NOT NULL,
+  status       ENUM('pending','accepted') NOT NULL DEFAULT 'pending',
+  created_at   TIMESTAMP       NULL,
+  updated_at   TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY friendships_pair_uq (requester_id, addressee_id),
+  KEY friendships_addressee_idx (addressee_id, status),
+  CONSTRAINT friendships_requester_fk
+    FOREIGN KEY (requester_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT friendships_addressee_fk
+    FOREIGN KEY (addressee_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Gruppen im Freunde-Bereich. Heisst `friend_groups` und nicht `groups`, weil
+-- GROUPS in MySQL 8 ein reserviertes Wort ist (Fenster-Funktionen) und jede
+-- Abfrage sonst Backticks braeuchte.
+CREATE TABLE IF NOT EXISTS friend_groups (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  owner_id    BIGINT UNSIGNED NOT NULL,
+  name        VARCHAR(60)     NOT NULL,
+  description VARCHAR(200)    NULL,
+  created_at  TIMESTAMP       NULL,
+  updated_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  KEY friend_groups_owner_idx (owner_id),
+  CONSTRAINT friend_groups_owner_fk
+    FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS group_members (
+  group_id   BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP       NULL,
+  PRIMARY KEY (group_id, user_id),
+  KEY group_members_user_id_idx (user_id),
+  CONSTRAINT group_members_group_fk
+    FOREIGN KEY (group_id) REFERENCES friend_groups (id) ON DELETE CASCADE,
+  CONSTRAINT group_members_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Anfragen auf eine hoehere Kontostufe (Creator, Business, Business Plus).
+-- Die Stufe schaltet Rechte frei, deshalb gibt sie sich niemand selbst: Die
+-- Person fragt an (POST /api/me/upgrade-request), ein Admin bestaetigt oder
+-- lehnt ab (siehe src/routes/admin.js).
+--
+-- GENAU EINE Zeile pro Konto (UNIQUE user_id), die bei jeder neuen Anfrage
+-- ueberschrieben wird. Ein Verlauf aller je gestellten Anfragen waere eine
+-- zweite Wahrheit neben `users.account_type` – und die Frage, die das
+-- Admin-Panel stellt, ist immer "was liegt JETZT offen". Der Preis: Wer
+-- zweimal fragt, hinterlaesst nur die letzte Anfrage. Dafuer kann es per
+-- Datenbank nie zwei offene Anfragen desselben Kontos geben, ohne dass der
+-- Server vorher nachsehen muss.
+--   status: 'pending' (liegt offen) | 'approved' (bestaetigt) | 'rejected' (abgelehnt)
+CREATE TABLE IF NOT EXISTS account_upgrade_requests (
+  id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id        BIGINT UNSIGNED NOT NULL,
+  requested_type VARCHAR(20)     NOT NULL,          -- creator|business|business_plus
+  status         ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
+  message        VARCHAR(500)    NULL,              -- Begruendung der Person (freiwillig)
+  decided_by     BIGINT UNSIGNED NULL,              -- Admin, der entschieden hat
+  decided_at     DATETIME        NULL,
+  decision_note  VARCHAR(255)    NULL,              -- Grund der Ablehnung (freiwillig)
+  created_at     TIMESTAMP       NULL,
+  updated_at     TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY account_upgrade_requests_user_uq (user_id),
+  KEY account_upgrade_requests_status_idx (status, created_at),
+  CONSTRAINT account_upgrade_requests_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  -- Der Admin darf geloescht werden, die Entscheidung bleibt bestehen.
+  CONSTRAINT account_upgrade_requests_admin_fk
+    FOREIGN KEY (decided_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Chat-Raeume. EIN Raum-Begriff fuer beide Anlaesse, an denen geredet wird:
+-- eine Gruppe (`group_id`) oder ein Event (`activity_id`). Genau eine der beiden
+-- Spalten ist gefuellt.
+--
+-- Warum der Raum eine eigene Zeile ist und nicht bloss ein Spaltenpaar an der
+-- Nachricht: So haengt jede Nachricht per Fremdschluessel an ihrem Raum und der
+-- Raum per Fremdschluessel an Gruppe bzw. Event. Wird eine Gruppe geloescht,
+-- raeumt die Datenbank Raum und Nachrichten mit weg. Mit `room_type`/`room_id`
+-- direkt an der Nachricht ginge das nicht – ein Fremdschluessel kann nicht auf
+-- zwei Tabellen zeigen, und dann sammeln sich Nachrichten zu Gruppen an, die es
+-- nicht mehr gibt.
+--
+-- Die eindeutigen Schluessel sorgen dafuer, dass es je Gruppe/Event hoechstens
+-- EINEN Raum gibt (MySQL erlaubt beliebig viele NULL-Werte in einem UNIQUE, die
+-- jeweils andere Spalte stoert also nicht).
+CREATE TABLE IF NOT EXISTS chat_rooms (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  kind        VARCHAR(10)     NOT NULL,             -- 'group' | 'activity'
+  group_id    BIGINT UNSIGNED NULL,
+  activity_id BIGINT UNSIGNED NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY chat_rooms_group_uq (group_id),
+  UNIQUE KEY chat_rooms_activity_uq (activity_id),
+  CONSTRAINT chat_rooms_group_fk
+    FOREIGN KEY (group_id) REFERENCES friend_groups (id) ON DELETE CASCADE,
+  CONSTRAINT chat_rooms_activity_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Nachrichten. `body` darf leer sein, wenn ein Event geteilt wurde – dann ist
+-- die Karte die Nachricht (siehe src/messaging.js).
+--
+-- `shared_title` ist ein Schnappschuss des geteilten Events, wie in
+-- `activity_history`: Wird das Event geloescht, loest der Fremdschluessel nur
+-- `shared_activity_id` (SET NULL). Ohne den Schnappschuss bliebe eine leere
+-- Nachricht im Verlauf stehen, bei der niemand mehr weiss, worum es ging.
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  room_id            BIGINT UNSIGNED NOT NULL,
+  user_id            BIGINT UNSIGNED NOT NULL,
+  body               VARCHAR(1000)   NOT NULL DEFAULT '',
+  shared_activity_id BIGINT UNSIGNED NULL,
+  shared_title       VARCHAR(255)    NULL,
+  created_at         TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  -- (room_id, id): genau die Reihenfolge, in der der Verlauf gelesen wird.
+  KEY chat_messages_room_idx (room_id, id),
+  KEY chat_messages_user_id_idx (user_id),
+  CONSTRAINT chat_messages_room_fk
+    FOREIGN KEY (room_id) REFERENCES chat_rooms (id) ON DELETE CASCADE,
+  CONSTRAINT chat_messages_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT chat_messages_shared_activity_fk
+    FOREIGN KEY (shared_activity_id) REFERENCES activities (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Bis wohin jemand einen Raum gelesen hat. Eine Zeile pro Person und Raum;
+-- `last_read_id` ist die hoechste gesehene Nachrichten-ID. Daraus faellt die
+-- Zahl der ungelesenen Nachrichten als reines COUNT ab – ohne je Nachricht eine
+-- Zeile „gelesen von" anzulegen, die bei 50 Leuten in einer Gruppe fuenfzigmal
+-- pro Nachricht entstehen wuerde.
+CREATE TABLE IF NOT EXISTS chat_reads (
+  room_id      BIGINT UNSIGNED NOT NULL,
+  user_id      BIGINT UNSIGNED NOT NULL,
+  last_read_id BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  updated_at   TIMESTAMP       NULL,
+  PRIMARY KEY (room_id, user_id),
+  KEY chat_reads_user_id_idx (user_id),
+  CONSTRAINT chat_reads_room_fk
+    FOREIGN KEY (room_id) REFERENCES chat_rooms (id) ON DELETE CASCADE,
+  CONSTRAINT chat_reads_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Wer wen blockiert hat. EINE Richtung pro Zeile: „A blockiert B" ist etwas
+-- anderes als „B blockiert A", und wer blockiert wurde, soll das nicht daran
+-- merken, dass er selbst ploetzlich als blockierend gilt.
+CREATE TABLE IF NOT EXISTS user_blocks (
+  blocker_id BIGINT UNSIGNED NOT NULL,
+  blocked_id BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP       NULL,
+  PRIMARY KEY (blocker_id, blocked_id),
+  KEY user_blocks_blocked_idx (blocked_id),
+  CONSTRAINT user_blocks_blocker_fk
+    FOREIGN KEY (blocker_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT user_blocks_blocked_fk
+    FOREIGN KEY (blocked_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Meldungen von Inhalten und Konten. Der Meldeweg ist keine Bequemlichkeit,
+-- sondern die Gegenseite zum Haftungsausschluss in den Nutzungsbedingungen: Eine
+-- Plattform, die nur erklaert, nicht zu haften, aber keinen Weg anbietet, etwas
+-- zu melden, hat nichts vorgesehen.
+--
+-- `target_id` traegt bewusst KEINEN Fremdschluessel: Gemeldet werden fuenf
+-- verschiedene Dinge (Event, Nachricht, Konto, Beitrag, Story), und die Meldung
+-- muss das Loeschen ihres Gegenstands ueberdauern – gerade der geloeschte Inhalt
+-- ist der, um den es hinterher geht.
+--   status: 'open' (liegt vor) | 'reviewed' (bearbeitet) | 'dismissed' (verworfen)
+CREATE TABLE IF NOT EXISTS content_reports (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  reporter_id BIGINT UNSIGNED NULL,                 -- SET NULL: Meldung ueberdauert das Konto
+  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story
+  target_id   BIGINT UNSIGNED NOT NULL,
+  reason      VARCHAR(30)     NOT NULL,             -- Schluessel aus src/reports.js
+  note        VARCHAR(500)    NULL,                 -- freie Schilderung (freiwillig)
+  status      ENUM('open','reviewed','dismissed') NOT NULL DEFAULT 'open',
+  handled_by  BIGINT UNSIGNED NULL,
+  handled_at  DATETIME        NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  -- Dieselbe Person meldet dasselbe nur einmal – sonst waere die Liste im
+  -- Admin-Panel mit einem Dauerdruck auf den Knopf zu fluten.
+  UNIQUE KEY content_reports_once_uq (reporter_id, target_type, target_id),
+  KEY content_reports_status_idx (status, created_at),
+  KEY content_reports_target_idx (target_type, target_id),
+  CONSTRAINT content_reports_reporter_fk
+    FOREIGN KEY (reporter_id) REFERENCES users (id) ON DELETE SET NULL,
+  CONSTRAINT content_reports_admin_fk
+    FOREIGN KEY (handled_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Merkliste: gemerkte Events. Bewusst getrennt von `activity_user` (Teilnahme) –
+-- „ich schau mir das noch an" ist keine Zusage, und ein gemerktes Event darf
+-- keinen Platz belegen.
+CREATE TABLE IF NOT EXISTS activity_saves (
+  activity_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  created_at  TIMESTAMP       NULL,
+  PRIMARY KEY (activity_id, user_id),
+  KEY activity_saves_user_idx (user_id, created_at),
+  CONSTRAINT activity_saves_activity_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+  CONSTRAINT activity_saves_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Social-Links auf der Profilseite (Instagram, TikTok, eigene Seite, ...).
+-- Pro Person und Plattform genau einer – daher der eindeutige Schluessel;
+-- zwei Instagram-Links waeren in der Anzeige nicht unterscheidbar. Gespeichert
+-- werden ausschliesslich fertige http(s)-Adressen (server/src/social.js).
+CREATE TABLE IF NOT EXISTS user_links (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  platform   VARCHAR(30)     NOT NULL,
+  url        VARCHAR(255)    NOT NULL,
+  created_at TIMESTAMP       NULL,
+  updated_at TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY user_links_user_platform_uq (user_id, platform),
+  CONSTRAINT user_links_user_id_fk
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

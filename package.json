@@ -3,15 +3,19 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
+    "@expo-google-fonts/instrument-sans": "^0.4.2",
     "@expo-google-fonts/pacifico": "^0.4.1",
     "@expo/ui": "~0.2.0-beta.9",
     "@react-native-community/datetimepicker": "8.4.4",
     "@react-native-masked-view/masked-view": "0.3.2",
     "expo": "~54.0.0",
+    "expo-audio": "~1.1.1",
+    "expo-blur": "~15.0.8",
     "expo-constants": "~18.0.13",
     "expo-device": "~8.0.10",
     "expo-font": "~14.0.12",
     "expo-glass-effect": "~0.1.10",
+    "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",
     "expo-image-picker": "~17.0.11",
     "expo-linear-gradient": "~15.0.8",
@@ -50,7 +54,10 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "server": "npm --prefix server run dev",
-    "server:seed": "npm --prefix server run seed"
+    "server:seed": "npm --prefix server run seed",
+    "test": "node --test \"src/domain/*.test.ts\"",
+    "test:watch": "node --test --watch \"src/domain/*.test.ts\"",
+    "test:server": "npm --prefix server test"
   },
   "private": true
 }

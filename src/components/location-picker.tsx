@@ -5,7 +5,8 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import MapView, { Marker, type LatLng, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Brand, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
+import { useBrandSurface, useTheme } from '@/hooks/use-theme';
 import { setPickedLocation } from '@/lib/pending-location';
 
 // Grober Startausschnitt (Deutschland), bis der Standort da ist.
@@ -42,6 +43,8 @@ function splitAddress(p: Location.LocationGeocodedAddress): {
 export default function LocationPicker() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const colors = useTheme();
+  const surface = useBrandSurface();
   const mapRef = useRef<MapView>(null);
 
   const [marker, setMarker] = useState<LatLng | null>(null);
@@ -115,13 +118,15 @@ export default function LocationPicker() {
   }
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: colors.background }]}>
       <Stack.Screen
         options={{
           headerShown: true,
           title: 'Ort auswählen',
-          headerTintColor: Brand.purple,
-          headerBackTitle: 'zurück',
+          headerTintColor: colors.tint,
+          headerBackTitle: 'Zurück',
+          headerStyle: { backgroundColor: colors.background },
+          headerTitleStyle: { color: colors.text },
         }}
       />
       <MapView
@@ -133,7 +138,7 @@ export default function LocationPicker() {
         {marker ? (
           <Marker
             coordinate={marker}
-            pinColor={Brand.purple}
+            pinColor={colors.tint}
             draggable
             onDragEnd={(e) => onPickPoint(e.nativeEvent.coordinate)}
           />
@@ -142,25 +147,28 @@ export default function LocationPicker() {
 
       {/* Hinweis oben */}
       <View style={[styles.hint, { top: insets.top + Spacing.two }]} pointerEvents="none">
-        <Text style={styles.hintText}>Tippe auf die Karte, um den Ort zu setzen</Text>
+        <Text style={[styles.hintText, { backgroundColor: colors.backgroundElement, color: colors.text }]}>
+          Tippe auf die Karte, um den Ort zu setzen
+        </Text>
       </View>
 
       {/* Ausgewählter Ort + Übernehmen */}
-      <View style={[styles.sheet, { paddingBottom: insets.bottom + Spacing.three }]}>
-        <Text style={styles.sheetLabel}>Ausgewählter Ort</Text>
+      <View
+        style={[styles.sheet, { backgroundColor: colors.background, paddingBottom: insets.bottom + Spacing.three }]}>
+        <Text style={[styles.sheetLabel, { color: colors.textSecondary }]}>Ausgewählter Ort</Text>
         {marker ? (
           resolving ? (
             <View style={styles.addressRow}>
-              <ActivityIndicator color={Brand.purple} />
-              <Text style={styles.addressMuted}>Adresse wird gesucht…</Text>
+              <ActivityIndicator color={colors.tint} />
+              <Text style={[styles.addressMuted, { color: colors.textSecondary }]}>Adresse wird gesucht…</Text>
             </View>
           ) : (
-            <Text style={styles.address}>
+            <Text style={[styles.address, { color: colors.text }]}>
               {address.label || `${marker.latitude.toFixed(5)}, ${marker.longitude.toFixed(5)}`}
             </Text>
           )
         ) : (
-          <Text style={styles.addressMuted}>Noch kein Ort gewählt.</Text>
+          <Text style={[styles.addressMuted, { color: colors.textSecondary }]}>Noch kein Ort gewählt.</Text>
         )}
 
         <Pressable
@@ -168,9 +176,10 @@ export default function LocationPicker() {
           disabled={!marker}
           style={({ pressed }) => [
             styles.confirmButton,
+            { backgroundColor: surface.accent },
             { opacity: !marker ? 0.4 : pressed ? 0.85 : 1 },
           ]}>
-          <Text style={styles.confirmText}>Diesen Ort übernehmen</Text>
+          <Text style={[styles.confirmText, { color: surface.accentText }]}>Diesen Ort übernehmen</Text>
         </Pressable>
       </View>
     </View>
@@ -178,11 +187,9 @@ export default function LocationPicker() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#faf9fe' },
+  screen: { flex: 1 },
   hint: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   hintText: {
-    backgroundColor: 'rgba(255,255,255,0.92)',
-    color: Brand.text,
     fontSize: 13,
     fontWeight: '600',
     paddingHorizontal: Spacing.three,
@@ -195,7 +202,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingHorizontal: Spacing.four,
@@ -207,16 +213,15 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -2 },
     elevation: 8,
   },
-  sheetLabel: { fontSize: 13, fontWeight: '700', color: Brand.textMuted },
+  sheetLabel: { fontSize: 13, fontWeight: '700' },
   addressRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  address: { fontSize: 16, color: Brand.text, minHeight: 22 },
-  addressMuted: { fontSize: 15, color: Brand.textMuted, minHeight: 22 },
+  address: { fontSize: 16, minHeight: 22 },
+  addressMuted: { fontSize: 15, minHeight: 22 },
   confirmButton: {
     marginTop: Spacing.two,
-    backgroundColor: Brand.purple,
     borderRadius: 16,
     paddingVertical: Spacing.three,
     alignItems: 'center',
   },
-  confirmText: { color: '#ffffff', fontSize: 16, fontWeight: '700' },
+  confirmText: { fontSize: 16, fontWeight: '700' },
 });

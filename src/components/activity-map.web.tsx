@@ -2,6 +2,8 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'reac
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActivityCard } from '@/components/activity-card';
+import { MascotEmpty, MascotError } from '@/components/mascot';
+import { TabMascot } from '@/components/tab-mascot';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -31,8 +33,11 @@ export default function MapScreenWeb() {
         <ThemedText type="subtitle">Karte</ThemedText>
         <ThemedText themeColor="textSecondary" style={styles.note}>
           Die interaktive Karte mit Pins läuft in der Handy-App. Hier siehst du die
-          Aktivitäten als Liste – „Route anzeigen" öffnet Google Maps.
+          Aktivitäten als Liste – „Route anzeigen“ öffnet Google Maps.
         </ThemedText>
+        {/* Dieselbe Stimmung wie in der Handy-Variante – die Figur soll auf dem
+            Karten-Tab nicht davon abhängen, welche Plattform gerade läuft. */}
+        <TabMascot tab="map" />
 
         {loading && items.length === 0 ? (
           <View style={styles.empty}>
@@ -40,11 +45,7 @@ export default function MapScreenWeb() {
           </View>
         ) : null}
 
-        {error ? (
-          <ThemedText themeColor="textSecondary" style={styles.empty}>
-            {error}
-          </ThemedText>
-        ) : null}
+        {error ? <MascotError detail={error} /> : null}
 
         {items.map((activity) => (
           <View key={activity.id} style={styles.row}>
@@ -63,9 +64,9 @@ export default function MapScreenWeb() {
         ))}
 
         {!loading && !error && items.length === 0 ? (
-          <ThemedText themeColor="textSecondary" style={styles.empty}>
-            Noch keine Aktivitäten mit Ort.
-          </ThemedText>
+          <MascotEmpty mood="asleep" size={80} color={theme.tint} style={styles.empty}>
+            <ThemedText themeColor="textSecondary">Noch keine Aktivitäten mit Ort.</ThemedText>
+          </MascotEmpty>
         ) : null}
 
         {unlocated.length > 0 ? (

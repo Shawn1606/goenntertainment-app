@@ -18,7 +18,7 @@ import Constants from 'expo-constants';
 // oder die Hamachi-VPN-IP 25.x, die das Handy im WLAN nicht erreicht) -> Login
 // lief in einen Timeout. Das Handy muss im selben Fritzbox-WLAN (192.168.178.x) sein.
 // Aendert sich die PC-IP, hier anpassen (ipconfig -> IPv4 des WLAN-Adapters).
-const HARDCODED_API_URL: string | null = 'http://192.168.178.25:8000';
+const HARDCODED_API_URL: string | null = 'http://192.168.178.44:8000';
 
 const BACKEND_PORT = 8000;
 

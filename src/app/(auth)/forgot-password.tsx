@@ -1,14 +1,15 @@
 import { Stack, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandGradientText } from '@/components/brand-gradient-text';
 import { GoennBackground } from '@/components/goenn-background';
 import { BrandButton } from '@/components/ui/brand-button';
-import { BrandTextField } from '@/components/ui/brand-text-field';
+import { KeyboardForm } from '@/components/ui/keyboard-form';
+import { TextField } from '@/components/ui/text-field';
 import { MailIcon } from '@/components/ui/icons';
-import { Brand, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
 import { api, ApiError } from '@/lib/api';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -59,13 +60,15 @@ export default function ForgotPasswordScreen() {
           headerTintColor: Brand.purple,
         }}
       />
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView
+      {/* `KeyboardForm` statt `ScrollView` + `KeyboardAvoidingView`: stellt die
+          Tastatur selbst frei (siehe dort – RNs KAV war in beiden Betriebsarten
+          defekt). */}
+      <View style={styles.flex}>
+        <KeyboardForm
           contentContainerStyle={[
             styles.content,
             { paddingTop: insets.top + Spacing.six, paddingBottom: insets.bottom + Spacing.five },
-          ]}
-          keyboardShouldPersistTaps="handled">
+          ]}>
           <View style={styles.header}>
             <Text style={styles.subheading}>Kein Problem</Text>
             <BrandGradientText style={styles.heading}>Passwort vergessen?</BrandGradientText>
@@ -77,16 +80,16 @@ export default function ForgotPasswordScreen() {
           <View style={styles.card}>
             {sent ? (
               <View style={styles.sentBox}>
-                <Text style={styles.sentTitle}>E-Mail unterwegs 📬</Text>
+                <Text style={styles.sentTitle}>E-Mail unterwegs</Text>
                 <Text style={styles.sentText}>
                   Falls ein Konto zu {email.trim()} existiert, findest du gleich einen Link zum
                   Zurücksetzen in deinem Postfach.
                 </Text>
-                <BrandButton title="Zurück zum Login" onPress={() => router.replace('/')} />
+                <BrandButton title="Zurück" onPress={() => router.replace('/')} />
               </View>
             ) : (
               <>
-                <BrandTextField
+                <TextField
                   label="E-Mail"
                   value={email}
                   onChangeText={setEmail}
@@ -106,8 +109,8 @@ export default function ForgotPasswordScreen() {
             <Text style={styles.muted}>Doch wieder eingefallen? </Text>
             <Text style={styles.link}>Zum Login</Text>
           </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
+        </KeyboardForm>
+      </View>
     </GoennBackground>
   );
 }
@@ -129,21 +132,24 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Brand.textMuted,
     marginBottom: Spacing.one,
+    fontFamily: FontFamily.regular,
   },
   heading: {
     fontSize: 30,
     fontWeight: '700',
     textAlign: 'center',
+    fontFamily: FontFamily.bold,
   },
   lead: {
     marginTop: Spacing.two,
     fontSize: 14,
     color: Brand.textMuted,
     textAlign: 'center',
+    fontFamily: FontFamily.regular,
   },
   card: {
     backgroundColor: Brand.card,
-    borderRadius: 24,
+    borderRadius: Radius.panel,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.6)',
     padding: Spacing.four,
@@ -157,11 +163,13 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: Brand.text,
+    fontFamily: FontFamily.bold,
   },
   sentText: {
     fontSize: 14,
     color: Brand.textMuted,
     textAlign: 'center',
+    fontFamily: FontFamily.regular,
   },
   loginRow: {
     flexDirection: 'row',
@@ -172,10 +180,12 @@ const styles = StyleSheet.create({
   muted: {
     color: Brand.textMuted,
     fontSize: 14,
+    fontFamily: FontFamily.regular,
   },
   link: {
     color: Brand.purple,
     fontSize: 14,
     fontWeight: '700',
+    fontFamily: FontFamily.bold,
   },
 });
