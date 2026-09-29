@@ -290,7 +290,7 @@ function TargetRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: 'flex-end' },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.5)' },
   sheet: {
     borderTopLeftRadius: Radius.panel,
     borderTopRightRadius: Radius.panel,

@@ -7,9 +7,16 @@
  * etwas größer" hieß: neu malen und hoffen, dass die Strichstärke zu den anderen
  * passt. Hier stehen sie als Rezept – eine Zahl ändern, Skript laufen lassen.
  *
- * ## Die eine Vorgabe, die dieses Skript umsetzt
+ * ## Leiste im Instagram-/TikTok-Stil
  *
- * **Home ist größer als die anderen.** Home liegt in der Mitte der Leiste und
+ * Seit dem Umbau ist die Leiste: Home · Karte · ＋ Erstellen · Freunde · Profil.
+ * Alle Symbole sind gleich groß – die Mitte gehört jetzt dem ＋, und das hebt
+ * sich über seine FORM ab (ein Kästchen mit Kreuz), nicht über die Größe. So
+ * machen es Instagram und TikTok auch.
+ *
+ * ## Früher: Home größer als die anderen
+ *
+ * **Home war größer als die anderen.** Home liegt in der Mitte der Leiste und
  * soll das Ziel sein, das man ohne Hinsehen trifft. Am Handy geht das
  * ausschließlich über die Zeichnung: Androids untere Leiste gibt jedem Eintrag
  * dasselbe Kästchen (24 dp) und skaliert jedes Bild hinein – ein größeres PNG
@@ -56,15 +63,15 @@ const SAMPLES = 4;
  * randlos und würde bei runden Formen an den Kanten beschnitten aussehen.
  */
 const COVERAGE = {
-  home: 0.98,
-  rest: 0.72,
+  home: 0.8,
+  rest: 0.76,
   /**
    * Die Nadel bekommt etwas mehr, weil sie SCHMAL ist: Bei 0.72 ist sie 12 px
    * breit, während Zahnrad und Liste 18 px füllen – sie wirkt daneben verloren,
    * obwohl die Zahl dieselbe ist. Verglichen wird hier nicht die Rechenvorgabe,
    * sondern was man sieht.
    */
-  pin: 0.84,
+  pin: 0.86,
 };
 
 /* --------------------------------------------------------------- Grundformen */
@@ -93,6 +100,16 @@ function capsule([ax, ay], [bx, by], thickness) {
   return (x, y) => {
     const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2));
     return (x - ax - t * dx) ** 2 + (y - ay - t * dy) ** 2 <= r * r;
+  };
+}
+
+/** Rechteck mit runden Ecken (Radius r). */
+function roundRect(x0, y0, x1, y1, r) {
+  return (x, y) => {
+    if (x < x0 || x > x1 || y < y0 || y > y1) return false;
+    const cx = Math.min(Math.max(x, x0 + r), x1 - r);
+    const cy = Math.min(Math.max(y, y0 + r), y1 - r);
+    return (x - cx) ** 2 + (y - cy) ** 2 <= r * r;
   };
 }
 
@@ -196,7 +213,23 @@ function gearShape(x, y) {
   return r <= tooth;
 }
 
+/**
+ * Erstellen: abgerundetes Kästchen mit ausgespartem Kreuz – das „＋" von
+ * Instagram. Ausgespart statt aufgemalt, weil die Leiste jedes Symbol in EINER
+ * Farbe zeichnet: Ein Kreuz in derselben Farbe auf dem Kästchen wäre unsichtbar.
+ */
+const plus = minus(
+  roundRect(0.02, 0.02, 0.98, 0.98, 0.26),
+  capsule([0.5, 0.26], [0.5, 0.74], 0.14),
+  capsule([0.26, 0.5], [0.74, 0.5], 0.14),
+);
+
+/** Profil: eine Person, Kopf und Schultern – wie beim Kontakt-Symbol. */
+const person = personShape(0.5, 0.28, 0.24, 0.5, 1.02, 0.44);
+
 const GLYPHS = {
+  plus: { shape: plus, coverage: COVERAGE.rest },
+  person: { shape: person, coverage: COVERAGE.rest },
   home: { shape: home, coverage: COVERAGE.home },
   map: { shape: mapPin, coverage: COVERAGE.pin },
   people: { shape: people, coverage: COVERAGE.rest },

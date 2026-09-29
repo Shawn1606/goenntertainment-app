@@ -1168,3 +1168,288 @@ deshalb ins Nichts. Und ein leerer Seitengrößen-Parameter wurde als „eine Na
 **Nicht geprüft:** wie das alles **am Handy** aussieht (nur im Browser), und das Teilen-Blatt mit
 echtem WhatsApp – im Web-Build gibt es den System-Dialog nur eingeschränkt. Der Text, der dabei
 rausgeht, ist aber durch Tests abgedeckt.
+
+## 21) Chat-Sackgasse behoben, Storys gestaffelt, Folgen, Likes und Kommentare
+
+### Zuerst: warum die App „nicht mehr aufging"
+
+Das war ein einziger Fehler, und er saß nicht dort, wo es aussah. Der Bildschirm
+**Chats** ist keine der fünf Leisten unten, sondern eine Seite, die sich *über* die
+Leiste legt. Genau dieser Seite fehlte der Zurück-Knopf: Wer aus dem Freunde-Bereich
+in die Chats ging, sah die Tab-Leiste nicht mehr und kam nicht mehr heraus.
+
+Damit war auch die Startseite unerreichbar – und mit ihr **die Event-Karten, das
+Detail-Fenster und die Filterleiste**. Die drei waren nie kaputt, man kam nur nicht
+mehr hin. Die Chats haben jetzt oben links denselben Zurück-Knopf wie ein einzelner
+Chat, und er führt zur Startseite, wenn es keinen Verlauf gibt.
+
+### Storys stapeln sich jetzt pro Person
+
+Vorher war **jede einzelne Story ein eigener Ring**. Wer drei Bilder hochlud, stand
+dreimal in der Leiste, und Weitertippen sprang zur nächsten Person statt zum eigenen
+zweiten Bild.
+
+Jetzt gibt es **einen Ring pro Person**, mit einer kleinen Zahl daran, wenn es
+mehrere sind. Antippen öffnet die erste noch ungesehene, Weitertippen geht durch
+*diese* Person und wechselt erst am Ende zur nächsten. Die Zeitleiste oben zeigt nur
+noch die Bilder der Person, bei der man gerade ist, und daneben steht „2/3".
+
+**Deine eigene Story steht vorn** und ist derselbe Ring: Der Ring öffnet, was du
+gepostet hast, das kleine ＋ daran legt Neues an. Vorher standen beide getrennt
+nebeneinander. Und **im Betrachter ist der Name antippbar** – das führt aufs Profil.
+
+### Das Profil
+
+- **Die Leiste oben ist durchsichtig.** Name und Zurück-Knopf bleiben, der Inhalt
+  läuft darunter durch.
+- **Der Banner ist zurückgetreten.** Er lag vorher voll deckend hinter der Karte, mit
+  zwei milchigen Schichten darüber, die ihn bändigen sollten – Ergebnis war beides zu
+  viel und deine Infos gingen trotzdem unter. Jetzt ist das Bild selbst durchsichtig
+  (rund ein Drittel) und darüber liegt nur noch eine Schicht.
+- **Follower und Gefolgt stehen ganz oben**, größer und in einer eigenen Zeile mit
+  Trennlinien. Darunter erst Beiträge, Veranstaltet, Mitgemacht.
+
+### Folgen
+
+Auf jedem fremden Profil steht jetzt **Folgen** neben **Befreunden**. Die beiden sind
+mit Absicht verschieden: Folgen ist einseitig und braucht niemandes Zustimmung – man
+abonniert, was jemand veröffentlicht. Eine Freundschaft muss angenommen werden und
+öffnet Gruppen und Chats. Wer dir folgt, bekommt bei dir „Folgt dir" angezeigt.
+
+Wer jemanden **blockiert**, löst das Abo automatisch in beide Richtungen. Sonst
+bekäme die blockierte Person weiter alles mit – genau das, was Blockieren verhindern
+soll.
+
+### Beiträge: Herz, Kommentare, Beschreibung
+
+- **Gefällt mir** unter jedem Beitrag, mit Zahl. Ein Tipp wirkt sofort; die Zahl
+  selbst kommt vom Server, damit zwei schnelle Tipps nicht auseinanderlaufen.
+- **Kommentare** klappen unter dem Beitrag auf, mit Eingabefeld darunter. Kommentieren
+  darf **jede Kontostufe** – die Stufe entscheidet, wer einen eigenen Auftritt hat,
+  nicht wer mitreden darf. Löschen darf, wer ihn geschrieben hat, und wem der Beitrag
+  gehört (sonst bräuchtest du für jeden dummen Kommentar unter deinem eigenen Beitrag
+  einen Admin).
+- **Beschreibung nachträglich** – der Stift am eigenen Beitrag. Du kannst jetzt auch
+  ein Foto **ohne Text** posten und die Beschreibung später schreiben. Geänderte
+  Beiträge sind mit „bearbeitet" markiert: Unter einem Beitrag, den schon jemand
+  kommentiert hat, darf sich nicht unbemerkt der Text ändern.
+- Kommentare und geänderte Beschreibungen laufen durch **dieselbe KI-Verifizierung**
+  wie Beiträge. Sonst wäre der Kommentarbereich die eine Stelle, an der ungeprüft
+  alles durchgeht – und zwar auf fremdem Profil.
+
+### Benachrichtigungen
+
+Oben rechts auf der Startseite ist eine **Glocke** mit einer Zahl. Dahinter liegt eine
+Liste mit zwei Sorten:
+
+- **Von Leuten, denen du folgst:** Story, Event oder Beitrag veröffentlicht.
+- **Über dich:** jemand folgt dir, liked oder kommentiert deinen Beitrag.
+
+Der Text wird beim Entstehen geschrieben und nicht beim Ansehen zusammengebaut. Das
+klingt nach einer Kleinigkeit, ist aber der Grund, warum eine Story-Meldung nicht nach
+24 Stunden aus deinem Verlauf verschwindet, wenn die Story abläuft.
+
+Abgehakt wird der ganze Stapel beim Öffnen – aber **erst nach dem Laden**, damit du
+noch siehst, was neu war.
+
+### Startseite: jedes Event stand doppelt da
+
+„Alles entdecken" hat bisher praktisch **alles** noch einmal gezeigt, was oben schon
+in einem Regal stand. Ursache war ein UND, wo ein ODER hingehört: Ein Event fiel nur
+heraus, wenn es *gleichzeitig* empfohlen **und** in der Nähe war – das kam fast nie
+vor. Jetzt zählt jedes Regal als „schon gezeigt", und wenn nichts übrig bleibt,
+verschwindet das Regal ganz. Das allein macht die Startseite spürbar kürzer.
+
+### Geprüft
+
+`tsc` 0 Fehler, `eslint` 0 Fehler, **268 Tests** in der App (28 neu: Story-Gruppierung
+und -Blättern, Benachrichtigungs-Ziele, Ungelesen-Plakette) und **168 am Server**, alle
+grün.
+
+Dazu ein echter Durchgang im Browser mit zwei Wegwerf-Konten (danach gelöscht): drei
+Storys einer Person als ein Ring mit „3/3" in der Zeitleiste, Profil-Link aus dem
+Betrachter, transparente Profil-Leiste mit Name und Zurück, Folgen (Zähler ging von 0
+auf 1), Liken, einen Kommentar über die Oberfläche geschrieben (Umlaute korrekt),
+Beschreibung nachträglich geändert, und die Benachrichtigungen bei beiden Konten
+kontrolliert – inklusive Fan-out an Follower für Story, Event und Beitrag. Keine Fehler
+in der Konsole.
+
+**Nicht geprüft: das Verhalten am Handy.** Alles lief im Web-Build. Bildschirmfotos
+konnte ich keine machen, weil die Vorschau-Pane ausgeblendet ist. Bitte schau dir am
+Gerät besonders die durchsichtige Profil-Leiste und die Story-Zeitleiste an.
+
+**Noch offen:** Push-Benachrichtigungen aufs Sperrbildschirm gibt es weiterhin nicht –
+die Glocke füllt sich, wenn die App offen ist. Dafür bräuchte es einen Push-Dienst und
+Gerätetests, das ist ein eigener Brocken.
+
+### Nachtrag: Blur hinter dem Event-Fenster, und der Ring zeigt jetzt Bögen
+
+**Das Event-Fenster war durchsichtig.** Du hast gemeldet, dass der Activity-Banner
+beim Antippen durchscheint. Der Grund lag eine Ebene tiefer: Unser „Glas" zeichnet
+nur im Browser und auf einem iPhone mit iOS 26 wirklich weich. Auf **Android** blieb
+davon eine Fläche mit 84 % Deckkraft übrig – die Startseite mit ihren bunten
+Event-Karten schien also sichtbar durch, und der Text darauf wurde unruhig.
+
+Weichzeichnen kann man dort leider nicht einfach nachrüsten: Das Fenster ist ein
+eigenes Fenster, und der Weichzeichner sieht nur, was *in ihm* liegt – nicht die
+Seite dahinter. Deshalb bringt das Fenster seinen Hintergrund jetzt selbst mit:
+
+1. ein **deckender Grund** – damit ist gar nichts mehr durchsichtig,
+2. darüber **der Banner genau dieses Events, weichgezeichnet** (halbe Deckkraft),
+3. darüber ein dünner Schleier, damit jede Zeile lesbar bleibt.
+
+Der scharfe Banner oben im Fenster bleibt wie er war. Hat ein Event kein Bild, bleibt
+es beim deckenden Grund – auch dann ist nichts mehr durchsichtig.
+
+**Der Story-Ring ist jetzt gestaffelt.** Passend zu den gebündelten Storys hat der
+Ring einen **Bogen je Story** statt einer durchgezogenen Linie – bei vier Storys also
+vier Bögen. Damit sieht man schon vor dem Antippen, wie viel dahintersteckt, und
+findet dieselbe Aufteilung im Betrachter in der Zeitleiste wieder. Ab zehn Storys
+bleibt es bei zehn Bögen, sonst wird aus dem Ring eine Perlenkette; die genaue Zahl
+steht ohnehin als Plakette daneben.
+
+### Nachtrag: Es gibt jetzt ein Jahresabo – und das Upgrade-Menü zeigt Preise
+
+**Du wolltest die Option auf ein Jahresabo.** Die steht jetzt im Upgrade-Bildschirm,
+und zwar als Umschalter über dem Knopf mit **beiden Preisen gleichzeitig**:
+
+| | Monatlich | Jährlich |
+|---|---|---|
+| Creator | 7,99 € | **79,90 €** |
+| Business | 14,99 € | **149,90 €** |
+| Business Plus | 29,99 € | **299,90 €** |
+
+Das Jahr kostet überall **zehn Monatsbeiträge** – zwei sind geschenkt. Genau das
+steht auch am Jahresfeld: „2 Monate gratis", darunter „entspricht 6,66 € pro Monat".
+
+**Beide Zahlen sind gerechnet, nicht getippt.** Das Etikett „2 Monate gratis" und der
+Vergleichspreis kommen aus den zwei Preisen der Stufe. Wenn du morgen einen Preis
+änderst, ändert sich das Etikett mit – es kann dort nicht mehr stehen, was der Preis
+nicht hergibt. Ein Test schlägt an, falls ein Jahrespreis je so hoch wird wie zwölf
+Monatsbeiträge. Gerundet wird immer **gegen uns**: 79,90 € durch zwölf sind 6,658 €,
+angezeigt werden 6,66 € – lieber einen Cent zu viel als einen zu wenig. Und aus
+16,67 % Nachlass werden 16 %, nicht 17 %.
+
+**Vorausgewählt ist das Jahresabo**, weil es das günstigere von beiden ist. Der
+Monatspreis steht gleich groß daneben, ein Tipp genügt. Bei den Preisen dieser App ist
+das für dich ein Unterschied von rund zwei Monatsbeiträgen pro Kunde und Jahr – und
+Jahreskunden kündigen deutlich seltener als Monatskunden.
+
+**Der gewählte Zeitraum geht mit der Anfrage an dich.** Bezahlen kann in der App
+weiter niemand: Der Knopf heißt „anfragen", und im Admin-Panel steht jetzt bei jeder
+Anfrage, was gewünscht war – „jährlich · 79,90 € / Jahr". Ohne diese Zeile wäre
+„Creator" zwei verschiedene Beträge, und du müsstest raten. Deine eigene Anfrage
+liest sich danach als „Creator jährlich angefragt".
+
+**Was das Jahresabo NICHT ändert:** die Stufen selbst. Ein Jahresabo schaltet nichts
+frei, was das Monatsabo nicht auch freischaltet – es ist dieselbe Stufe, nur anders
+gezahlt. Deshalb musste an den Rechten, an der Abo-Tabelle und am Store-Anschluss
+keine Zeile geändert werden.
+
+**Was noch fehlt, bevor wirklich Geld fließt:** In den Stores braucht jede Stufe ein
+zweites Produkt (das Jahresabo), beide müssen auf dieselbe Freischaltung zeigen und
+alle sechs in *eine* Abo-Gruppe – sonst sammeln Leute beim Wechseln zwei Abos statt
+umzusteigen. Und sobald über Apple/Google gekauft wird, muss der Preis angezeigt
+werden, den der Store meldet: Er legt ihn je Land und Währung selbst fest, und in der
+App darf nichts anderes stehen als auf der Rechnung.
+
+**Geprüft:** Alle Tests grün (310 in der App, 217 im Server), Typprüfung und Linter
+ohne Befund. Im Browser mit einem Wegwerf-Konto durchgespielt: Umschalten, Anfrage
+stellen, Admin-Ansicht – auch in Handy-Breite, da passen beide Felder nebeneinander
+ohne Umbruch. **Nicht geprüft:** ein echtes Gerät und ein echter Kauf, den gibt es
+noch nicht.
+
+### Nachtrag: Die App klebt nicht mehr am Heim-WLAN
+
+**Das Problem:** Die Adresse deines Servers stand fest in der App – die IP deines PCs
+im Fritzbox-Netz. Solange man mit Expo testet, fällt das nicht auf. Baut man daraus
+aber eine fertige APK, funktioniert sie nur, solange das Handy in genau diesem WLAN
+hängt. Unterwegs auf Mobilfunk ist so eine App tot, und bei jedem Tester zuhause
+sowieso.
+
+**Was jetzt anders ist:** Die Adresse steht nicht mehr im Programm, sondern in einer
+Einstellungsdatei daneben. Beim Entwickeln zeigt sie weiter auf deinen PC im WLAN –
+da ändert sich für dich nichts. Ein gebautes APK kann dagegen eine völlig andere
+Adresse mitbekommen, ohne dass am Programm eine Zeile geändert wird. Genau diese
+Trennung war die WLAN-Abhängigkeit.
+
+**Was du noch tun musst:** Eine öffentliche Adresse besorgen, unter der dein Server
+von außen erreichbar ist. Fürs Testen genügt ein Tunnel-Programm auf deinem PC, das
+eine `https`-Adresse ausgibt; die trägst du dann ein. Wichtig dabei: die
+Wegwerf-Variante des Tunnels wechselt bei jedem Neustart die Adresse – für eine
+fertige APK brauchst du eine feste. Und solange die Adresse auf deinen PC zeigt, ist
+die App offline, wenn der PC aus ist. Für echte Nutzer gehört der Server deshalb
+später auf einen gemieteten Rechner; an der App ändert das dann nichts mehr, nur die
+Adresse.
+
+**Was von allein mitkommt:** die Bilder. Der Server baut die Bildadressen immer aus
+der Adresse, unter der er gerade angesprochen wurde – geht die App durch einen Tunnel,
+kommen Banner und Profilbilder automatisch durch denselben Tunnel.
+
+**Geprüft:** Typprüfung ohne Befund, und die App einmal komplett gebaut: im fertigen
+Paket steht die Adresse tatsächlich drin. Das ist der Punkt, an dem sich entscheidet,
+ob eine APK sie mitbekommt. **Nicht geprüft:** ein echter App-Build und ein Handy
+außerhalb des WLANs – dafür fehlt noch die öffentliche Adresse.
+
+## 24) Aufgeräumt im Instagram-/TikTok-Stil – plus 2FA, Passwortstärke, Wortfilter und Autostart
+
+### Was ausgeblendet ist (nicht gelöscht)
+
+Alles, was nicht zum Kern gehört, ist unsichtbar – der Code bleibt, ein Schalter holt es
+zurück. Die Schalter stehen in `src/constants/features.ts` (App) und `server/src/features.js`
+(Server, über `server/.env`):
+
+- Beiträge mit Likes und Kommentaren, Storys, Folgen, die Glocke
+- Punkte und Coupons, Level/XP/Rangliste
+- Kontostufen, Upgrade-Bildschirm, Preise, Business-Bereich – **deshalb darf jetzt jedes
+  Konto Aktivitäten erstellen**
+- die 143 importierten Veranstaltungen (Lokhalle, CinemaxX …) – sie hatten die Aktivitäten
+  der Nutzer:innen verdrängt
+
+### Neuer Aufbau
+
+Untere Leiste wie bei Instagram/TikTok: **Home · Karte · ＋ Erstellen · Freunde · Profil**.
+
+- **Home** ist ein Feed. Oben „Für dich / In der Nähe / Heute", darunter Kategorien, dann
+  jede Aktivität wie ein Instagram-Post: Bild, „Mitmachen", Chat, Teilen, Merken.
+- **＋** führt zu „Neue Aktivität" und zu Schnellstarts nach Kategorie.
+- **Profil** wie bei Instagram: Zahlen oben, Raster mit „Erstellt / Dabei / Gemerkt",
+  Einstellungen hinter dem Menü oben rechts. „Meine Aktivitäten" und der Einstellungen-Tab
+  sind darin aufgegangen.
+- Farben: reines Weiß/Schwarz, flache Flächen statt Glas, Pink als Akzent.
+
+### Sicherheit
+
+- **Zwei-Faktor-Anmeldung** unter Einstellungen → Sicherheit: per Authenticator-App
+  (empfohlen) oder E-Mail, mit Wiederherstellungscodes. SMS bewusst nicht (kostet pro
+  Nachricht und lässt sich per SIM-Tausch abfangen).
+- **Passwortstärke** beim Registrieren und Ändern; nach dem Login ein Hinweis, wenn das
+  Passwort schwach war. Der Server lehnt zusätzlich die ~500 häufigsten Passwörter ab.
+- **Passwort ändern** geht jetzt direkt in der App (vorher nur per Mail-Link).
+- **Konto löschen** direkt in der App, mit Passwort bestätigt (Store-Pflicht).
+- **Wortfilter** für Beleidigungen, Rassismus und Nazi-Codes in 14 Sprachen: Namen,
+  Benutzernamen, Aktivitäten, Gruppen, Chats. Echte Nachnamen wie „Fick" oder „Kuntz"
+  gehen im Namensfeld durch.
+- **Widerspruch** gegen Sperren: Knopf in der Sperrmeldung, dann prüft ein Mensch.
+
+### Zwei Fehler, die dabei aufgefallen sind
+
+- **Jeder Upload über die App scheiterte** (Aktivität mit Foto, Profilbild) – seit Laravel
+  vorn steht. PHP liest Formulare mit Dateien selbst ein, und die Weiterleitung an Node
+  schickte danach einen leeren Rumpf. Behoben.
+- **Bilder hätten auf dem Handy nicht geladen:** Node baute Bild-Adressen mit
+  `127.0.0.1:8001`. Jetzt stimmt die Adresse (WLAN-IP:8000).
+
+### Autostart
+
+Beim Windows-Login und beim Start von Claude Code läuft `scripts/dev-up.ps1`: wartet aufs
+Internet, trägt die WLAN-IP in `.env.local` ein und startet Laravel, Node und Expo in
+eigenen Fenstern. Abschalten: `scripts/install-autostart.ps1 -Uninstall`.
+
+### Was du noch tun musst
+
+- Mail-Zugang (SMTP) in `api/.env` eintragen – sonst stehen die 2FA-Codes nur in
+  `api/storage/logs/laravel.log`.
+- Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
+  Anthropic, USA) – und das Impressum ausfüllen.
+- Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.

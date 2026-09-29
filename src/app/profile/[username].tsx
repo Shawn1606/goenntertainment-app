@@ -16,15 +16,14 @@
  * Visitenkarte mit Zahlen. Schreiben darf ohnehin nur, wer die Stufe hat; das
  * prüft der Server.
  */
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 // Nur für den Banner: `blurRadius` gibt es bei `expo-image` auf Handy UND im
 // Web, bei RNs `Image` nicht überall. Alles andere hier bleibt RNs `Image`.
 import { Image as BlurImage } from 'expo-image';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Image,
   Linking,
   Platform,
@@ -38,6 +37,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AccountSheet } from '@/components/account-widget';
 import { HomeBackground } from '@/components/home-background';
 import { MascotError } from '@/components/mascot';
+import { ProfilePostCard } from '@/components/profile-post-card';
+import { StoryAvatar } from '@/components/story-avatar';
+import { StoryViewer } from '@/components/story-viewer';
 import { ThemedText } from '@/components/themed-text';
 import { BrandButton } from '@/components/ui/brand-button';
 import { GlassCard, GlassChip, SectionHeader } from '@/components/ui/glass';
@@ -45,9 +47,10 @@ import { Icon } from '@/components/ui/icon';
 import { SocialIcon } from '@/components/ui/social-icon';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { TextField } from '@/components/ui/text-field';
-import { BrandGradient, FontFamily, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Features } from '@/constants/features';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { accountAbilities, accountLabel } from '@/domain/account';
+import { groupStories } from '@/domain/story';
 import type { UiIconName } from '@/domain/ui-icon';
 import {
   MAX_LINK_LENGTH,
@@ -64,10 +67,12 @@ import {
   type ProfileLink,
   type ProfilePost,
   type PublicProfile,
+  type Story,
   type User,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
+import { pickImage, type Picked } from '@/lib/pick-image';
 import * as feedback from '@/lib/feedback';
 import { goBack } from '@/lib/go-back';
 import { ReportSheet } from '@/components/report-sheet';
@@ -83,6 +88,20 @@ const MAX_BODY = 1000;
  * „Foto hinter dem Text" und macht jede Zeile darüber unruhig.
  */
 const BANNER_BLUR = 32;
+
+/**
+ * Wie kräftig der Banner überhaupt durchkommt.
+ *
+ * Er lag vorher voll deckend hinter der Karte, und zwei Schleier darüber sollten
+ * ihn bändigen. Das Ergebnis war beides zugleich zu viel: ein kräftiges Bild UND
+ * eine milchige Schicht, die den Text trotzdem nicht rettete – Name, @Name und
+ * die Zahlen gingen darin unter.
+ *
+ * Jetzt ist das Bild selbst durchsichtig und liegt damit da, wo ein Hintergrund
+ * hingehört: als Farbstimmung hinter der Karte, nicht als zweites Motiv. Ein
+ * Schleier genügt danach.
+ */
+const BANNER_OPACITY = 0.38;
 
 /**
  * Der Banner ragt über die Karte hinaus.
@@ -124,96 +143,24 @@ const CROP: Record<ProfileImageKind, { aspect: [number, number]; shape?: 'oval' 
   banner: { aspect: [16, 9] },
 };
 
-/** Ein Bild aus Galerie oder Kamera. */
-type Picked = { uri: string; name: string; type: string };
+
 
 /**
- * Woher soll das Bild kommen?
+ * Außendurchmesser des Profilbildes inklusive Story-Ring.
  *
- * Im Web gibt es die Frage nicht: Dort führt der Weg immer in die Dateiauswahl –
- * eine Kamera-Aufnahme gibt es so nicht, und `Alert.alert` hat im Web keine
- * funktionierenden Knöpfe (siehe lib/confirm.ts). Eine Rückfrage wäre dort also
- * eine Sackgasse, aus der man nicht mehr herauskommt.
+ * Etwas größer als die 64 von früher: Der Ring ist breiter geworden und liegt
+ * INNEN – ohne die zusätzlichen Punkte hätte das Gesicht verloren, was der Ring
+ * gewonnen hat.
  */
-function askImageSource(label: string): Promise<'gallery' | 'camera' | null> {
-  if (Platform.OS === 'web') {
-    return Promise.resolve('gallery');
-  }
-  return new Promise((resolve) => {
-    Alert.alert(
-      label,
-      'Woher soll das Bild kommen?',
-      [
-        { text: 'Galerie', onPress: () => resolve('gallery') },
-        { text: 'Kamera', onPress: () => resolve('camera') },
-        { text: 'Abbrechen', style: 'cancel', onPress: () => resolve(null) },
-      ],
-      { onDismiss: () => resolve(null) },
-    );
-  });
-}
+const AVATAR = 72;
 
 /**
- * Ein Bild aussuchen – oder `null`, wenn abgebrochen wurde bzw. der Zugriff fehlt.
+ * Ein Profil ohne Storys – als KONSTANTE, nicht als `[]` im Aufruf.
  *
- * Eine Stelle für alle drei Bilder dieser Seite (Beitrag, Profilbild, Banner):
- * Vorher stand derselbe Dreischritt (fragen, Erlaubnis, öffnen) je Bild neu da.
- * `fallbackName` benennt nur die Datei, wenn das System keinen Namen mitgibt.
- *
- * `crop` schaltet das Zuschneiden dazu (siehe {@link CROP}). Bewusst NICHT für
- * das Foto eines Beitrags: Dort gibt es keinen Rahmen, in den es passen muss, und
- * iOS würde jedes Querformat-Foto ins Quadrat zwingen.
+ * `useMemo` vergleicht seine Abhängigkeiten mit `===`. Ein frisches `[]` bei
+ * jedem Durchlauf wäre jedes Mal ein neuer Wert, und der Speicher wäre für nichts.
  */
-async function pickImage(
-  label: string,
-  fallbackName: string,
-  crop?: { aspect: [number, number]; shape?: 'oval' },
-): Promise<Picked | null> {
-  const source = await askImageSource(label);
-  if (!source) return null;
-
-  const permission =
-    source === 'camera'
-      ? await ImagePicker.requestCameraPermissionsAsync()
-      : await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!permission.granted) {
-    await notifyUser(
-      'Kein Zugriff',
-      source === 'camera'
-        ? 'Bitte erlaube den Zugriff auf deine Kamera.'
-        : 'Bitte erlaube den Zugriff auf deine Galerie.',
-    );
-    return null;
-  }
-
-  const options: ImagePicker.ImagePickerOptions = {
-    quality: 0.7,
-    ...(crop ? { allowsEditing: true, aspect: crop.aspect, shape: crop.shape } : {}),
-  };
-
-  const result =
-    source === 'camera'
-      ? await ImagePicker.launchCameraAsync(options)
-      : await ImagePicker.launchImageLibraryAsync(options);
-  if (result.canceled || result.assets.length === 0) return null;
-
-  const asset = result.assets[0];
-  return {
-    uri: asset.uri,
-    name: asset.fileName ?? `${fallbackName}.${asset.uri.split('.').pop() ?? 'jpg'}`,
-    type: asset.mimeType ?? 'image/jpeg',
-  };
-}
-
-/** Erste Buchstaben des Namens – Rückfallbild ohne Avatar. */
-function initialsOf(name: string | undefined): string {
-  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  return parts
-    .slice(0, 2)
-    .map((p) => p[0]?.toUpperCase() ?? '')
-    .join('');
-}
+const NO_STORIES: Story[] = [];
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -255,6 +202,11 @@ function fmtMonth(iso: string | null): string {
 export default function ProfileScreen() {
   const { username } = useLocalSearchParams<{ username: string }>();
   const insets = useSafeAreaInsets();
+  // Die Kopfzeile ist durchsichtig und liegt ÜBER dem Inhalt – ihre Höhe wird
+  // deshalb unten als Innenabstand gebraucht, sonst startet die erste Karte
+  // hinter dem Namen. Kommt aus dem Navigations-Paket, weil sie je nach
+  // Plattform, Statusleiste und Schriftgröße anders ausfällt.
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
   const surface = useBrandSurface();
   const glass = useGlass();
@@ -271,6 +223,8 @@ export default function ProfileScreen() {
   /** Konto-Blatt: Der Knopf oben rechts führt jetzt hierher statt zum Blatt –
    *  Einstellungen, Admin-Bereich und Abmelden müssen trotzdem erreichbar sein. */
   const [accountOpen, setAccountOpen] = useState(false);
+  /** Was das Konto-Blatt auf Android weichzeichnet (siehe `HomeBackground`). */
+  const blurTarget = useRef<View>(null);
 
   /** Bilder der Karte bearbeiten (Profilbild und Banner). */
   const [editOpen, setEditOpen] = useState(false);
@@ -292,9 +246,22 @@ export default function ProfileScreen() {
 
   /** Sperrt den Freundschafts-Knopf, solange der Aufruf läuft. */
   const [friendBusy, setFriendBusy] = useState(false);
+  /** Dasselbe für den Folgen-Knopf – die beiden sperren sich nicht gegenseitig. */
+  const [followBusy, setFollowBusy] = useState(false);
 
   /** Melde-Blatt offen? */
   const [reporting, setReporting] = useState(false);
+
+  /** Story-Betrachter offen? Der Ring um das Profilbild öffnet ihn. */
+  const [storyOpen, setStoryOpen] = useState(false);
+
+  /**
+   * Die laufenden Storys dieser Person – sie kommen mit dem Profil (siehe
+   * `PublicProfile.stories`), nicht aus einem zweiten Aufruf. Gebündelt wie
+   * überall: eine Gruppe je Person, hier also genau eine.
+   */
+  const stories = profile?.stories ?? NO_STORIES;
+  const storyGroups = useMemo(() => groupStories(stories), [stories]);
 
   /**
    * Konto blockieren.
@@ -602,10 +569,133 @@ export default function ProfileScreen() {
     }
   }
 
+  /**
+   * Die Kopfzeile – durchsichtig, aber vollständig.
+   *
+   * `headerTransparent` nimmt der Leiste ihre Fläche und ihre Trennlinie; Name
+   * und Zurück-Knopf bleiben. Der Inhalt läuft dann UNTER ihr durch, deshalb
+   * unten `paddingTop: headerHeight` – ohne das läge die erste Karte hinter dem
+   * Namen.
+   *
+   * `headerShadowVisible: false` ist nötig, nicht Geschmack: Android zeichnet
+   * sonst weiter den Schlagschatten der Leiste, und dann schwebt eine unsichtbare
+   * Kante über der Seite.
+   */
+  /**
+   * Folgen bzw. nicht mehr folgen.
+   *
+   * Bewusst getrennt vom Freundschafts-Knopf: Folgen ist einseitig und braucht
+   * niemandes Zustimmung, eine Freundschaft schon. Die Antwort bringt beide
+   * Zahlen frisch mit – gezählt wird also nicht in der App.
+   */
+  async function onFollowAction() {
+    if (!token || !profile || followBusy || profile.is_me) return;
+    setFollowBusy(true);
+    try {
+      const next = profile.is_following
+        ? await api.unfollowUser(token, profile.user.id)
+        : await api.followUser(token, profile.user.id);
+      feedback.selected();
+      setProfile((current) =>
+        current
+          ? {
+              ...current,
+              is_following: next.is_following,
+              stats: {
+                ...current.stats,
+                followers: next.followers,
+                following: next.following,
+              },
+            }
+          : current,
+      );
+    } catch (err) {
+      feedback.failed();
+      await notifyUser(
+        'Fehlgeschlagen',
+        err instanceof ApiError ? err.firstError() : 'Das hat nicht geklappt.',
+      );
+    } finally {
+      setFollowBusy(false);
+    }
+  }
+
+  /**
+   * Story gesehen melden.
+   *
+   * Zweimal dasselbe, an zwei Orten: lokal, damit der Ring sofort ruhig wird, und
+   * am Server, damit er es beim nächsten Laden auch bleibt. Der Aufruf darf still
+   * scheitern – dann steht die Story später wieder als neu da, und das ist der
+   * harmlosere von beiden Fehlern.
+   */
+  const onStorySeen = useCallback(
+    (story: Story) => {
+      setProfile((current) =>
+        current
+          ? {
+              ...current,
+              stories: (current.stories ?? []).map((item) =>
+                item.id === story.id ? { ...item, seen: true } : item,
+              ),
+            }
+          : current,
+      );
+      if (token) api.viewStory(token, story.id).catch(() => {});
+    },
+    [token],
+  );
+
+  /**
+   * Eigene Story löschen.
+   *
+   * Erst schließen, dann löschen: Der Betrachter zeigt gerade genau dieses Bild.
+   * Der Fehlerfall geht in eine Meldung und NICHT in `setError` – das würde die
+   * ganze Seite gegen den Fehler-Zustand tauschen, obwohl das Profil steht.
+   */
+  const onStoryDelete = useCallback(
+    async (story: Story) => {
+      if (!token) return;
+      const ok = await confirmAction(
+        'Story löschen',
+        'Die Story verschwindet sofort für alle.',
+        'Löschen',
+        true,
+      );
+      if (!ok) return;
+
+      setStoryOpen(false);
+      try {
+        await api.deleteStory(token, story.id);
+        setProfile((current) =>
+          current
+            ? { ...current, stories: (current.stories ?? []).filter((item) => item.id !== story.id) }
+            : current,
+        );
+      } catch {
+        await notifyUser('Fehlgeschlagen', 'Die Story ließ sich nicht löschen.');
+      }
+    },
+    [token],
+  );
+
+  /** Ein geänderter Beitrag (Herz, Kommentarzahl, Text) wandert in die Liste. */
+  const onPostChanged = useCallback((updated: ProfilePost) => {
+    setProfile((current) =>
+      current
+        ? { ...current, posts: current.posts.map((p) => (p.id === updated.id ? updated : p)) }
+        : current,
+    );
+  }, []);
+
   const header = (
     <Stack.Screen
       options={{
         headerShown: true,
+        headerTransparent: true,
+        headerShadowVisible: false,
+        headerStyle: { backgroundColor: 'transparent' },
+        headerTintColor: surface.text,
+        headerTitleStyle: { color: surface.text },
         title: profile?.user.name ?? 'Profil',
         headerBackTitle: 'Zurück',
       }}
@@ -647,19 +737,35 @@ export default function ProfileScreen() {
    * ab, mit derselben Regel wie der Server (`src/domain/account.ts`). So bleibt
    * eine neue App gegen ein altes Backend benutzbar.
    */
+  // Beiträge sind gerade ausgeblendet (src/constants/features.ts) – dann zeigt
+  // KEIN Profil sie, ganz gleich, was Stufe oder Server sagen.
   const showsPosts =
-    profile.shows_posts ?? accountAbilities(profile.user).hasPublicProfile;
+    Features.posts && (profile.shows_posts ?? accountAbilities(profile.user).hasPublicProfile);
 
   /** Das Bild hinter der Karte. Ältere Server kennen das Feld nicht. */
   const banner = profile.user.banner ?? null;
 
   return (
-    <HomeBackground style={styles.screen}>
+    <HomeBackground
+      style={styles.screen}
+      blurTarget={blurTarget}
+      // Außerhalb des Blur-Ziels, damit das Blatt über allem liegt und sich
+      // nicht selbst weichzeichnet.
+      overlay={
+        <AccountSheet
+          open={accountOpen}
+          onClose={() => setAccountOpen(false)}
+          blurTarget={blurTarget}
+        />
+      }>
       {header}
       {/* Tastatur-Freistellung macht `KeyboardForm` (siehe dort). */}
       <View style={styles.flex}>
         <KeyboardForm
-          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.six }]}
+          contentContainerStyle={[
+            styles.content,
+            { paddingTop: headerHeight + Spacing.three, paddingBottom: insets.bottom + Spacing.six },
+          ]}
           showsVerticalScrollIndicator={false}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={surface.accent} />}>
           {/* Kopf: wer das ist und was für ein Konto */}
@@ -676,33 +782,55 @@ export default function ProfileScreen() {
               <View pointerEvents="none" style={styles.bannerLayer}>
                 <BlurImage
                   source={{ uri: banner }}
-                  style={styles.bannerImage}
+                  style={[styles.bannerImage, { opacity: BANNER_OPACITY }]}
                   contentFit="cover"
                   blurRadius={BANNER_BLUR}
                   cachePolicy="memory-disk"
                   accessible={false}
                 />
+                {/* Nur noch EIN Schleier statt zweier. Der zweite (`chipBg`) gab
+                    der Karte ihre blaue Tönung zurück – die kommt jetzt von der
+                    Karte selbst, weil das Bild darunter durchsichtig ist. */}
                 <View style={[StyleSheet.absoluteFill, { backgroundColor: glass.fill }]} />
-                <View style={[StyleSheet.absoluteFill, { backgroundColor: surface.chipBg }]} />
               </View>
             ) : null}
 
             <View style={styles.identity}>
-              <LinearGradient
-                colors={[...BrandGradient]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.avatarRing}>
-                <View style={[styles.avatarInner, { backgroundColor: surface.chipBgSolid }]}>
-                  {profile.user.avatar ? (
-                    <Image source={{ uri: profile.user.avatar }} style={styles.avatarImage} resizeMode="cover" />
-                  ) : (
-                    <ThemedText style={[styles.initials, { color: surface.accent }]}>
-                      {initialsOf(profile.user.name)}
-                    </ThemedText>
-                  )}
-                </View>
-              </LinearGradient>
+              {/* Das Profilbild – und, wenn etwas läuft, der Ring darum.
+                  Ein Tipp darauf öffnet die Storys dieser Person; das Profil ist
+                  ja schon offen. Vorher lag hier ein Marken-Verlauf um JEDES
+                  Bild: derselbe Ring wie in der Story-Leiste, nur ohne Bedeutung –
+                  und damit ein Zeichen, das nichts mehr sagt. */}
+              {Features.stories && storyGroups.length > 0 ? (
+                <Pressable
+                  onPress={() => {
+                    feedback.tapped();
+                    setStoryOpen(true);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    `${stories.length === 1 ? 'Story' : `${stories.length} Storys`} von ${
+                      profile.is_me ? 'dir' : profile.user.name
+                    } ansehen` + (storyGroups[0].seen ? ', schon gesehen' : '')
+                  }
+                  hitSlop={6}
+                  style={({ pressed }) => pressed && styles.pressed}>
+                  <StoryAvatar
+                    size={AVATAR}
+                    avatar={profile.user.avatar}
+                    name={profile.user.name}
+                    stories={stories.length}
+                    seen={storyGroups[0].seen}
+                  />
+                </Pressable>
+              ) : (
+                <StoryAvatar
+                  size={AVATAR}
+                  avatar={profile.user.avatar}
+                  name={profile.user.name}
+                  stories={0}
+                />
+              )}
 
               <View style={styles.identityText}>
                 <ThemedText style={[styles.name, { color: surface.text }]} numberOfLines={1}>
@@ -759,6 +887,32 @@ export default function ProfileScreen() {
               <ThemedText type="small" style={{ color: surface.textMuted }}>
                 Dabei seit {fmtMonth(profile.user.created_at)}
               </ThemedText>
+            ) : null}
+
+            {/* Follower und Gefolgt zuerst, in einer eigenen Zeile.
+                Das sind die zwei Zahlen, wegen derer man auf ein fremdes Profil
+                schaut – die drei darunter (Beiträge, veranstaltet, mitgemacht)
+                beschreiben, WAS jemand tut, diese beiden, wen es interessiert.
+                Deshalb stehen sie kräftiger und getrennt. */}
+            {Features.follow ? (
+            <View style={[styles.followRow, { borderColor: surface.chipBorder }]}>
+              <Stat label="Follower" value={profile.stats.followers ?? 0} strong />
+              <View style={[styles.followDivider, { backgroundColor: surface.chipBorder }]} />
+              <Stat label="Folgt" value={profile.stats.following ?? 0} strong />
+              {/* „Folgt dir" nur, wenn es stimmt – und nur auf fremden Profilen.
+                  Es beantwortet die Frage, die man sich beim Folgen-Knopf
+                  stellt: Kennt die Person mich überhaupt? */}
+              {!profile.is_me && profile.follows_me ? (
+                <ThemedText
+                  type="small"
+                  style={[
+                    styles.followsYou,
+                    { color: surface.chipText, backgroundColor: surface.chipBgStrong },
+                  ]}>
+                  Folgt dir
+                </ThemedText>
+              ) : null}
+            </View>
             ) : null}
 
             <View style={styles.stats}>
@@ -833,18 +987,37 @@ export default function ProfileScreen() {
             {/* Freundschaft. Nur auf fremden Profilen – und nur, wenn es einen
                 nächsten Schritt gibt: Bei „befreundet" ist der Knopf ein
                 Beenden-Knopf und darf deshalb nicht wie ein Angebot aussehen. */}
+            {/* Folgen steht VOR der Freundschaft: Es ist der kleinere Schritt
+                (einseitig, ohne Zustimmung) und damit der, den man zuerst tut.
+                Beide nebeneinander, weil sie verschiedene Dinge sind – Folgen
+                abonniert, Freundschaft öffnet Gruppen und Chats. */}
             {!profile.is_me ? (
-              <BrandButton
-                title={friendLabel(profile.friendship ?? 'none', friendBusy)}
-                variant={
-                  (profile.friendship ?? 'none') === 'none' ||
-                  profile.friendship === 'incoming'
-                    ? 'primary'
-                    : 'glass'
-                }
-                loading={friendBusy}
-                onPress={onFriendAction}
-              />
+              <View style={styles.relationRow}>
+                {Features.follow ? (
+                <View style={styles.relationButton}>
+                  <BrandButton
+                    title={
+                      followBusy
+                        ? 'Einen Moment …'
+                        : profile.is_following
+                          ? 'Gefolgt'
+                          : 'Folgen'
+                    }
+                    variant={profile.is_following ? 'glass' : 'primary'}
+                    loading={followBusy}
+                    onPress={onFollowAction}
+                  />
+                </View>
+                ) : null}
+                <View style={styles.relationButton}>
+                  <BrandButton
+                    title={friendLabel(profile.friendship ?? 'none', friendBusy)}
+                    variant="glass"
+                    loading={friendBusy}
+                    onPress={onFriendAction}
+                  />
+                </View>
+              </View>
             ) : null}
 
             {/* Melden und Blockieren – klein, unter dem Freundschafts-Knopf.
@@ -885,7 +1058,7 @@ export default function ProfileScreen() {
 
           {/* Visitenkarte ohne Auftritt: Was fehlt, gehört gesagt – am eigenen
               Profil mit dem Weg dorthin, bei fremden als schlichte Einordnung. */}
-          {!showsPosts ? (
+          {!showsPosts && Features.accountTiers ? (
             <GlassCard tone="accent" radius={Radius.card} style={styles.empty}>
               <ThemedText type="small" style={{ color: surface.textMuted }}>
                 {profile.is_me
@@ -899,7 +1072,7 @@ export default function ProfileScreen() {
           ) : null}
 
           {/* Social-Links */}
-          {showsPosts && (links.length > 0 || profile.is_me) ? (
+          {showsPosts && Features.socialLinks && (links.length > 0 || profile.is_me) ? (
             <View style={styles.section}>
               <SectionHeader
                 title="Social Media"
@@ -1060,28 +1233,13 @@ export default function ProfileScreen() {
               </GlassCard>
             ) : (
               profile.posts.map((post) => (
-                <GlassCard key={post.id} tone="accent" radius={Radius.card} style={styles.post}>
-                  <View style={styles.postHead}>
-                    <ThemedText type="small" style={{ color: surface.textMuted }}>
-                      {fmtDate(post.created_at)}
-                    </ThemedText>
-                    {profile.is_me ? (
-                      <Pressable
-                        onPress={() => onDeletePost(post)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Beitrag löschen"
-                        hitSlop={8}>
-                        <ThemedText type="small" style={{ color: '#ef4444' }}>
-                          Löschen
-                        </ThemedText>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                  <ThemedText style={{ color: surface.text }}>{post.body}</ThemedText>
-                  {post.image_url ? (
-                    <Image source={{ uri: post.image_url }} style={styles.postImage} resizeMode="cover" />
-                  ) : null}
-                </GlassCard>
+                <ProfilePostCard
+                  key={post.id}
+                  post={post}
+                  isMine={profile.is_me}
+                  onChanged={onPostChanged}
+                  onDelete={onDeletePost}
+                />
               ))
             )}
           </View>
@@ -1089,8 +1247,17 @@ export default function ProfileScreen() {
         </KeyboardForm>
       </View>
 
-      {/* Ganz zuletzt, damit das Blatt über allem liegt. */}
-      <AccountSheet open={accountOpen} onClose={() => setAccountOpen(false)} />
+      {/* Der Story-Betrachter: ein eigenes Fenster (`Modal`), deshalb hier unten
+          und nicht am Profilbild, das ihn öffnet. */}
+      <StoryViewer
+        groups={storyGroups}
+        startGroup={storyOpen && storyGroups.length > 0 ? 0 : null}
+        onClose={() => setStoryOpen(false)}
+        onSeen={onStorySeen}
+        // Der Papierkorb erscheint nur an eigenen Storys – das prüft der
+        // Betrachter selbst über `story.is_mine`.
+        onDelete={onStoryDelete}
+      />
 
       {/* Melden. `type: 'user'` – gemeldet wird das Konto, nicht ein einzelner
           Beitrag darauf; für den gibt es den Weg am Beitrag selbst. */}
@@ -1113,29 +1280,42 @@ export default function ProfileScreen() {
 /**
  * Beschriftung des Freundschafts-Knopfes.
  *
- * Vier Zustände, vier Sätze – und jeder sagt, was der TIPP tut, nicht was gerade
- * ist. „Befreundet" wäre eine Statusmeldung auf einem Knopf, der beendet; deshalb
- * steht dort „Freundschaft beenden".
+ * Vier Zustände, vier Wörter – und jedes sagt, was der TIPP tut, nicht was
+ * gerade ist. „Befreundet" wäre eine Statusmeldung auf einem Knopf, der beendet.
+ *
+ * Bewusst kurz: Der Knopf teilt sich die Zeile mit „Folgen", und
+ * „Freundschaft beenden" hätte dort umgebrochen. Was genau passiert, sagt
+ * ohnehin erst die Rückfrage danach.
  */
 function friendLabel(state: NonNullable<PublicProfile['friendship']>, busy: boolean): string {
-  if (busy) return 'Einen Moment …';
+  if (busy) return 'Moment …';
   switch (state) {
     case 'friends':
-      return 'Freundschaft beenden';
+      return 'Befreundet ✓';
     case 'incoming':
-      return 'Anfrage annehmen';
+      return 'Annehmen';
     case 'outgoing':
-      return 'Anfrage zurückziehen';
+      return 'Angefragt';
     default:
-      return 'Freund:in hinzufügen';
+      return 'Befreunden';
   }
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
+/**
+ * Eine Zahl mit Beschriftung.
+ *
+ * `strong` ist für Follower und Gefolgt: Sie stehen weiter oben und sollen als
+ * Erstes ins Auge fallen – die drei Zahlen darunter beschreiben, was jemand tut,
+ * diese beiden, wen es interessiert.
+ */
+function Stat({ label, value, strong = false }: { label: string; value: number; strong?: boolean }) {
   const surface = useBrandSurface();
   return (
     <View style={styles.stat}>
-      <ThemedText style={[styles.statValue, { color: surface.text }]}>{value}</ThemedText>
+      <ThemedText
+        style={[styles.statValue, strong && styles.statValueStrong, { color: surface.text }]}>
+        {value}
+      </ThemedText>
       <ThemedText type="small" style={{ color: surface.textMuted }}>
         {label}
       </ThemedText>
@@ -1240,7 +1420,7 @@ const styles = StyleSheet.create({
   safetyLink: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
   content: {
     paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.four,
+    // `paddingTop` kommt aus der Höhe der durchsichtigen Kopfzeile (siehe dort).
     maxWidth: MaxContentWidth,
     width: '100%',
     alignSelf: 'center',
@@ -1253,21 +1433,13 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
     paddingHorizontal: Spacing.six,
   },
-  lockedEmoji: { fontSize: 40 },
   lockedText: { textAlign: 'center' },
 
   head: { gap: Spacing.three, padding: Spacing.four },
   identity: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
-  avatarRing: { width: 64, height: 64, borderRadius: 32, padding: 2.5 },
-  avatarInner: {
-    flex: 1,
-    borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarImage: { width: '100%', height: '100%' },
-  initials: { fontSize: 22, fontWeight: '800', fontFamily: FontFamily.bold },
+  // Profilbild, Ring und Initialen wohnen jetzt in `components/story-avatar.tsx` –
+  // derselbe Ring trägt in der Story-Leiste und in den Personenzeilen dieselbe
+  // Aussage, und die soll er nicht an drei Stellen nachgebaut bekommen.
   identityText: { flex: 1, gap: 3 },
   name: { fontSize: 21, lineHeight: 27, fontWeight: '800', letterSpacing: -0.4 },
   badges: { flexDirection: 'row', gap: Spacing.one, flexWrap: 'wrap', marginTop: 2 },
@@ -1291,7 +1463,7 @@ const styles = StyleSheet.create({
   // Der Banner liegt unter allem, deshalb `zIndex: 0` – die Geschwister der
   // Karte stehen ohne eigenen Wert darüber. `overflow: 'hidden'` schneidet den
   // Überhang ab, den `bannerImage` bewusst hat.
-  bannerLayer: { ...StyleSheet.absoluteFillObject, zIndex: 0, overflow: 'hidden' },
+  bannerLayer: { ...StyleSheet.absoluteFill, zIndex: 0, overflow: 'hidden' },
   bannerImage: {
     position: 'absolute',
     top: -BANNER_BLEED,
@@ -1300,9 +1472,32 @@ const styles = StyleSheet.create({
     left: -BANNER_BLEED,
   },
 
+  /** Follower und Gefolgt – eigene, abgesetzte Zeile über den drei Zahlen. */
+  followRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.four,
+    borderTopWidth: StyleSheet.hairlineWidth * 2,
+    borderBottomWidth: StyleSheet.hairlineWidth * 2,
+    paddingVertical: Spacing.three,
+  },
+  followDivider: { width: StyleSheet.hairlineWidth * 2, alignSelf: 'stretch' },
+  followsYou: {
+    fontWeight: '700',
+    fontSize: 11,
+    borderRadius: 999,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 3,
+    overflow: 'hidden',
+  },
+  /** Folgen und Befreunden teilen sich die Breite. */
+  relationRow: { flexDirection: 'row', gap: Spacing.two },
+  relationButton: { flex: 1 },
+
   stats: { flexDirection: 'row', gap: Spacing.four },
   stat: { flex: 1, gap: 1 },
   statValue: { fontSize: 20, lineHeight: 26, fontWeight: '800' },
+  statValueStrong: { fontSize: 24, lineHeight: 30 },
 
   section: { gap: Spacing.two },
   empty: { padding: Spacing.four },
@@ -1337,7 +1532,6 @@ const styles = StyleSheet.create({
 
   editor: { gap: Spacing.three, padding: Spacing.four },
   editorRow: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.three },
-  editorIcon: { marginBottom: Spacing.two },
   editorField: { flex: 1, gap: 2 },
   // Kompakte Zeile: `minHeight: 0` hebt die 56 px des Standardfeldes auf, der
   // Rest (Farbe, Fokus-/Fehlerrand, Schrift) kommt aus `TextField`.
@@ -1375,9 +1569,9 @@ const styles = StyleSheet.create({
   preview: { width: '100%', height: 170, borderRadius: Radius.card },
   previewRemove: { alignSelf: 'flex-start' },
 
-  post: { gap: Spacing.two, padding: Spacing.four },
-  postHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  postImage: { width: '100%', height: 200, borderRadius: Radius.card, marginTop: Spacing.one },
+  // Die Beitrags-Optik wohnt jetzt in `components/profile-post-card.tsx` – der
+  // Beitrag trägt Herz, Kommentare und einen Editor und ist damit eine eigene
+  // Komponente statt ein Block in diesem Screen.
 
   error: { color: '#ef4444' },
 });

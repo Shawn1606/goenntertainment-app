@@ -25,13 +25,15 @@ import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
 import { GlassCard, SectionHeader } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
+import { ChevronLeftIcon } from '@/components/ui/icons';
 import { FontFamily, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { unreadBadge } from '@/domain/chat';
+import { unreadBadge } from '@/domain/unread-badge';
 import { formatRelativeShort } from '@/domain/date-format';
 import { useBrandSurface } from '@/hooks/use-theme';
 import { api, type ChatOverviewEntry } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import * as feedback from '@/lib/feedback';
+import { goBack } from '@/lib/go-back';
 
 export default function ChatsScreen() {
   const router = useRouter();
@@ -109,8 +111,27 @@ export default function ChatsScreen() {
             colors={[surface.accent]}
           />
         }>
+        {/* Kopfzeile mit Zurück.
+            Ohne sie war dieser Screen eine Sackgasse: Er ist eine Stack-Route und
+            liegt damit ÜBER der Tab-Leiste (siehe app-tabs.tsx) – wer hier landet,
+            sieht die Leiste nicht mehr und kam ohne Zurück-Knopf nicht mehr auf die
+            Startseite. Der Einzelchat hatte einen, die Übersicht nicht. */}
         <View style={styles.header}>
-          <ThemedText style={styles.title}>Chats</ThemedText>
+          <View style={styles.headerTop}>
+            <Pressable
+              onPress={goBack}
+              accessibilityRole="button"
+              accessibilityLabel="Zurück"
+              hitSlop={10}
+              style={({ pressed }) => [
+                styles.backButton,
+                { backgroundColor: surface.chipBg, borderColor: surface.chipBorder },
+                pressed && styles.pressed,
+              ]}>
+              <ChevronLeftIcon size={20} color={surface.text} />
+            </Pressable>
+            <ThemedText style={styles.title}>Chats</ThemedText>
+          </View>
           <ThemedText type="small" style={{ color: surface.textMuted }}>
             {unreadTotal > 0
               ? unreadTotal === 1
@@ -225,7 +246,16 @@ const styles = StyleSheet.create({
     gap: Spacing.four,
   },
   header: { gap: Spacing.half },
-  title: { fontSize: 26, lineHeight: 33, fontWeight: '800', letterSpacing: -0.5 },
+  headerTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  backButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: StyleSheet.hairlineWidth * 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  title: { flex: 1, fontSize: 26, lineHeight: 33, fontWeight: '800', letterSpacing: -0.5 },
   section: { gap: Spacing.two },
   centered: { textAlign: 'center' },
   row: {

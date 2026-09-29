@@ -28,12 +28,25 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import multer from 'multer';
-import { pool, first, toIso } from '../db.js';
+import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError, Validator } from '../validate.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
-import { mediaUrl, publicBase } from '../media.js';
+import { notifyFollowers } from '../notifications.js';
+import { loadUser } from '../people.js';
+// Spalten, Umwandlung und Filter wohnen in `../stories.js`: Profilseite und
+// Personenlisten fragen dasselbe, und vier Abschriften derselben Abfrage sind
+// vier Wahrheiten darueber, was „laufende Story" heisst (siehe dort).
+import {
+  STORY_HOURS,
+  STORY_LIMIT,
+  STORY_LIVE,
+  STORY_QUERY,
+  storiesOf,
+  transformStory,
+} from '../stories.js';
 
 const router = Router();
 
@@ -42,12 +55,8 @@ const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Wie lange eine Story sichtbar bleibt. */
-export const STORY_HOURS = 24;
 /** Laenge der Bildunterschrift – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_CAPTION = 200;
-/** So viele Storys liefert die Leiste hoechstens aus. */
-const STORY_LIMIT = 60;
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
 
@@ -72,38 +81,6 @@ function requirePublisher(req, res, next) {
     return res.status(403).json({ message: 'Storys gibt es ab der Stufe Creator.' });
   }
   return next();
-}
-
-function transformStory(req, row) {
-  return {
-    id: row.id,
-    caption: row.caption,
-    image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
-    created_at: toIso(row.created_at),
-    expires_at: toIso(row.expires_at),
-    /**
-     * Restzeit in Minuten – gerechnet von der DATENBANK, nicht von der App.
-     *
-     * Grund: `toIso` haengt an einen DB-Zeitstempel schlicht ein 'Z' und
-     * behauptet damit UTC. Das gilt hier nicht durchgaengig – `NOW()` liefert die
-     * Ortszeit des Servers. Rechnet die App also `expires_at - jetzt`, ist sie um
-     * den Zonen-Versatz daneben (aus 24 Stunden wurden sichtbar 25). Eine Dauer
-     * kennt keine Zeitzone: `TIMESTAMPDIFF` gegen dasselbe `NOW()`, mit dem oben
-     * auch gefiltert wird, kann per Konstruktion nicht auseinanderlaufen.
-     */
-    expires_in_minutes: row.expires_in_minutes === undefined
-      ? null
-      : Number(row.expires_in_minutes),
-    seen: Boolean(row.seen),
-    is_mine: Boolean(row.is_mine),
-    user: {
-      id: row.user_id,
-      name: row.name,
-      username: row.username,
-      avatar: mediaUrl(req, row.avatar),
-      account_type: row.account_type,
-    },
-  };
 }
 
 /**
@@ -140,16 +117,8 @@ router.get('/stories', requireAuth, async (req, res, next) => {
     await sweepExpired().catch(() => {});
 
     const [rows] = await pool.query(
-      `SELECT s.id, s.user_id, s.caption, s.image_path, s.created_at, s.expires_at,
-              TIMESTAMPDIFF(MINUTE, NOW(), s.expires_at) AS expires_in_minutes,
-              u.name, u.username, u.avatar, u.account_type,
-              (v.user_id IS NOT NULL) AS seen,
-              (s.user_id = ?) AS is_mine
-         FROM stories s
-         JOIN users u ON u.id = s.user_id
-    LEFT JOIN story_views v ON v.story_id = s.id AND v.user_id = ?
-        WHERE s.expires_at > NOW()
-          AND (u.banned_until IS NULL OR u.banned_until <= NOW())
+      `${STORY_QUERY}
+        WHERE ${STORY_LIVE}
         ORDER BY seen ASC, s.created_at DESC, s.id DESC
         LIMIT ${STORY_LIMIT}`,
       [req.user.id, req.user.id],
@@ -160,6 +129,32 @@ router.get('/stories', requireAuth, async (req, res, next) => {
       /** Damit die App den ＋-Ring nur zeigt, wenn er auch etwas tut. */
       can_publish: abilitiesFor(req.user).hasPublicProfile,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * GET /api/users/:id/stories  (geschuetzt) – die laufenden Storys EINER Person.
+ *
+ * Gibt es, seit der Ring um ein Profilbild ueberall antippbar ist: In einer
+ * Personenliste (Freunde, Suchtreffer) soll der Betrachter direkt aufgehen und
+ * nicht erst das Profil dazwischenschieben. Die Liste kennt nur die ANZAHL der
+ * Storys (dafuer reicht `storyMetaFor`) – die Bilder holt dieser Aufruf beim
+ * Antippen nach.
+ *
+ * Nach ID und nicht nach Benutzername: Den hat nicht jedes Konto, die ID immer.
+ *
+ * Eine leere Liste ist kein Fehler: Zwischen dem Laden der Liste und dem Tipp
+ * koennen 24 Stunden liegen. Die App faellt dann aufs Profil zurueck, statt einen
+ * schwarzen Betrachter zu zeigen.
+ */
+router.get('/users/:id/stories', requireAuth, async (req, res, next) => {
+  try {
+    // Ueber `loadUser`, damit ein unbekanntes Konto denselben 404 gibt wie
+    // ueberall sonst – und nicht eine leere Liste, die „keine Storys" behauptet.
+    const owner = await loadUser(req.params.id);
+    res.json({ data: await storiesOf(req, owner.id, req.user.id) });
   } catch (err) {
     next(err);
   }
@@ -179,6 +174,9 @@ router.post('/stories', requireAuth, requirePublisher, uploadImage, async (req, 
     }
     if (caption.length > MAX_CAPTION) {
       v.add('caption', `Die Unterschrift fasst hoechstens ${MAX_CAPTION} Zeichen.`);
+    } else {
+      // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall.
+      rejectBlockedTerms(v, 'caption', caption, 'text');
     }
     v.throwIfFails();
 
@@ -228,6 +226,19 @@ router.post('/stories', requireAuth, requirePublisher, uploadImage, async (req, 
          FROM stories s JOIN users u ON u.id = s.user_id WHERE s.id = ?`,
       [result.insertId],
     );
+
+    // Follower informieren – laeuft nach dem Speichern und schluckt seine Fehler
+    // (siehe notifications.js): Die Story steht, egal ob der Verteiler klappt.
+    await notifyFollowers(req.user, {
+      type: 'story',
+      refId: result.insertId,
+      // Umlaute: Das ist ANZEIGETEXT, kein Kommentar. Der Rest dieser Datei
+      // schreibt bewusst ASCII, hier stuende sonst „veroeffentlicht" mitten in
+      // der Benachrichtigung (derselbe Fehler wie frueher bei den Coupon-Titeln).
+      title: `${req.user.name} hat eine Story veröffentlicht`,
+      body: caption || null,
+    });
+
     res.status(201).json({ data: transformStory(req, row) });
   } catch (err) {
     next(err);

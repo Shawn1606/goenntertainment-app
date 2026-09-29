@@ -1,4 +1,8 @@
 import { useRouter, type Href } from 'expo-router';
+// Nur für den weichgezeichneten Hintergrund: `blurRadius` gibt es bei
+// `expo-image` am Gerät UND im Web, bei RNs `Image` nicht überall. Der scharfe
+// Banner oben bleibt RNs `Image`. Gleiche Aufteilung wie auf der Profilseite.
+import { Image as BlurImage } from 'expo-image';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -23,12 +27,11 @@ import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { useSheetDrag } from '@/components/ui/use-sheet-drag';
 import { Radius, Spacing } from '@/constants/theme';
-import { capabilitiesFor } from '@/domain/account';
 import { calendarLinkFor } from '@/domain/calendar-link';
 import { formatDateTime } from '@/domain/date-format';
 import { formatDistance } from '@/domain/distance';
 import { urgencyFor } from '@/domain/urgency';
-import { useBrandSurface, useSignals } from '@/hooks/use-theme';
+import { useBrandSurface, useGlass, useSignals, useTheme } from '@/hooks/use-theme';
 import { type Activity, api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import * as feedback from '@/lib/feedback';
@@ -48,7 +51,15 @@ type Props = {
   onRoute?: () => void;
   /** Entfernung in km, falls bekannt (Ticket #5: „Entfernung zum Standort"). */
   distanceKm?: number | null;
+  /**
+   * Löschen – nur für die eigene Aktivität (bzw. Admins). Der Aufrufer fragt nach
+   * und entfernt das Event aus seiner Liste; ohne Rückruf gibt es keinen Knopf.
+   */
+  onDelete?: () => void;
 };
+
+/** Rot für das Löschen – dieselbe Warnfarbe wie bei den übrigen Löschknöpfen. */
+const DANGER = '#ed4956';
 
 /** Wie im Konto-Blatt: Animationen laufen im Web-Build dieser App nicht. */
 const NATIVE = Platform.OS !== 'web';
@@ -58,6 +69,50 @@ const SHEET_RISE = 32;
 
 /** So lange bleibt der Jubel stehen, bevor er wieder verschwindet. */
 const CELEBRATION_MS = 1700;
+
+/**
+ * Der weichgezeichnete Hintergrund des Blattes.
+ *
+ * ## Warum das Blatt vorher durchsichtig war
+ *
+ * `GlassSurface` zeichnet nur an zwei Stellen wirklich weich: im Web über
+ * `backdrop-filter` und auf iOS 26 über Liquid Glass. Auf Android bleibt von
+ * „Glas" eine Füllung mit 84–86 % Deckkraft übrig – also eine Fläche, durch die
+ * die Startseite sichtbar durchscheint. Über einem Regal voller bunter
+ * Event-Karten wird der Text darauf dadurch unruhig und schlecht lesbar.
+ *
+ * ## Warum hier kein `BlurView` steht
+ *
+ * `expo-blur` zeichnet nur weich, was in SEINEM Fenster liegt. Dieses Blatt ist
+ * ein `Modal` und damit ein eigenes Fenster – ein `BlurView` darin fände nichts
+ * zu verwischen (dieselbe Falle steht ausführlich in `account-widget.tsx`, das
+ * deshalb bewusst KEIN Modal ist).
+ *
+ * Der Ausweg: Das Blatt bringt seinen Hintergrund selbst mit. Unten ein deckender
+ * Grund – der allein löst schon die Lesbarkeit –, darüber der Banner DIESES
+ * Events, weichgezeichnet. Damit ist der Hintergrund nicht nur ruhig, sondern
+ * gehört auch sichtbar zu dem Event, das man gerade geöffnet hat.
+ */
+const SHEET_BLUR = 40;
+
+/**
+ * Wie kräftig der weichgezeichnete Banner durchkommt.
+ *
+ * Er ist Stimmung, nicht Motiv: Bei mehr als der Hälfte kämpft das Bild mit der
+ * Schrift, bei deutlich weniger ist es reine Deko ohne Bezug zum Event.
+ */
+const SHEET_BANNER_OPACITY = 0.5;
+
+/**
+ * Der Überhang des Hintergrundbildes.
+ *
+ * Weichzeichnen mischt jeden Bildpunkt mit seinen Nachbarn – am Bildrand fehlen
+ * die, und dort bliebe ein durchsichtiger Saum. Der Überhang schiebt ihn aus dem
+ * Blatt heraus, wo `overflow: 'hidden'` der Glasfläche ihn abschneidet. Faktor 3,
+ * weil `blurRadius` im Web die Streuung σ einer Gauß-Glocke ist und die rund 3 σ
+ * weit reicht – dieselbe Rechnung wie auf der Profilseite.
+ */
+const SHEET_BLEED = SHEET_BLUR * 3;
 
 /**
  * Detail-Popup für ein Event: zeigt alle Infos (Banner, Beschreibung, Ort, Zeit,
@@ -84,8 +139,11 @@ const CELEBRATION_MS = 1700;
  * Bei „Bewegung reduzieren" fällt die Bewegung weg, der Inhalt bleibt: Das
  * erledigen `Glow`, `PressableScale` und `Mascot` jeweils selbst.
  */
-export function ActivityDetailModal({ activity, onClose, onChanged, onRoute, distanceKm }: Props) {
+export function ActivityDetailModal({ activity, onClose, onChanged, onRoute, distanceKm, onDelete }: Props) {
   const surface = useBrandSurface();
+  const glass = useGlass();
+  /** Deckender Grund des Blattes – nimmt der Startseite dahinter jede Sicht. */
+  const canvas = useTheme().background;
   const signal = useSignals();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -176,7 +234,8 @@ export function ActivityDetailModal({ activity, onClose, onChanged, onRoute, dis
    * statt eines Links, der ins Leere führt.
    */
   const hostProfile: Href | null =
-    data?.host?.username && capabilitiesFor(data.host.account_type).hasPublicProfile
+    // Seit jedes Konto eine Profilseite hat, reicht der Benutzername.
+    data?.host?.username
       ? { pathname: '/profile/[username]', params: { username: data.host.username } }
       : null;
 
@@ -288,6 +347,30 @@ export function ActivityDetailModal({ activity, onClose, onChanged, onRoute, dis
             tone="panel"
             radius={Radius.panel}
             style={[styles.sheet, { paddingBottom: insets.bottom + Spacing.four }]}>
+            {/* Der Hintergrund des Blattes – siehe {@link SHEET_BLUR}.
+                Liegt als erstes Kind und mit `zIndex: 0` unter allem: Die
+                Geschwister ohne eigenen Wert stehen darüber. Das ist dieselbe
+                Schichtung wie auf der Profilseite. */}
+            <View pointerEvents="none" style={styles.sheetBackdrop}>
+              <View style={[StyleSheet.absoluteFill, { backgroundColor: canvas }]} />
+              {data.banner_url ? (
+                <>
+                  <BlurImage
+                    source={{ uri: data.banner_url }}
+                    style={[styles.sheetBackdropImage, { opacity: SHEET_BANNER_OPACITY }]}
+                    contentFit="cover"
+                    blurRadius={SHEET_BLUR}
+                    cachePolicy="memory-disk"
+                    accessible={false}
+                  />
+                  {/* Ein Schleier über dem Bild: Er nimmt dem Foto den Kontrast,
+                      damit jede Zeile darauf lesbar bleibt – auch über einem
+                      hellen Himmel oder einem dunklen Innenraum. */}
+                  <View style={[StyleSheet.absoluteFill, { backgroundColor: glass.fill }]} />
+                </>
+              ) : null}
+            </View>
+
             {/* Griffzone: steht außerhalb der Liste, damit hier keine ScrollView
                 um die Bewegung streitet. */}
             <View {...drag.headPan.panHandlers} style={styles.handleZone}>
@@ -550,7 +633,7 @@ export function ActivityDetailModal({ activity, onClose, onChanged, onRoute, dis
                   <ActivityIndicator size="small" color={surface.accent} />
                 ) : (
                   <Icon
-                    name={data.is_saved ? 'star-filled' : 'star'}
+                    name={data.is_saved ? 'bookmark-filled' : 'bookmark'}
                     size={16}
                     color={surface.accent}
                   />
@@ -582,6 +665,26 @@ export function ActivityDetailModal({ activity, onClose, onChanged, onRoute, dis
                   <Icon name="chat" size={16} color={surface.accent} />
                   <ThemedText type="smallBold" style={{ color: surface.accent }}>
                     Chat
+                  </ThemedText>
+                </Pressable>
+              ) : null}
+
+              {onDelete ? (
+                <Pressable
+                  onPress={() => {
+                    feedback.pressed();
+                    onDelete();
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Aktivität löschen"
+                  style={({ pressed }) => [
+                    styles.sideButton,
+                    { borderColor: surface.cardBorder },
+                    pressed && styles.pressed,
+                  ]}>
+                  <Icon name="trash" size={16} color={DANGER} />
+                  <ThemedText type="smallBold" style={{ color: DANGER }}>
+                    Löschen
                   </ThemedText>
                 </Pressable>
               ) : null}
@@ -738,9 +841,9 @@ function Celebration({ name }: { name: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: 'flex-end' },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.5)' },
   /** Eigene Fläche für den Tipp daneben – der Hintergrund selbst ist nur Optik. */
-  backdropTouch: { ...StyleSheet.absoluteFillObject },
+  backdropTouch: { ...StyleSheet.absoluteFill },
   sheetWrap: {
     // Nur zum Tragen der Bewegung – die Optik macht die Glasfläche darin.
     width: '100%',
@@ -762,6 +865,15 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: -4 },
       },
     }),
+  },
+  /** Der Hintergrund des Blattes: deckender Grund + weichgezeichneter Banner. */
+  sheetBackdrop: { ...StyleSheet.absoluteFill, zIndex: 0, overflow: 'hidden' },
+  sheetBackdropImage: {
+    position: 'absolute',
+    top: -SHEET_BLEED,
+    right: -SHEET_BLEED,
+    bottom: -SHEET_BLEED,
+    left: -SHEET_BLEED,
   },
   /** Großzügige Griffzone: der Balken allein wäre zu klein zum Treffen. */
   handleZone: { paddingBottom: Spacing.three, alignItems: 'center' },
@@ -890,7 +1002,7 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   celebration: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: 'center',
     justifyContent: 'center',
     gap: Spacing.two,

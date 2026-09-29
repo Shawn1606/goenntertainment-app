@@ -16,9 +16,22 @@
  * Antwort neu.
  */
 
-/** Basis fuer oeffentliche Datei-Adressen. */
+/**
+ * Basis fuer oeffentliche Datei-Adressen.
+ *
+ * Seit Laravel vorn steht (Port 8000) und unbekannte Pfade hierher weiterreicht,
+ * kommt jede Anfrage der App mit dem Host "127.0.0.1:8001" an – der Adresse
+ * zwischen den beiden Servern. Daraus gebaute Bild-URLs erreicht das Handy nie.
+ * Laravel schickt deshalb in `X-Forwarded-Host` mit, unter welcher Adresse die
+ * App gefragt hat; die zaehlt. (`req.hostname` taugt dafuer nicht: Express 4
+ * wirft dort den Port weg, und ohne ":8000" zeigte die URL auf Port 80.)
+ *
+ * Nur der ERSTE Eintrag zaehlt – bei mehreren Proxys haengt jeder seinen an.
+ */
 export function publicBase(req) {
-  return process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`;
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL;
+  const forwarded = String(req.get('x-forwarded-host') ?? '').split(',')[0].trim();
+  return `${req.protocol}://${forwarded || req.get('host')}`;
 }
 
 /**

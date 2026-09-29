@@ -19,10 +19,15 @@ import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
 import { HttpError, Validator } from '../validate.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
 import { parseLinkList } from '../social.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl, publicBase } from '../media.js';
+import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
+import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
+import { notifyFollowers, notifyQuietly } from '../notifications.js';
+import { attachStories, storiesOf } from '../stories.js';
 
 const router = Router();
 
@@ -38,6 +43,10 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const POST_LIMIT = 50;
 /** Laenge eines Beitrags – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_BODY = 1000;
+/** Laenge eines Kommentars – dieselbe Zahl wie die Spalte in schema.sql. */
+const MAX_COMMENT = 500;
+/** So viele Kommentare liefert ein Beitrag hoechstens aus. */
+const COMMENT_LIMIT = 100;
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
 
@@ -64,13 +73,78 @@ function uploadImage(req, res, next) {
   });
 }
 
-/** Beitrag in die API-Form bringen. */
+/**
+ * Beitrag in die API-Form bringen.
+ *
+ * `likes_count`/`comments_count`/`liked_by_me` kommen aus der Abfrage mit; fehlen
+ * sie (aeltere Aufrufer), stehen sie auf 0 bzw. false statt undefined – die App
+ * rechnet mit Zahlen, nicht mit „vielleicht".
+ *
+ * `edited` sagt, ob der Text nach dem Veroeffentlichen noch angefasst wurde. Das
+ * gehoert sichtbar dazu: Ein Beitrag, unter dem schon kommentiert wurde, darf
+ * sich nicht unbemerkt aendern.
+ */
 function transformPost(req, row) {
   return {
     id: row.id,
     body: row.body,
     image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
     created_at: toIso(row.created_at),
+    updated_at: toIso(row.updated_at ?? null),
+    edited: Boolean(row.updated_at && row.created_at && row.updated_at !== row.created_at),
+    likes_count: Number(row.likes_count ?? 0),
+    comments_count: Number(row.comments_count ?? 0),
+    liked_by_me: Boolean(row.liked_by_me),
+  };
+}
+
+/**
+ * Die Spalten eines Beitrags samt Zahlen – einmal formuliert, dreimal benutzt
+ * (Profil, Anlegen, Bearbeiten). Zwei Unterabfragen statt zweier JOINs mit
+ * GROUP BY: Bei zwei unabhaengigen Zaehlungen multipliziert ein JOIN die Zeilen,
+ * und das faellt erst auf, wenn jemand kommentiert UND liked.
+ */
+const POST_SELECT = `
+  p.id, p.body, p.image_path, p.created_at, p.updated_at,
+  (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id)      AS likes_count,
+  (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id)   AS comments_count,
+  EXISTS(SELECT 1 FROM post_likes pl2 WHERE pl2.post_id = p.id AND pl2.user_id = ?) AS liked_by_me
+`;
+
+/** Einen Beitrag frisch laden – mit den Zahlen aus Sicht von `viewerId`. */
+function loadPost(postId, viewerId) {
+  return first(`SELECT ${POST_SELECT} FROM posts p WHERE p.id = ?`, [viewerId, postId]);
+}
+
+/**
+ * Die Nutzerspalten eines Kommentars.
+ *
+ * Bewusst ausgeschrieben statt aus `USER_COLUMNS` abgeleitet: Dort steht `u.id`
+ * an erster Stelle, und in einem JOIN mit `post_comments` traegt `id` schon die
+ * Kommentar-ID. `u.id` wuerde sie im Ergebnis still ueberschreiben – mysql2
+ * behaelt bei gleichnamigen Spalten die letzte.
+ */
+const COMMENT_USER_COLUMNS =
+  'u.id AS user_id, u.name, u.username, u.avatar, u.account_type';
+
+/** Ein Kommentar in die API-Form. */
+function transformComment(req, row, viewerId, postAuthorId) {
+  return {
+    id: row.id,
+    body: row.body,
+    created_at: toIso(row.created_at),
+    // Loeschen darf: wer ihn geschrieben hat, und wem der Beitrag gehoert. Das
+    // Zweite ist wichtig – sonst braeuchte man fuer jeden unerwuenschten
+    // Kommentar unter dem eigenen Beitrag einen Admin.
+    can_delete:
+      Number(row.user_id) === Number(viewerId) || Number(postAuthorId) === Number(viewerId),
+    user: transformUser(req, {
+      id: row.user_id,
+      name: row.name,
+      username: row.username,
+      avatar: row.avatar,
+      account_type: row.account_type,
+    }),
   };
 }
 
@@ -127,17 +201,23 @@ router.get('/users', requireAuth, async (req, res, next) => {
     );
 
     res.json({
-      data: rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        username: row.username,
-        avatar: mediaUrl(req, row.avatar),
-        account_type: row.account_type,
-        // Was die App fuer diese Person anbieten soll: anfragen, annehmen,
-        // warten oder nichts. Den Zustand hier mitzugeben erspart der Suche
-        // einen zweiten Aufruf pro Treffer.
-        friendship: friendshipStateFor(row, req.user.id),
-      })),
+      // `attachStories` haengt jeder Zeile an, ob hinter ihrem Bild eine Story
+      // liegt – EINE Abfrage fuer alle Treffer, nicht eine je Zeile. Ohne das
+      // waere der Ring in der Trefferliste geraten.
+      data: await attachStories(
+        rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          username: row.username,
+          avatar: mediaUrl(req, row.avatar),
+          account_type: row.account_type,
+          // Was die App fuer diese Person anbieten soll: anfragen, annehmen,
+          // warten oder nichts. Den Zustand hier mitzugeben erspart der Suche
+          // einen zweiten Aufruf pro Treffer.
+          friendship: friendshipStateFor(row, req.user.id),
+        })),
+        req.user.id,
+      ),
     });
   } catch (err) {
     next(err);
@@ -181,9 +261,9 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
 
     const [posts] = showsPosts
       ? await pool.query(
-          `SELECT id, body, image_path, created_at FROM posts
-            WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ${POST_LIMIT}`,
-          [user.id],
+          `SELECT ${POST_SELECT} FROM posts p
+            WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT ${POST_LIMIT}`,
+          [req.user.id, user.id],
         )
       : [[]];
 
@@ -211,6 +291,13 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
             [req.user.id, user.id, user.id, req.user.id],
           );
 
+    // Folgen ist einseitig und unabhaengig von der Freundschaft – beide Zahlen
+    // stehen deshalb neben und nicht statt „befreundet".
+    const counts = await followCounts(user.id);
+    const following = user.id === req.user.id ? false : await isFollowing(req.user.id, user.id);
+    /** Folgt die Person MIR? Daraus wird in der App „Folgt dir". */
+    const followsMe = user.id === req.user.id ? false : await isFollowing(user.id, req.user.id);
+
     res.json({
       user: {
         id: user.id,
@@ -225,11 +312,30 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
       },
       links: showsPosts ? await loadLinks(user.id) : [],
       posts: posts.map((row) => transformPost(req, row)),
+      /**
+       * Die laufenden Storys dieser Person – der Ring um ihr Profilbild.
+       *
+       * Steht in DIESER Antwort und nicht in einem zweiten Aufruf: Der Ring muss
+       * beim ersten Bild dieser Seite schon richtig aussehen, sonst erscheint er
+       * nachtraeglich und die Karte zuckt. Die Bilder braucht die Seite ohnehin,
+       * denn ein Tipp auf das Profilbild oeffnet sie direkt.
+       *
+       * Auch fuer Standard-Konten (nicht an `showsPosts` gebunden): Wer keine
+       * Storys anlegen darf, hat einfach keine – dann ist die Liste leer, und das
+       * ist die richtige Antwort statt einer weggelassenen.
+       */
+      stories: await storiesOf(req, user.id, req.user.id),
       stats: {
         hosted: Number(stats?.hosted ?? 0),
         joined: Number(stats?.joined ?? 0),
         posts: Number(stats?.posts ?? 0),
+        followers: counts.followers,
+        following: counts.following,
       },
+      /** Folge ich dieser Person? Traegt den Knopf auf der Profilkarte. */
+      is_following: following,
+      /** Folgt sie mir? Nur eine Beschriftung – kein Recht haengt daran. */
+      follows_me: followsMe,
       /** false = Visitenkarte ohne Beitraege und Links (Stufe Standard). */
       shows_posts: showsPosts,
       friendship: relation
@@ -244,6 +350,116 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
     next(err);
   }
 });
+
+/* ------------------------------------------------------------------- Folgen */
+
+/**
+ * Das Konto, dem gefolgt werden soll – mit allen Gruenden, warum das nicht geht.
+ *
+ * Bewusst KEINE Stufen-Pruefung: Man folgt einer Person, nicht ihrem Profil.
+ * Wer heute Standard ist und morgen Creator wird, soll seine Follower schon
+ * haben – sonst waere Folgen erst ab dem Moment moeglich, in dem es ohnehin
+ * schon etwas zu sehen gibt.
+ */
+async function followTarget(req) {
+  const target = await first(`SELECT ${USER_COLUMNS} FROM users u WHERE u.id = ?`, [
+    Number(req.params.id) || 0,
+  ]);
+  if (!target) throw new HttpError(404, 'Dieses Konto gibt es nicht.');
+  if (Number(target.id) === Number(req.user.id)) {
+    throw new HttpError(422, 'Dir selbst zu folgen ergibt keinen Sinn.');
+  }
+  if (await blockExistsBetween(req.user.id, target.id)) {
+    // Dieselbe Meldung wie bei einer Freundschaftsanfrage: Ob ich blockiert wurde
+    // oder selbst blockiert habe, geht aus der Antwort bewusst nicht hervor.
+    throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+  }
+  return target;
+}
+
+// POST /api/users/:id/follow  (geschuetzt) – folgen. Idempotent.
+router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
+  try {
+    const target = await followTarget(req);
+    const fresh = await follow(req.user.id, target.id);
+
+    // Nur bei einer WIRKLICH neuen Folge – sonst meldet jedes erneute Tippen auf
+    // ein schon gefolgtes Profil noch einmal.
+    if (fresh) {
+      await notifyQuietly({
+        userId: target.id,
+        actorId: req.user.id,
+        type: 'follow',
+        refId: req.user.id,
+        title: `${req.user.name} folgt dir jetzt`,
+      });
+    }
+
+    res.json({ is_following: true, ...(await followCounts(target.id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/users/:id/follow  (geschuetzt) – nicht mehr folgen.
+//
+// Ohne `followTarget`: Entfolgen muss auch dann gehen, wenn die andere Seite
+// inzwischen blockiert hat – sonst haenge ich in einem Abo fest, das ich nicht
+// mehr loswerde.
+router.delete('/users/:id/follow', requireAuth, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id) || 0;
+    await unfollow(req.user.id, id);
+    res.json({ is_following: false, ...(await followCounts(id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Follower bzw. Gefolgte eines Kontos – dieselbe Liste, andere Spalte. */
+function followList(direction) {
+  // 'followers' = wer folgt dieser Person; 'following' = wem folgt sie.
+  const [known, wanted] =
+    direction === 'followers' ? ['following_id', 'follower_id'] : ['follower_id', 'following_id'];
+
+  return async (req, res, next) => {
+    try {
+      const target = await first('SELECT id FROM users WHERE username = ?', [req.params.username]);
+      if (!target) throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+
+      const [rows] = await pool.query(
+        `SELECT ${USER_COLUMNS},
+                EXISTS(SELECT 1 FROM follows me
+                        WHERE me.follower_id = ? AND me.following_id = u.id) AS is_following
+           FROM follows f
+           JOIN users u ON u.id = f.${wanted}
+          WHERE f.${known} = ?
+            AND (u.banned_until IS NULL OR u.banned_until <= NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM user_blocks b
+               WHERE (b.blocker_id = u.id AND b.blocked_id = ?)
+                  OR (b.blocker_id = ? AND b.blocked_id = u.id)
+            )
+          ORDER BY f.created_at DESC
+          LIMIT ${SEARCH_LIMIT}`,
+        [req.user.id, target.id, req.user.id, req.user.id],
+      );
+
+      res.json({
+        data: rows.map((row) => ({
+          ...transformUser(req, row),
+          is_following: Boolean(row.is_following),
+        })),
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+// GET /api/users/:username/followers und /following  (geschuetzt)
+router.get('/users/:username/followers', requireAuth, followList('followers'));
+router.get('/users/:username/following', requireAuth, followList('following'));
 
 // PUT /api/me/links  (geschuetzt, ab Creator) – ersetzt ALLE Links.
 //
@@ -427,8 +643,19 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
     const body = String(req.body?.body ?? '').trim();
     const v = new Validator(req.body ?? {});
 
-    if (!body) v.add('body', 'Schreib etwas, bevor du den Beitrag veroeffentlichst.');
-    else if (body.length > MAX_BODY) v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
+    // Text ODER Bild – nicht zwingend beides.
+    //
+    // Vorher war der Text Pflicht. Das steht dem im Weg, was hier gewuenscht ist:
+    // ein Foto hochladen und die Beschreibung spaeter dazuschreiben (siehe PATCH
+    // weiter unten). Ganz leer bleibt verboten – das waere kein Beitrag.
+    if (!body && !req.file) {
+      v.add('body', 'Schreib etwas oder waehle ein Bild, bevor du veroeffentlichst.');
+    } else if (body.length > MAX_BODY) {
+      v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
+    } else {
+      // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall.
+      rejectBlockedTerms(v, 'body', body, 'text');
+    }
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
       v.add('image', 'Das Bild muss jpeg, png oder webp sein.');
     }
@@ -439,7 +666,7 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
     const check = await moderateContent({
       user: req.user,
       context: 'post',
-      description: body,
+      description: body || 'Beitrag ohne Text',
       image: req.file ? { buffer: req.file.buffer, mimetype: req.file.mimetype } : null,
     });
 
@@ -478,10 +705,268 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
       [req.user.id, body, imagePath],
     );
 
-    const row = await first('SELECT id, body, image_path, created_at FROM posts WHERE id = ?', [
-      result.insertId,
+    // Follower informieren. Laeuft NACH dem Speichern und schluckt seine Fehler
+    // (siehe notifications.js): Der Beitrag steht, egal ob der Verteiler klappt.
+    await notifyFollowers(req.user, {
+      type: 'post',
+      refId: result.insertId,
+      // Umlaute, weil das ANZEIGETEXT ist – siehe die Notiz in stories.js.
+      title: `${req.user.name} hat einen Beitrag veröffentlicht`,
+      body: body || null,
+    });
+
+    res.status(201).json({ data: transformPost(req, await loadPost(result.insertId, req.user.id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PATCH /api/posts/:id  (geschuetzt) – Beschreibung nachtraeglich setzen/aendern.
+//
+// Nur der Text, nicht das Bild: Ein ausgetauschtes Bild unter einem Beitrag, den
+// schon jemand geliked oder kommentiert hat, waere ein anderer Beitrag – dafuer
+// gibt es Loeschen und neu anlegen. Der Text laeuft durch dieselbe
+// KI-Verifizierung wie beim Anlegen, sonst waere Bearbeiten die Luecke, durch die
+// man sie umgeht.
+router.patch('/posts/:id', requireAuth, async (req, res, next) => {
+  try {
+    const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [
+      req.params.id,
     ]);
-    res.status(201).json({ data: transformPost(req, row) });
+    if (!post) throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    // Bewusst KEINE Admin-Ausnahme: Ein Admin darf aufraeumen (loeschen), aber
+    // nicht in fremdem Namen formulieren.
+    if (Number(post.user_id) !== Number(req.user.id)) {
+      throw new HttpError(403, 'Du kannst nur eigene Beitraege bearbeiten.');
+    }
+
+    const body = String(req.body?.body ?? '').trim();
+    const v = new Validator(req.body ?? {});
+    if (!body && !post.image_path) {
+      v.add('body', 'Ein Beitrag ohne Bild braucht einen Text.');
+    } else if (body.length > MAX_BODY) {
+      v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
+    } else {
+      rejectBlockedTerms(v, 'body', body, 'text');
+    }
+    v.throwIfFails();
+
+    if (body) {
+      const check = await moderateContent({
+        user: req.user,
+        context: 'post',
+        description: body,
+        image: null,
+      });
+      if (!check.allowed) {
+        if (check.timedOut) {
+          return res.status(403).json({
+            message: 'Dein Konto wurde automatisch gesperrt: Der Inhalt war nicht jugendfrei.',
+            ban: { reason: check.banReason, permanent: false, banned_until: check.bannedUntil },
+            moderation: {
+              severity: check.severity,
+              categories: check.categories,
+              fields: check.fields,
+              reason: check.reason,
+            },
+          });
+        }
+        throw new HttpError(
+          422,
+          check.reason ?? 'Dieser Inhalt ist nicht jugendfrei.',
+          fieldErrorsFor(check, { beschreibung: 'body', titel: 'body', bild: 'body' }),
+        );
+      }
+    }
+
+    await pool.query('UPDATE posts SET body = ?, updated_at = NOW() WHERE id = ?', [body, post.id]);
+    res.json({ data: transformPost(req, await loadPost(post.id, req.user.id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ------------------------------------------------- Gefaellt mir und Kommentare */
+
+/** Der Beitrag zu :id – oder ein 404. Traegt auch die:den Verfasser:in. */
+async function loadPostOr404(id) {
+  const post = await first('SELECT id, user_id, body FROM posts WHERE id = ?', [Number(id) || 0]);
+  if (!post) throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+  return post;
+}
+
+// POST /api/posts/:id/like  (geschuetzt) – idempotent.
+router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
+  try {
+    const post = await loadPostOr404(req.params.id);
+    if (await blockExistsBetween(req.user.id, post.user_id)) {
+      throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+    }
+
+    const [result] = await pool.query(
+      `INSERT INTO post_likes (post_id, user_id, created_at) VALUES (?, ?, NOW())
+       ON DUPLICATE KEY UPDATE created_at = created_at`,
+      [post.id, req.user.id],
+    );
+
+    // Nur beim ERSTEN Mal melden – sonst waere Like/Unlike/Like eine Glocke,
+    // die man beliebig oft laeuten kann.
+    if (result.affectedRows === 1) {
+      await notifyQuietly({
+        userId: post.user_id,
+        actorId: req.user.id,
+        type: 'like',
+        refId: post.id,
+        title: `${req.user.name} gefällt dein Beitrag`,
+        body: post.body || null,
+      });
+    }
+
+    res.json({ data: transformPost(req, await loadPost(post.id, req.user.id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/posts/:id/like  (geschuetzt) – Gefaellt mir zuruecknehmen.
+router.delete('/posts/:id/like', requireAuth, async (req, res, next) => {
+  try {
+    const post = await loadPostOr404(req.params.id);
+    await pool.query('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?', [
+      post.id,
+      req.user.id,
+    ]);
+    res.json({ data: transformPost(req, await loadPost(post.id, req.user.id)) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/posts/:id/comments  (geschuetzt) – aelteste zuerst.
+//
+// Anders als im Chat: Unter einem Beitrag liest man von oben nach unten, und der
+// erste Kommentar ist der, auf den sich die spaeteren beziehen.
+router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
+  try {
+    const post = await loadPostOr404(req.params.id);
+    const [rows] = await pool.query(
+      `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
+         FROM post_comments c
+         JOIN users u ON u.id = c.user_id
+        WHERE c.post_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks b
+             WHERE (b.blocker_id = u.id AND b.blocked_id = ?)
+                OR (b.blocker_id = ? AND b.blocked_id = u.id)
+          )
+        ORDER BY c.id ASC
+        LIMIT ${COMMENT_LIMIT}`,
+      [post.id, req.user.id, req.user.id],
+    );
+
+    res.json({
+      data: rows.map((row) => transformComment(req, row, req.user.id, post.user_id)),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/posts/:id/comments  (geschuetzt)
+//
+// Bewusst OHNE `requireProfile`: Kommentieren darf jedes Konto. Die Stufe
+// entscheidet, wer einen eigenen Auftritt hat – nicht, wer mitreden darf.
+router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
+  try {
+    const post = await loadPostOr404(req.params.id);
+    if (await blockExistsBetween(req.user.id, post.user_id)) {
+      throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+    }
+
+    const body = String(req.body?.body ?? '').trim();
+    const v = new Validator(req.body ?? {});
+    if (!body) v.add('body', 'Schreib etwas, bevor du kommentierst.');
+    else if (body.length > MAX_COMMENT) {
+      v.add('body', `Ein Kommentar fasst hoechstens ${MAX_COMMENT} Zeichen.`);
+    } else rejectBlockedTerms(v, 'body', body, 'text');
+    v.throwIfFails();
+
+    // Kommentare laufen durch dieselbe KI-Verifizierung wie Beitraege: Sonst
+    // waere der Kommentarbereich die eine Stelle, an der ungeprueft alles
+    // durchgeht – und zwar unter fremdem Namen auf fremdem Profil.
+    const check = await moderateContent({
+      user: req.user,
+      context: 'post',
+      description: body,
+      image: null,
+    });
+    if (!check.allowed) {
+      if (check.timedOut) {
+        return res.status(403).json({
+          message: 'Dein Konto wurde automatisch gesperrt: Der Inhalt war nicht jugendfrei.',
+          ban: { reason: check.banReason, permanent: false, banned_until: check.bannedUntil },
+          moderation: {
+            severity: check.severity,
+            categories: check.categories,
+            fields: check.fields,
+            reason: check.reason,
+          },
+        });
+      }
+      throw new HttpError(
+        422,
+        check.reason ?? 'Dieser Inhalt ist nicht jugendfrei.',
+        fieldErrorsFor(check, { beschreibung: 'body', titel: 'body', bild: 'body' }),
+      );
+    }
+
+    const [result] = await pool.query(
+      'INSERT INTO post_comments (post_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())',
+      [post.id, req.user.id, body],
+    );
+
+    await notifyQuietly({
+      userId: post.user_id,
+      actorId: req.user.id,
+      type: 'comment',
+      refId: post.id,
+      title: `${req.user.name} hat deinen Beitrag kommentiert`,
+      body,
+    });
+
+    const row = await first(
+      `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
+         FROM post_comments c JOIN users u ON u.id = c.user_id WHERE c.id = ?`,
+      [result.insertId],
+    );
+
+    res.status(201).json({
+      data: transformComment(req, row, req.user.id, post.user_id),
+      post: transformPost(req, await loadPost(post.id, req.user.id)),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/comments/:id  (geschuetzt) – eigener Kommentar, eigener Beitrag, Admin.
+router.delete('/comments/:id', requireAuth, async (req, res, next) => {
+  try {
+    const row = await first(
+      `SELECT c.id, c.user_id, c.post_id, p.user_id AS post_user_id
+         FROM post_comments c JOIN posts p ON p.id = c.post_id WHERE c.id = ?`,
+      [req.params.id],
+    );
+    if (!row) throw new HttpError(404, 'Diesen Kommentar gibt es nicht.');
+
+    const mayDelete =
+      req.user.is_admin ||
+      Number(row.user_id) === Number(req.user.id) ||
+      Number(row.post_user_id) === Number(req.user.id);
+    if (!mayDelete) throw new HttpError(403, 'Das darfst du nicht.');
+
+    await pool.query('DELETE FROM post_comments WHERE id = ?', [row.id]);
+    res.json({ data: transformPost(req, await loadPost(row.post_id, req.user.id)) });
   } catch (err) {
     next(err);
   }

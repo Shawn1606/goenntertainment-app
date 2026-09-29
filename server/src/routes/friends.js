@@ -31,6 +31,8 @@ import {
   loadUser,
   transformUser,
 } from '../people.js';
+import { dropFollowsBetween } from '../follows.js';
+import { attachStories } from '../stories.js';
 
 const router = Router();
 
@@ -64,13 +66,20 @@ router.get('/friends', requireAuth, async (req, res, next) => {
       [me],
     );
 
+    // `attachStories` haengt an, ob hinter dem Bild eine Story liegt (Anzahl und
+    // „ungesehen") – daraus wird in der App der Ring um das Profilbild. Eine
+    // Abfrage je Liste statt einer je Zeile: Eine Freundesliste mit 40 Namen
+    // waere sonst 40 Abfragen, nur damit ein Ring die richtige Farbe hat.
     const withSince = (rows) =>
-      rows.map((row) => ({ ...transformUser(req, row), since: toIso(row.since) }));
+      attachStories(
+        rows.map((row) => ({ ...transformUser(req, row), since: toIso(row.since) })),
+        me,
+      );
 
     res.json({
-      friends: withSince(accepted),
-      incoming: withSince(incoming),
-      outgoing: withSince(outgoing),
+      friends: await withSince(accepted),
+      incoming: await withSince(incoming),
+      outgoing: await withSince(outgoing),
     });
   } catch (err) {
     next(err);
@@ -195,6 +204,10 @@ router.post('/blocks', requireAuth, async (req, res, next) => {
     const existing = await existingBetween(req.user.id, other.id);
     if (existing) await pool.query('DELETE FROM friendships WHERE id = ?', [existing.id]);
     await dropSharedGroupMemberships(req.user.id, other.id);
+    // Und das Abo in BEIDE Richtungen: Bliebe es stehen, bekaeme die blockierte
+    // Person weiter jede Veroeffentlichung gemeldet – genau das, was Blockieren
+    // verhindern soll.
+    await dropFollowsBetween(req.user.id, other.id);
 
     res.status(201).json({ message: 'Konto blockiert.', user: transformUser(req, other) });
   } catch (err) {

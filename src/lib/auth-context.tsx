@@ -1,6 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { api, ApiError, type RegisterInput, type UpdateProfileInput, type User } from '@/lib/api';
+import {
+  api,
+  ApiError,
+  needsTwoFactor,
+  type RegisterInput,
+  type TwoFactorChallenge,
+  type UpdateProfileInput,
+  type User,
+} from '@/lib/api';
 import { clearToken, loadToken, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
@@ -8,7 +16,14 @@ type AuthContextValue = {
   isBootstrapping: boolean;
   token: string | null;
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  /**
+   * Anmelden. Ist die Zwei-Faktor-Anmeldung an, kommt statt einer Anmeldung der
+   * Beleg für den zweiten Schritt zurück – dann `completeTwoFactor` mit dem Code.
+   * `null` heißt: angemeldet.
+   */
+  login: (email: string, password: string) => Promise<TwoFactorChallenge | null>;
+  /** Zweiter Schritt der Anmeldung: Code (oder Wiederherstellungscode) eingeben. */
+  completeTwoFactor: (challenge: string, code: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
   /**
@@ -84,6 +99,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       login: async (email, password) => {
         const result = await api.login(email, password);
+        if (needsTwoFactor(result)) return result.two_factor;
+        await applyAuth(result);
+        return null;
+      },
+      completeTwoFactor: async (challenge, code) => {
+        const result = await api.loginTwoFactor(challenge, code);
         await applyAuth(result);
       },
       register: async (input) => {

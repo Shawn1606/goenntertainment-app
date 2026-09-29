@@ -1,12 +1,14 @@
 import { API_URL } from '@/constants/config';
 import type { AccountType } from '@/domain/account';
+import type { BillingPeriod } from '@/domain/billing-period';
 
 /**
  * Die Kontostufe wohnt in der Domain-Schicht (dort stehen auch die Rechte und
  * die Texte dazu) und wird hier nur weitergereicht – so bleiben die vielen
- * `from '@/lib/api'`-Importe in der App gültig.
+ * `from '@/lib/api'`-Importe in der App gültig. Dasselbe gilt für den
+ * Zahlungsrhythmus (Monat/Jahr) aus `@/domain/billing-period`.
  */
-export type { AccountType };
+export type { AccountType, BillingPeriod };
 
 export type Interest = {
   id: number;
@@ -19,6 +21,14 @@ export type ActivityHost = {
   id: number;
   name: string;
   username: string | null;
+  /**
+   * Bild des Hosts als fertige Adresse – oder `null`.
+   *
+   * Die Karten bauen daraus ihr Banner, wenn das Event selbst keines hat: klein
+   * und scharf als Zeichen des Anbieters, gross und weichgezeichnet als
+   * Hintergrund (siehe `activity-card.tsx`).
+   */
+  avatar_url: string | null;
   /**
    * Stufe des Hosts – nur dafür da, zu wissen, ob sich der Name zum Profil
    * verlinken lässt (ein Standard-Konto hat keine öffentliche Seite).
@@ -41,6 +51,15 @@ export type Activity = {
   banner_url: string | null;
   /** Maximale Teilnehmerzahl; null = unbegrenzt. */
   max_participants: number | null;
+  /**
+   * Dauerangebot ohne festen Termin – Bowling, Trampolinhalle, Freibad.
+   *
+   * Ist das true, ist `starts_at` BEDEUTUNGSLOS (es trägt nur den Anlege-
+   * Zeitpunkt, weil die Spalte in der DB nicht leer sein darf). Nichts in der App
+   * darf damit rechnen: keine Uhrzeit anzeigen, keine Dringlichkeit, kein
+   * Zeitfenster-Filter. Warum ausführlich in `server/schema.sql`.
+   */
+  is_permanent: boolean;
   /** Von wie vielen verschiedenen Leuten das Event angesehen wurde (ohne Host). */
   views_count: number;
   host: ActivityHost | null;
@@ -124,6 +143,28 @@ export type User = {
   /** true = Admin (darf jedes Event löschen, sieht den Admin-Tab). */
   is_admin?: boolean;
   interests?: Interest[];
+  /**
+   * Aktive Zwei-Faktor-Methode – `null`/fehlend = aus. Kommt nur für das eigene
+   * Konto; Geheimnis und Wiederherstellungscodes liefert der Server nie aus.
+   */
+  two_factor_method?: TwoFactorMethod | null;
+};
+
+export type TwoFactorMethod = 'email' | 'totp';
+
+/**
+ * Zweiter Schritt der Anmeldung. Der Server gibt nach richtigem Passwort KEIN
+ * Token heraus, sondern diesen Beleg; erst mit dem Code wird daraus eine
+ * Anmeldung (`api.loginTwoFactor`).
+ */
+export type TwoFactorChallenge = {
+  /** Undurchsichtiger Beleg für genau diesen Anmeldeversuch. */
+  challenge: string;
+  method: TwoFactorMethod;
+  /** Maskierte Adresse, an die der Code ging („s***@gmail.com") – nur bei E-Mail. */
+  destination: string | null;
+  /** Sekunden, bis der Beleg verfällt. */
+  expires_in: number;
 };
 
 /** Ein Tagespunkt im Admin-Verlaufsgraphen. */
@@ -206,6 +247,14 @@ export type UpgradeRequestStatus = 'pending' | 'approved' | 'rejected';
 export type UpgradeRequest = {
   id: number;
   requested_type: AccountType;
+  /**
+   * Monats- oder Jahresabo – was die Person im Upgrade-Bildschirm gewählt hat.
+   *
+   * Steht an der Anfrage und nicht am Konto: Es ist der Wunsch zu diesem
+   * Zeitpunkt und wird mit der nächsten Anfrage überschrieben. Was tatsächlich
+   * läuft, weiß erst der Store (Tabelle `subscriptions`).
+   */
+  billing_period: BillingPeriod;
   status: UpgradeRequestStatus;
   /** Begründung der Person; null wenn keine angegeben wurde. */
   message: string | null;
@@ -401,6 +450,20 @@ export type StoriesResponse = {
  */
 export type FriendshipState = 'none' | 'friends' | 'incoming' | 'outgoing';
 
+/**
+ * Was hinter einem Profilbild an Storys liegt – der Ring darum.
+ *
+ * Bewusst nur Anzahl und „ungesehen" und nicht die Storys selbst: Eine
+ * Freundesliste mit 40 Namen würde sonst 40 Bilder mitschleppen, von denen man
+ * höchstens eins ansieht. Die Storys holt `api.userStories` beim Antippen nach.
+ */
+export type StoryMeta = {
+  /** Wie viele laufen – so viele Bögen bekommt der Ring. */
+  count: number;
+  /** true = mindestens eine ist neu. Färbt den Ring (Verlauf statt Kontur). */
+  unseen: boolean;
+};
+
 /** Eine Person, wie sie in Suche, Freundesliste und Gruppen erscheint. */
 export type PersonCard = {
   id: number;
@@ -412,6 +475,14 @@ export type PersonCard = {
   friendship?: FriendshipState;
   /** Nur in den Freundeslisten gefüllt: seit wann bzw. seit wann angefragt. */
   since?: string | null;
+  /**
+   * Laufende Storys dieser Person; `null`/fehlend = keine.
+   *
+   * Fehlend UND `null` heißen dasselbe („kein Ring"), weil ältere Server das Feld
+   * gar nicht schicken – die Liste zeichnet dann schlicht keinen Ring, statt
+   * einen zu zeigen, hinter dem nichts ist.
+   */
+  story?: StoryMeta | null;
 };
 
 export type FriendsResponse = {
@@ -560,6 +631,28 @@ export type ProfilePost = {
   body: string;
   image_url: string | null;
   created_at: string | null;
+  /** Wann zuletzt bearbeitet. Ältere Server liefern das Feld nicht. */
+  updated_at?: string | null;
+  /** true = die Beschreibung wurde nach dem Veröffentlichen geändert. */
+  edited?: boolean;
+  likes_count?: number;
+  comments_count?: number;
+  /** Habe ich das schon geliked? Trägt den Zustand des Herzens. */
+  liked_by_me?: boolean;
+};
+
+/** Ein Kommentar unter einem Beitrag. */
+export type PostComment = {
+  id: number;
+  body: string;
+  created_at: string | null;
+  /**
+   * Darf ich den löschen? Entscheidet der Server – eigener Kommentar, eigener
+   * Beitrag oder Admin. Die App zeigt den Papierkorb nur danach und rät nicht
+   * selbst, sonst laufen zwei Regeln auseinander.
+   */
+  can_delete: boolean;
+  user: PersonCard;
 };
 
 /**
@@ -589,7 +682,31 @@ export type PublicProfile = {
   };
   links: ProfileLink[];
   posts: ProfilePost[];
-  stats: { hosted: number; joined: number; posts: number };
+  /**
+   * Laufende Storys dieser Person – der Ring um ihr Profilbild, und was ein Tipp
+   * darauf öffnet.
+   *
+   * Kommt mit dem Profil und nicht aus einem zweiten Aufruf: Der Ring muss beim
+   * ersten Bild der Seite richtig aussehen, sonst erscheint er nachträglich und
+   * die Karte zuckt. Ältere Server schicken das Feld nicht – dann gibt es keinen
+   * Ring, was schlechter als die Wahrheit, aber besser als ein leerer Betrachter ist.
+   */
+  stories?: Story[];
+  /**
+   * `followers`/`following` liefern ältere Server nicht – deshalb optional.
+   * Die Anzeige rechnet dann mit 0 statt eine Lücke zu zeigen.
+   */
+  stats: {
+    hosted: number;
+    joined: number;
+    posts: number;
+    followers?: number;
+    following?: number;
+  };
+  /** Folge ich dieser Person? Trägt den Folgen-Knopf. */
+  is_following?: boolean;
+  /** Folgt sie mir? Nur eine Beschriftung – daran hängt kein Recht. */
+  follows_me?: boolean;
   /**
    * false = Visitenkarte ohne Beiträge und Social-Links (Stufe Standard).
    *
@@ -603,6 +720,38 @@ export type PublicProfile = {
   friendship?: FriendshipState;
   /** true, wenn das das eigene Profil ist (dann darf man schreiben). */
   is_me: boolean;
+};
+
+/**
+ * Sorten von Benachrichtigungen.
+ *
+ * Bewusst als String-Union UND mit Rückfall im Symbol-Mapping: Ein neuerer
+ * Server darf eine Sorte mehr schicken, ohne dass die Liste hier leer bleibt.
+ */
+export type NotificationType = 'story' | 'activity' | 'post' | 'like' | 'comment' | 'follow';
+
+/** Eine Benachrichtigung (GET /api/notifications). */
+export type AppNotification = {
+  id: number;
+  type: NotificationType;
+  /**
+   * Wohin der Tipp führt – je nach `type` eine Story-, Event-, Beitrags- oder
+   * Konto-ID. Ohne Fremdschlüssel am Server: Das Ziel kann weg sein, während die
+   * Meldung bleibt.
+   */
+  ref_id: number | null;
+  title: string;
+  body: string | null;
+  read: boolean;
+  created_at: string | null;
+  /** Wer es ausgelöst hat. `null`, wenn das Konto inzwischen weg ist. */
+  actor: PersonCard | null;
+};
+
+export type NotificationsResponse = {
+  data: AppNotification[];
+  /** Ungelesene INSGESAMT – nicht nur die auf dieser Seite. */
+  unread: number;
 };
 
 /** Ein Monatspunkt in den Business-Reihen ('2026-07' + Anzahl). */
@@ -649,6 +798,16 @@ export type AuthResult = {
   token: string;
   profile_complete: boolean;
 };
+
+/** Antwort auf /login: entweder angemeldet, oder es fehlt noch der zweite Faktor. */
+export type LoginResult = AuthResult | { two_factor: TwoFactorChallenge };
+
+export function needsTwoFactor(result: LoginResult): result is { two_factor: TwoFactorChallenge } {
+  return 'two_factor' in result && !!result.two_factor;
+}
+
+/** Bestätigung zum Abschalten der 2FA / neuen Codes: Passwort ODER aktueller Code. */
+export type SecondFactorProof = { password: string } | { code: string };
 
 export type RegisterInput = {
   name: string;
@@ -849,7 +1008,88 @@ export const api = {
     request<AuthResult>('/register', { method: 'POST', body: { ...input, device_name: 'app' } }),
 
   login: (email: string, password: string) =>
-    request<AuthResult>('/login', { method: 'POST', body: { email, password, device_name: 'app' } }),
+    request<LoginResult>('/login', { method: 'POST', body: { email, password, device_name: 'app' } }),
+
+  /* ------------------------------------------------------------ Sicherheit */
+
+  /** Zweiter Anmeldeschritt: Code (oder Wiederherstellungscode) zum Beleg. */
+  loginTwoFactor: (challenge: string, code: string) =>
+    request<AuthResult>('/login/two-factor', {
+      method: 'POST',
+      body: { challenge, code, device_name: 'app' },
+    }),
+
+  /** Neuen E-Mail-Code für denselben Anmeldeversuch (höchstens einmal pro Minute). */
+  resendTwoFactor: (challenge: string) =>
+    request<{ message: string; expires_in: number }>('/login/two-factor/resend', {
+      method: 'POST',
+      body: { challenge },
+    }),
+
+  /** 2FA per E-Mail einrichten, Schritt 1: Code an die Konto-Adresse schicken. */
+  twoFactorEmailStart: (token: string) =>
+    request<{ message: string; destination: string; expires_in: number; challenge: string }>(
+      '/user/two-factor/email',
+      { method: 'POST', token },
+    ),
+
+  /** 2FA per E-Mail einrichten, Schritt 2: Code bestätigen – danach ist sie an. */
+  twoFactorEmailConfirm: (token: string, challenge: string, code: string) =>
+    request<{ user: User; recovery_codes: string[] }>('/user/two-factor/email/confirm', {
+      method: 'POST',
+      body: { challenge, code },
+      token,
+    }),
+
+  /** Authenticator-App einrichten, Schritt 1: Geheimnis + otpauth-Link holen. */
+  twoFactorTotpStart: (token: string) =>
+    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', { method: 'POST', token }),
+
+  /** Authenticator-App einrichten, Schritt 2: ersten Code bestätigen. */
+  twoFactorTotpConfirm: (token: string, code: string) =>
+    request<{ user: User; recovery_codes: string[] }>('/user/two-factor/totp/confirm', {
+      method: 'POST',
+      body: { code },
+      token,
+    }),
+
+  /**
+   * Bei E-Mail-2FA: einen frischen Code schicken lassen – für Ausschalten, neue
+   * Wiederherstellungscodes und Konto löschen. (Bei der Authenticator-App steht
+   * der Code ohnehin in der App.) Höchstens einmal pro Minute.
+   */
+  twoFactorSendCode: (token: string) =>
+    request<{ message: string; destination: string; expires_in: number }>('/user/two-factor/code', {
+      method: 'POST',
+      token,
+    }),
+
+  /** 2FA abschalten – mit Passwort oder aktuellem Code bestätigt. */
+  twoFactorDisable: (token: string, proof: SecondFactorProof) =>
+    request<{ user: User }>('/user/two-factor', { method: 'DELETE', body: proof, token }),
+
+  /** Neue Wiederherstellungscodes – die alten werden damit ungültig. */
+  twoFactorRecoveryCodes: (token: string, proof: SecondFactorProof) =>
+    request<{ recovery_codes: string[] }>('/user/two-factor/recovery-codes', {
+      method: 'POST',
+      body: proof,
+      token,
+    }),
+
+  /** Passwort ändern (angemeldet). Meldet alle anderen Geräte ab. */
+  changePassword: (token: string, currentPassword: string, password: string) =>
+    request<{ message: string }>('/user/password', {
+      method: 'PUT',
+      body: { current_password: currentPassword, password },
+      token,
+    }),
+
+  /**
+   * Eigenes Konto endgültig löschen. `password` (bzw. bei Konten ohne Passwort
+   * `confirm: 'LÖSCHEN'`), bei aktiver 2FA zusätzlich `code`.
+   */
+  deleteAccount: (token: string, input: { password?: string; confirm?: string; code?: string }) =>
+    request<{ message: string }>('/me', { method: 'DELETE', body: input, token }),
 
   logout: (token: string) => request<{ message: string }>('/logout', { method: 'POST', token }),
 
@@ -944,6 +1184,19 @@ export const api = {
 
   /** Laufende Storys, ungesehene zuerst. */
   stories: (token: string) => request<StoriesResponse>('/stories', { token }),
+
+  /**
+   * Die laufenden Storys EINER Person, älteste zuerst.
+   *
+   * Für den Tipp auf ein Profilbild in einer Liste: Dort steht nur, DASS etwas
+   * läuft (`PersonCard.story`) – die Bilder holt dieser Aufruf beim Antippen
+   * nach, statt sie in jeder Liste mitzuschleppen.
+   *
+   * Eine leere Liste ist kein Fehler: Zwischen dem Laden der Liste und dem Tipp
+   * kann eine Story ablaufen.
+   */
+  userStories: (token: string, userId: number) =>
+    request<{ data: Story[] }>(`/users/${userId}/stories`, { token }),
 
   /** Story anlegen (ab Creator; multipart wegen Bild). */
   createStory: (token: string, image: ImageUpload, caption: string) => {
@@ -1174,9 +1427,98 @@ export const api = {
     return upload<{ data: ProfilePost }>(token, '/posts', form);
   },
 
+  /**
+   * Beschreibung eines eigenen Beitrags nachträglich setzen oder ändern.
+   *
+   * Nur der Text – ein ausgetauschtes Bild unter einem Beitrag, den schon jemand
+   * geliked hat, wäre ein anderer Beitrag. Der Text läuft durch dieselbe
+   * KI-Verifizierung wie beim Anlegen.
+   */
+  updatePost: (token: string, id: number, body: string) =>
+    request<{ data: ProfilePost }>(`/posts/${id}`, { method: 'PATCH', body: { body }, token }),
+
   /** Eigenen Beitrag löschen (Admins jeden). */
   deletePost: (token: string, id: number) =>
     request<{ message: string }>(`/posts/${id}`, { method: 'DELETE', token }),
+
+  /**
+   * Gefällt mir setzen bzw. zurücknehmen.
+   *
+   * Beide Richtungen antworten mit dem VOLLSTÄNDIGEN Beitrag samt neuen Zahlen –
+   * so muss die App nicht selbst hoch- und runterzählen und kann nicht
+   * auseinanderlaufen, wenn zwei Tipps schnell hintereinander kommen.
+   */
+  likePost: (token: string, id: number) =>
+    request<{ data: ProfilePost }>(`/posts/${id}/like`, { method: 'POST', token }),
+
+  unlikePost: (token: string, id: number) =>
+    request<{ data: ProfilePost }>(`/posts/${id}/like`, { method: 'DELETE', token }),
+
+  /** Kommentare eines Beitrags – älteste zuerst. */
+  postComments: (token: string, id: number) =>
+    request<{ data: PostComment[] }>(`/posts/${id}/comments`, { token }),
+
+  /** Kommentieren. Darf jede Kontostufe – die Stufe entscheidet nur über eigene Auftritte. */
+  addComment: (token: string, id: number, body: string) =>
+    request<{ data: PostComment; post: ProfilePost }>(`/posts/${id}/comments`, {
+      method: 'POST',
+      body: { body },
+      token,
+    }),
+
+  /** Kommentar löschen (eigener, oder jeder unter dem eigenen Beitrag). */
+  deleteComment: (token: string, id: number) =>
+    request<{ data: ProfilePost }>(`/comments/${id}`, { method: 'DELETE', token }),
+
+  /* ------------------------------------------------------------------ Folgen */
+
+  /**
+   * Einer Person folgen – einseitig und ohne Anfrage.
+   *
+   * Das ist bewusst etwas anderes als eine Freundschaft: Freundschaft ist ein
+   * Vertrag zu zweit und schaltet Gruppen und Chats frei, Folgen ist ein Abo auf
+   * das, was jemand veröffentlicht. Beides steht deshalb nebeneinander auf dem
+   * Profil und nicht anstelle des anderen.
+   */
+  followUser: (token: string, userId: number) =>
+    request<{ is_following: boolean; followers: number; following: number }>(
+      `/users/${userId}/follow`,
+      { method: 'POST', token },
+    ),
+
+  unfollowUser: (token: string, userId: number) =>
+    request<{ is_following: boolean; followers: number; following: number }>(
+      `/users/${userId}/follow`,
+      { method: 'DELETE', token },
+    ),
+
+  /** Wer dieser Person folgt. */
+  followers: (token: string, username: string) =>
+    request<{ data: (PersonCard & { is_following: boolean })[] }>(
+      `/users/${encodeURIComponent(username)}/followers`,
+      { token },
+    ),
+
+  /** Wem diese Person folgt. */
+  following: (token: string, username: string) =>
+    request<{ data: (PersonCard & { is_following: boolean })[] }>(
+      `/users/${encodeURIComponent(username)}/following`,
+      { token },
+    ),
+
+  /* --------------------------------------------------- Benachrichtigungen */
+
+  /** Neueste zuerst, dazu der Ungelesen-Zähler für die Glocke. */
+  notifications: (token: string) =>
+    request<NotificationsResponse>('/notifications', { token }),
+
+  /** Alles abhaken – der Hauptweg: Man liest sie als Stapel, nicht einzeln. */
+  markNotificationsRead: (token: string) =>
+    request<{ unread: number }>('/notifications/read', { method: 'POST', token }),
+
+  /** Eine einzelne abhaken – wenn man genau sie antippt und wegspringt. */
+  markNotificationRead: (token: string, id: number) =>
+    request<{ unread: number }>(`/notifications/${id}/read`, { method: 'POST', token }),
 
   /**
    * Profilbild oder Karten-Hintergrund setzen bzw. entfernen.
@@ -1286,11 +1628,28 @@ export const api = {
   upgradeRequest: (token: string) =>
     request<UpgradeRequestResponse>('/me/upgrade-request', { token }),
 
-  /** Eine Stufe anfragen. Ersetzt eine vorhandene Anfrage desselben Kontos. */
-  requestUpgrade: (token: string, accountType: AccountType, message?: string) =>
+  /**
+   * Eine Stufe anfragen. Ersetzt eine vorhandene Anfrage desselben Kontos.
+   *
+   * `billingPeriod` ist Pflicht und hat bewusst keinen Standardwert: Der
+   * Rhythmus ist die zweite Hälfte des Angebots, und ein stiller Vorgabewert an
+   * dieser Stelle wäre eine Annahme darüber, was jemand zahlen will. Was im
+   * Bildschirm vorausgewählt ist, entscheidet `DEFAULT_BILLING_PERIOD` in
+   * `@/domain/billing-period` – an einer Stelle und sichtbar.
+   */
+  requestUpgrade: (
+    token: string,
+    accountType: AccountType,
+    billingPeriod: BillingPeriod,
+    message?: string,
+  ) =>
     request<{ data: UpgradeRequest }>('/me/upgrade-request', {
       method: 'POST',
-      body: { account_type: accountType, message: message ?? '' },
+      body: {
+        account_type: accountType,
+        billing_period: billingPeriod,
+        message: message ?? '',
+      },
       token,
     }),
 

@@ -526,6 +526,28 @@ export function HeartIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) 
   );
 }
 
+/**
+ * Gefülltes Herz – „gefällt mir" ist gesetzt.
+ *
+ * Eigene Zeichnung und nicht bloß `fill` am Umriss: Der Umriss hat eine Kerbe
+ * oben, die bei gefüllter Fläche als heller Spalt stehen bleibt. Gleiches Muster
+ * wie bei `StarFilledIcon` – Kontur und Füllung in derselben Farbe, damit die
+ * Form geschlossen wirkt.
+ */
+export function HeartFilledIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Path
+        d="M12 20s-7-4.3-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.7-7 9-7 9Z"
+        fill={color}
+        stroke={color}
+        strokeWidth={1.7}
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 /** Büroklammer – Anhang. */
 export function PaperclipIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
   return (
@@ -871,6 +893,155 @@ export function StarFilledIcon({ size = 20, color = '#6366f1', ...rest }: IconPr
         strokeWidth={1.7}
         strokeLinejoin="round"
       />
+    </Svg>
+  );
+}
+
+/* ------------------------------------------------------------------------
+ * Navigation und Feed im Instagram-/TikTok-Stil
+ * --------------------------------------------------------------------- */
+
+/** Haus – Home/Feed. */
+export function HomeIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4 10.5 12 4l8 6.5V19a1 1 0 0 1-1 1h-4.5v-5.5h-5V20H5a1 1 0 0 1-1-1v-8.5Z" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Gefaltete Karte – die Kartenansicht. */
+export function MapIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M9 5 3.5 7v12L9 17l6 2 5.5-2V5L15 7 9 5Z" />
+        <Path d="M9 5v12M15 7v12" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Kästchen mit Plus – „Erstellen" (das ＋ von Instagram). */
+export function PlusSquareIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={3.5} y={3.5} width={17} height={17} rx={5} />
+        <Path d="M12 8v8M8 12h8" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Lesezeichen – „merken". */
+export function BookmarkIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M6.5 4h11a.5.5 0 0 1 .5.5V20l-6-4.2L6 20V4.5a.5.5 0 0 1 .5-.5Z" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Gefülltes Lesezeichen – gemerkt. */
+export function BookmarkFilledIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Path
+        d="M6.5 4h11a.5.5 0 0 1 .5.5V20l-6-4.2L6 20V4.5a.5.5 0 0 1 .5-.5Z"
+        fill={color}
+        stroke={color}
+        strokeWidth={1.7}
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+/** Raster – Profil-Kacheln („Erstellt"). */
+export function GridIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={4} y={4} width={16} height={16} rx={2} />
+        <Path d="M9.33 4v16M14.67 4v16M4 9.33h16M4 14.67h16" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Drei Striche – Menü (Einstellungen auf dem Profil, wie bei Instagram). */
+export function MenuIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4 7h16M4 12h16M4 17h16" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Person mit Plus – Freund:in hinzufügen. */
+export function UserPlusIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Circle cx={9.5} cy={8} r={3.5} />
+        <Path d="M3.5 19.5c.6-3.3 3-5.3 6-5.3s5.4 2 6 5.3" />
+        <Path d="M18.5 8v6M15.5 11h6" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Tür mit Pfeil – abmelden. */
+export function LogoutIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M10 4H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4" />
+        <Path d="M14 8l4 4-4 4M18 12H9.5" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Handy – Authenticator-App. */
+export function PhoneIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={6.5} y={3} width={11} height={18} rx={2.5} />
+        <Path d="M10.5 17.5h3" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Zwei Blätter – kopieren. */
+export function CopyIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={8.5} y={8.5} width={11} height={11} rx={2} />
+        <Path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Schild mit Haken – Zwei-Faktor-Schutz aktiv. */
+export function ShieldCheckIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M12 3.5 5 6v5.5c0 4.3 2.9 7.6 7 9 4.1-1.4 7-4.7 7-9V6l-7-2.5Z" />
+        <Path d="m9 12 2.2 2.2L15.5 10" />
+      </Stroke>
     </Svg>
   );
 }

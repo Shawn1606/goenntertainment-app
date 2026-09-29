@@ -1,0 +1,18 @@
+# Was NICHT ins Abbild wandert.
+#
+# .env ist der wichtigste Eintrag: die echten Zugangsdaten kommen auf dem Server
+# aus dem Compose (deploy/.env), nicht aus einer mitgebauten Datei. Waere sie hier
+# drin, truege jedes Abbild dein lokales DB-Passwort und den Anthropic-Key mit sich.
+.env
+.env.*
+
+# Kommt aus `npm ci` im Abbild neu – die Windows-Variante hier waere nicht nur
+# unnoetig gross, sondern teilweise die falsche Architektur.
+node_modules/
+
+# Nutzer-Uploads. Liegen als Bind-Mount auf dem Server und gehoeren nicht in ein
+# Abbild, das man weitergibt.
+storage/
+
+test/
+*.md

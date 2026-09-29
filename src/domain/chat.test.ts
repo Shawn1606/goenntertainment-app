@@ -7,7 +7,6 @@ import {
   groupByDay,
   highestId,
   showsAuthor,
-  unreadBadge,
   validateDraft,
 } from './chat.ts';
 
@@ -86,20 +85,8 @@ test('eine andere Person zeigt immer ihren Namen', () => {
   assert.equal(showsAuthor(theirs, mine), true);
 });
 
-/* ------------------------------------------------------------- Ungelesene */
-
-test('die Plakette zeigt die Zahl – und ab 100 nur noch „99+"', () => {
-  assert.equal(unreadBadge(0), null);
-  assert.equal(unreadBadge(1), '1');
-  assert.equal(unreadBadge(99), '99');
-  assert.equal(unreadBadge(100), '99+');
-  assert.equal(unreadBadge(4000), '99+');
-});
-
-test('unsinnige Zahlen ergeben keine Plakette', () => {
-  assert.equal(unreadBadge(-3), null);
-  assert.equal(unreadBadge(Number.NaN), null);
-});
+// Die Ungelesen-Plakette wird in `unread-badge.test.ts` geprüft – sie gehört
+// nicht mehr allein den Chats.
 
 /* ---------------------------------------------------------------- Cursor */
 

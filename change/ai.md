@@ -1587,3 +1587,275 @@ tests: tsc 0, eslint 0, App 240/240 (54 neu), Server 168/168 (41 neu, davon 15 I
 NICHT verifiziert: Handy (nur Web), Teilen-Blatt (Share/Linking gibt es im Web-Build nur als
   navigator.share-Fallback), Event-Chat mit echtem Event (Registrierung gibt nur 'standard', ein
   Event braucht Creator) – die Route ist aber durch test/chat.test.js abgedeckt.
+
+STEP N+1: Chat-Sackgasse, Story-Gruppierung, Folgen, Post-Interaktion, Benachrichtigungen
+=========================================================================================
+Ausloeser (User-Report): "im Chat Tab kommt man nicht zurueck" + "ActivityCard,
+ActivityDetailModal, ActivityFilterBar nicht mehr funktionstuechtig, damit ich die App wieder
+oeffnen kann".
+
+DIAGNOSE: EIN Fehler, nicht vier. src/app/chats.tsx hatte KEINERLEI Zurueck-Affordanz
+  (globaler Stack laeuft mit headerShown: false, chat.tsx hatte einen Close-Knopf, chats.tsx
+  nicht). Die Route ist eine Stack-Route und liegt damit UEBER der NativeTabs-Leiste
+  (app-tabs.tsx) -> wer aus friends.tsx dorthin pusht, sieht die Leiste nicht mehr und kommt
+  nicht zurueck. Damit ist die Startseite unerreichbar, und mit ihr die drei genannten
+  Komponenten. Sie waren nie defekt.
+  Gegenprobe: tsc 0, eslint 0, Web-Bundle laedt, Android-Bundle baut (11,3 MB via
+  /.expo/.virtual-metro-entry.bundle?platform=android) - kein Bundling-/Typfehler.
+  Audit ueber alle Stack-Routen: nur chats.tsx war betroffen (pick-location delegiert an
+  location-picker.tsx, das router.back() hat; admin.tsx ist der eigene Browser-Login).
+
+app:
+  - chats.tsx: Kopfzeile mit ChevronLeftIcon -> goBack() (Rueckfall auf '/' ohne Verlauf).
+  - domain/story.ts: groupStories/firstUnseenIndex/stepStory + GroupableStory/StoryGroup.
+    Gruppen in Server-Reihenfolge (erstes Auftreten), INNERHALB nach Alter aufsteigend
+    (Date.parse, Rueckfall ID). Gruppiert ueber user.id, nicht ueber den Namen.
+    stepStory kapselt alle vier Randfaelle; -1 gibt nie null (Zurueck beendet nie).
+    Struktureller Typ statt `import type { Story }`: node --test kennt den @/-Alias nicht.
+  - story-rail.tsx: ein Ring je Gruppe, Zaehl-Plakette ab 2, eigene Gruppe nach vorn und mit
+    Plus-Plakette statt separatem CreateBubble (Anzeigereihenfolge umsortiert, INDIZES bleiben
+    die der uebergebenen Liste - der Viewer arbeitet damit).
+  - story-viewer.tsx: groups + startGroup statt stories + startIndex; Zeitleiste nur fuer die
+    aktuelle Gruppe; Kopfzeile mit Avatar, "n/m" und Profil-Link (onOpenProfile).
+    Der Sprung-Effekt haengt NUR an startGroup - `groups` in den Deps wuerde bei jedem
+    seen-Update zurueck an den Anfang springen (eslint-disable mit Begruendung).
+  - (app)/index.tsx: storyGroups via useMemo; Glocke in topBarRight mit unreadBadge;
+    handleStoryProfile (erst schliessen, dann pushen - wie der Host-Link im Event-Popup).
+    BUGFIX grouped.other: war `!(recommendedIds.has && nearbyIds.has)` -> fiel nur heraus,
+    wenn BEIDES zutraf, praktisch nie. Jedes Event stand doppelt auf der Seite. Jetzt ein
+    `shown`-Set aus recommended+nearby+live+saved; das Regal verschwindet, wenn leer.
+  - profile/[username].tsx: headerTransparent + headerShadowVisible:false + headerTintColor;
+    paddingTop aus useHeaderHeight() (@react-navigation/elements, transitiv - wie
+    @react-navigation/native in _layout.tsx). BANNER_OPACITY 0.38 und nur noch EIN Schleier
+    (der zweite, surface.chipBg, gab der Karte ihre Toenung zurueck - unnoetig, seit das Bild
+    durchsichtig ist). Follower/Folgt als eigene, kraeftigere Zeile ueber den drei Zahlen.
+    Folgen + Befreunden nebeneinander; friendLabel gekuerzt, weil zweispaltig.
+  - components/profile-post-card.tsx (neu): Herz, Kommentare (lazy geladen), Editor fuer die
+    Beschreibung. Eigene Komponente, weil vier unabhaengige Zustaende sonst PRO BEITRAG im
+    Screen liegen und ueber IDs auseinandergehalten werden muessten.
+    Nur das Herz wird vorweggenommen; alle Zahlen kommen aus der Server-Antwort.
+  - app/notifications.tsx (neu) + domain/notification.ts (+Tests): notificationTarget/-Icon.
+    story -> '/' (es gibt keine Story-Adresse, und nach 24 h zeigte sie ins Leere),
+    like/comment -> EIGENES Profil, post/follow -> fremdes. Unbekannte Sorte: 'bell', kein Ziel.
+    Abhaken erst NACH dem Laden (sonst ist die Liste beim ersten Blick schon grau).
+  - domain/unread-badge.ts (neu): unreadBadge aus chat.ts herausgeloest, 3 Aufrufer umgestellt,
+    Tests mitgezogen. Sonst waere die Glocke der zweite Ort mit derselben Regel.
+  - ui/icons.tsx: HeartFilledIcon (eigene Zeichnung wie StarFilledIcon - blosses `fill` am
+    Umriss laesst die Kerbe oben als hellen Spalt stehen).
+  - api.ts: ProfilePost um updated_at/edited/likes_count/comments_count/liked_by_me erweitert
+    (alle optional -> alter Server bleibt bedienbar), PostComment, AppNotification,
+    PublicProfile.stats.followers/following + is_following/follows_me;
+    updatePost/likePost/unlikePost/postComments/addComment/deleteComment/
+    followUser/unfollowUser/followers/following/notifications/markNotifications(Read).
+
+server:
+  - db.js + schema.sql: follows, post_likes, post_comments, notifications.
+    notifications.ref_id BEWUSST ohne FK - die Meldung muss ihren Gegenstand ueberleben
+    (Story: 24 h), deshalb tragen title/body den Text fertig.
+  - follows.js (neu): isFollowing/followCounts/follow/unfollow/dropFollowsBetween/followerIdsOf.
+    follow() gibt affectedRows===1 zurueck -> nur eine WIRKLICH neue Folge benachrichtigt.
+    followerIdsOf filtert Blocks selbst, obwohl dropFollowsBetween sie beim Blockieren
+    entfernt: ein Block kann aelter sein als diese Funktion.
+  - notifications.js (neu): notify/notifyFollowers/notifyQuietly/transformNotification.
+    Fan-out in Bloecken zu 200; ALLE Fan-out-Wege schlucken ihre Fehler - die Story ist
+    veroeffentlicht, sobald sie in der Tabelle steht.
+  - routes/notifications.js (neu): GET /notifications (+unread), POST /notifications/read,
+    POST /notifications/:id/read (404 statt 403 bei fremder Meldung).
+  - routes/profile.js: POST_SELECT (2 Unterabfragen statt JOIN+GROUP BY - zwei unabhaengige
+    Zaehlungen multiplizieren sich im JOIN), COMMENT_USER_COLUMNS ausgeschrieben statt aus
+    USER_COLUMNS abgeleitet (u.id wuerde die Kommentar-ID still ueberschreiben).
+    Neu: POST/DELETE /users/:id/follow, GET /users/:username/{followers,following},
+    PATCH /posts/:id, POST/DELETE /posts/:id/like, GET/POST /posts/:id/comments,
+    DELETE /comments/:id. POST /posts akzeptiert jetzt Text ODER Bild (vorher Text Pflicht) -
+    Voraussetzung fuer "Foto posten, Beschreibung spaeter".
+    PATCH hat KEINE Admin-Ausnahme: Ein Admin darf loeschen, nicht in fremdem Namen formulieren.
+    Kommentare ohne requireProfile - die Stufe entscheidet ueber eigene Auftritte, nicht ueber
+    Mitreden. PATCH und Kommentare laufen durch moderateContent.
+  - routes/{stories,activities}.js: notifyFollowers nach dem Speichern.
+  - routes/friends.js: dropFollowsBetween beim Blockieren.
+  - Anzeigetexte der Meldungen mit echten Umlauten (der Rest der Server-Dateien ist ASCII) -
+    derselbe Fehler wie frueher bei den Coupon-Titeln.
+
+tests: tsc 0, eslint 0, App 268/268 (28 neu), Server 168/168.
+  Durchgespielt (expo web 8082 + Backend 8000, zwei Wegwerf-Konten, danach geloescht):
+    /chats: Zurueck-Knopf da, fuehrt auf die Startseite (Verlauf leer -> replace('/')).
+    Startseite: "3 Storys von dir" als EIN Ring + Plus-Plakette, Glocke "3 ungelesen",
+      "Alles entdecken" verschwunden (das einzige Event stand schon in "Jetzt oder gleich").
+    Story-Viewer: "Creator - 3/3 - noch 23 Stunden", laeuft automatisch weiter, schliesst am
+      Ende, Ring danach "schon gesehen"; Profil-Link navigiert auf /profile/:name.
+    Profil: headerBg rgba(0,0,0,0), Titel "Test Creator", "Zurueck"-Knopf bei top 17,
+      Inhalt startet bei 106 (unter der 64px-Kopfzeile) - keine Ueberdeckung.
+      Zahlen 1/0/2/0/0 (Follower/Folgt/Beitraege/Veranstaltet/Mitgemacht).
+    Aus Sicht B: Folgen -> "Gefolgt", Followerzahl 0->1; Like 0->1; Kommentar ueber die UI
+      geschrieben (Umlaute korrekt), Zaehler 0->1.
+    PATCH-Umlaut-Rundlauf ueber fetch geprueft (Git-Bash-Konsole verfaelscht curl-Eingaben,
+      der gespeicherte Wert war korrekt).
+    Fan-out: Story, Event und Beitrag von A erzeugen je eine Meldung bei Follower B.
+    Konsole nach sauberem Neuladen in frischem Tab: 0 Fehler. (Die zwei zwischenzeitlichen
+    Fehler stammten aus HMR-Zwischenstaenden waehrend der Bearbeitung - Stacks zeigen
+    performReactRefresh.)
+NICHT verifiziert: Handy (nur Web-Build), keine Bildschirmfotos (Vorschau-Pane ausgeblendet ->
+  Browser kompositiert keine Frames). Push-Benachrichtigungen gibt es weiterhin nicht - die
+  Glocke fuellt sich nur, solange die App laeuft.
+
+STEP N+2: Blur hinter dem Detail-Blatt, segmentierter Story-Ring
+================================================================
+User-Report: "Activity Banner ist noch immer durchsichtig wenn ich draufklicke,
+bitte Blur-Hintergrund, damit man besser lesen kann."
+
+DIAGNOSE (im Browser nachgemessen): Das Blatt ist `GlassSurface tone="panel"` ->
+  `glass.fillStrong` = rgba(...,0.84/0.86). Echtes Weichzeichnen macht GlassSurface nur
+  ueber `backdrop-filter` (nur Web) und Liquid Glass (nur iOS 26). Auf Android bleibt
+  eine 84 % deckende Flaeche ueber einem 0.5-Scrim -> Startseite scheint sichtbar durch.
+  `BlurView` ist hier KEIN Ausweg: expo-blur zeichnet nur weich, was in SEINEM Fenster
+  liegt, und das Blatt ist ein `Modal` (dieselbe Falle steht in account-widget.tsx,
+  das deshalb bewusst kein Modal ist).
+
+activity-detail-modal.tsx:
+  - Neue Ebene als ERSTES Kind der GlassSurface (`sheetBackdrop`, zIndex 0, das
+    overflow:hidden der Glasflaeche schneidet den Ueberhang):
+      1. deckender Grund (useTheme().background) -> nichts scheint mehr durch,
+      2. der Banner DIESES Events via expo-image blurRadius=40, opacity 0.5,
+         mit Bleed 3x (Gauss reicht ~3 σ – gleiche Rechnung wie profile/[username]),
+      3. ein Schleier (glass.fill) fuer den Textkontrast.
+    Ohne Banner bleibt es bei Schritt 1 – auch dann ist nichts durchsichtig.
+  - Der scharfe Banner im Scroll-Inhalt bleibt unveraendert.
+
+story-rail.tsx: `ringDash` aus domain/story.ts verdrahtet (war geschrieben und
+  getestet, aber nirgends benutzt). Neue `Ring`-Komponente: react-native-svg statt
+  expo-linear-gradient, weil ein Verlauf keine Luecken kann – Boegen brauchen
+  `strokeDasharray`. Der Markenverlauf wandert in <Defs> und faerbt die Kontur.
+  Gedreht wird das SVG per Style (-90deg), NICHT der Circle per `rotation`/`origin`:
+  react-native-svg reicht `origin` im Web als `transform-origin` ans DOM durch, und
+  React lehnt das ab -> "Invalid DOM property" bei jedem Ring. Im Browser
+  nachgemessen: dasharray 44.30/4 bei 4 Storys (Umfang 193.2 / 4 - 4), Kreis mittig,
+  Konsole 0 Fehler.
+
+tests: tsc 0, eslint 0, App 274/274, Server 168/168.
+  Browser (kalter Tab, Wegwerf-Konto danach geloescht): Blatt-Ebenen gemessen –
+  rgb(10,10,10) deckend / img filter blur(40px) opacity 0.5 / rgba(23,23,23,0.58).
+NICHT verifiziert: Handy. Genau dort ist der Unterschied am groessten, weil der Web-
+  Build zusaetzlich `backdrop-filter` hat und Android gar nichts hatte.
+
+STEP N+3: Jahresabo – Preise, Umschalter im Upgrade-Menue, Rhythmus an der Anfrage
+=================================================================================
+User-Wunsch: "kannst du die Option geben ein Jahres Abo zu machen das bedeutet aber
+auch das dass Upgrade Menue ausgebaut werden muss".
+
+MODELL (die eine Entscheidung, aus der alles folgt): Der Rhythmus ist KEINE fuenfte
+  Kontostufe, sondern eine zweite Achse quer zur Leiter. Ein Jahresabo schaltet
+  nichts anderes frei; beide Store-Produkte einer Stufe haengen bei RevenueCat am
+  SELBEN Entitlement. Folge: tierFromEntitlements, die Tabelle `subscriptions` und
+  der Webhook bleiben unveraendert – der Server musste den Rhythmus nur einlesen.
+
+src/domain/account.ts:
+  + AccountTier.yearlyPriceCents (0 = kein Jahresabo). 7990 / 14990 / 29990 =
+    zehn Monatsbeitraege, also zwei geschenkt. AUSGESCHRIEBEN, nicht gerechnet:
+    Der Nachlass ist eine Preisentscheidung je Stufe; eine Formel stimmt nicht
+    mehr, sobald eine Stufe 20 % und eine andere 15 % nachlaesst.
+  - monthlyPriceLabel() entfernt -> priceLabel(tier, period) in billing-period.ts.
+    Eine Monatsvariante daneben waere eine zweite Wahrheit fuer dieselbe Zeile.
+    (Hatte KEINE UI-Aufrufer, nur account.test.ts.)
+
++ src/domain/billing-period.ts (+ .test.ts, 18 Tests):
+  BILLING_PERIODS (label/unit/adverb), DEFAULT_BILLING_PERIOD='yearly',
+  normalizeBillingPeriod (Rueckfall 'monthly'), priceCentsFor, priceLabel,
+  periodsFor/hasYearlyPlan, monthlyEquivalentCents/Label, savedCentsPerYear,
+  freeMonths, savingsPercent, savingsLabel.
+  RUNDUNGSRICHTUNG ist der Kern: Vergleichspreis ceil (7990/12 -> 6,66 €, damit
+    12x nicht unter dem Jahrespreis liegt), Nachlass floor (16,67 % -> 16 %).
+    Jede Zusage wird aus den zwei Preisen ABGELEITET, nie danebengeschrieben.
+  ZWEI RICHTUNGEN, absichtlich verschieden: Vorauswahl 'yearly' (Anzeige, das
+    guenstigere Angebot) vs. Rueckfall 'monthly' (Daten, kleinere Verpflichtung).
+
+src/app/upgrade.tsx:
+  + Umschalter als radiogroup/radio, zwei gleich breite Felder, BEIDE Preise
+    gleichzeitig sichtbar + Etikett "2 Monate gratis" am Jahresfeld + Nachsatz
+    "entspricht 6,66 € pro Monat" (nur bei 'yearly').
+  + Zustand als `aria-checked` und NICHT accessibilityState={{checked}}:
+    im Browser nachgemessen – rn-web 0.21 bringt accessibilityState nicht ins DOM
+    (Attribut fehlte ganz), aria-checked schon. RN macht daraus auf dem Handy
+    wieder accessibilityState. Betrifft auch die Pillen in glass.tsx (dort weiter
+    accessibilityState={{selected}} -> im Web stumm), nicht in diesem Schritt geaendert.
+  + activePeriod-Fallback: Auswahl gilt nur, solange sie in periodsFor(target) steht
+    (sonst stuende bei einer Stufe ohne Jahresabo "kostenlos" unter dem Angebot).
+  + <2 Rhythmen -> kein Umschalter, nur die Preiszeile.
+  Admin-Weg (onSwitch) ignoriert den Rhythmus bewusst: keine Zahlung, keine Anfrage.
+
+src/app/admin-requests.tsx: Meta-Zeile beginnt mit "jaehrlich · 79,90 € / Jahr" –
+  in der Meta-Zeile und nicht in "Standard -> Creator", weil die nach der
+  Entscheidung verschwindet. Ohne den Rhythmus ist "Creator" zwei Betraege.
+
+src/lib/api.ts: UpgradeRequest.billing_period; requestUpgrade(token, type, period, msg?)
+  – Rhythmus PFLICHT-Parameter ohne Standardwert (der Standard steht sichtbar in
+  DEFAULT_BILLING_PERIOD, nicht versteckt in der API-Schicht).
+
+server: schema.sql + db.js (hasColumn-Migration) account_upgrade_requests.billing_period
+  VARCHAR(10) NOT NULL DEFAULT 'monthly'; VARCHAR wie requested_type, nicht ENUM ->
+  ein dritter Rhythmus braucht kein ALTER TABLE. Bestandszeilen sind mit 'monthly'
+  nicht bloss vorbelegt, sondern richtig (es gab damals kein Jahresabo).
+  subscriptions.js: BILLING_PERIODS + normalizeBillingPeriod (nur Namen, keine
+  Preise – abgebucht wird im Store).
+  routes/upgrades.js: Feld FEHLT -> 'monthly' (aeltere App-Version im Store muss
+  weiter anfragen koennen); Feld FALSCH -> 422 (verschriebenes 'jaehrlich' waere
+  sonst von gemeintem 'monthly' nicht zu unterscheiden).
+
+tests: tsc 0, eslint 0, App 310/310, Server 217/217 (+ 2 API-Tests: Rhythmus fehlt/
+  falsch, Rhythmus wird ersetzt).
+  Browser 8098 (Wegwerf-Konto, danach geloescht): Creator 7,99 / 79,90 + "2 Monate
+  gratis" + "entspricht 6,66 € pro Monat"; Umschalten entfernt den Nachsatz;
+  aria-checked false/true; Anfrage -> "Creator jaehrlich angefragt … ueber
+  79,90 € / Jahr"; Admin-Liste "jaehrlich · 79,90 € / Jahr · angefragt am …";
+  375 px mit Business Plus: Felder je 134 px, laengster Text 109 px, kein Umbruch,
+  kein Ueberlauf. Konsole 0 Fehler.
+NICHT verifiziert: Handy (dort entscheidet sich, ob aria-checked wirklich als
+  Vorlese-Zustand ankommt) und der echte Kauf – es gibt weiter keinen IAP-Code
+  (react-native-purchases ist nicht installiert), der Knopf heisst "anfragen".
+OFFEN fuer den Kauf: je Stufe ein zweites Store-Produkt (.yearly) auf dasselbe
+  Entitlement, alle sechs in EINER Subscription Group, und die angezeigten Preise
+  muessen dann vom Store kommen (begruendet an monthlyPriceCents).
+
+STEP N+5: App vom Heim-WLAN loesen – Backend-Adresse kommt aus der Umgebung
+==========================================================================
+User-Wunsch: "wie mache ich also kurzgefasst die app nicht mehr abhaengig das sie im
+selben Wlan sein muss" -> "kannst du die app Wlan unabhaengig jetzt machen?".
+
+MODELL: Die Backend-Adresse ist keine Programmzeile, sondern Umgebung. Sie unterscheidet
+  sich je Build (Dev = LAN-IP, APK = oeffentliche Adresse), also darf sie nicht im Code
+  stehen – sonst ist "WLAN-unabhaengig" jedes Mal ein Commit.
+
+src/constants/config.ts: HARDCODED_API_URL entfernt. API_BASE_URL kommt aus
+  process.env.EXPO_PUBLIC_API_URL, Notnagel bleibt guessDevHost(). Der Ausdruck MUSS
+  ausgeschrieben dastehen – Metro ersetzt nur die statische Form, process.env['…'] oder
+  Destrukturieren bleibt im Build undefined. Trailing Slash wird abgeschnitten (eine von
+  Hand kopierte Tunnel-URL endet oft auf "/" -> sonst //api). Fehlt der Wert, warnt die
+  Datei in __DEV__: das Raten liefert hier 127.0.0.1 oder Hamachi 25.x, und der Fehler
+  zeigt sich sonst erst als haengender Login.
+
+.env.local (nicht im Git, .gitignore:34): EXPO_PUBLIC_API_URL=http://192.168.178.44:8000
+  – dieselbe IP wie vorher im Code, Dev-Verhalten also unveraendert, kein Regress.
+.env.example (neu): Vorlage mit den drei Faellen LAN-IP / Tunnel / Domain.
+eas.json (neu): development (dev-client, apk) OHNE env – der Dev-Client holt sein JS von
+  Metro, dort greift .env.local; preview (apk) und production (app-bundle) mit
+  EXPO_PUBLIC_API_URL. Der Platzhalter endet auf .invalid (reservierte TLD, loest nie
+  auf): ein Build mit unausgefuellter URL scheitert dann sofort und laut, statt still
+  auf eine falsche Adresse zu zeigen.
+.claude/commands/wlan.md: Schritt 3 repariert .env.local statt config.ts; Datei fehlt ->
+  aus .env.example anlegen; steht dort https:// (Tunnel), NICHT auf die LAN-IP
+  zurueckdrehen – das ist dann Absicht.
+
+KEIN Server-Code noetig: media.js:21 baut Bildadressen aus dem Request-Host, solange
+  PUBLIC_URL leer ist -> durch einen Tunnel kommen Banner und Avatare automatisch unter
+  der Tunnel-Adresse. PUBLIC_URL hier zu setzen waere der Fehler.
+KEIN usesCleartextTraffic / keine iOS-ATS-Ausnahme: die oeffentliche Adresse ist https.
+  Beides waere nur noetig, wenn ein Release-Build weiter per http auf die LAN-IP zeigt.
+
+tests: tsc 0. `npx expo export --platform web` -> im Bundle steht
+  const o="http://192.168.178.44:8000" (Wert eingesetzt, kein process.env-Zugriff mehr).
+  Das ist der Beweis, dass ein APK die Adresse mitgebacken bekommt.
+NICHT verifiziert: echter EAS-Build und Handy ausserhalb des WLANs – dafuer fehlt die
+  oeffentliche URL (cloudflared ist auf diesem Rechner nicht installiert).
+OFFEN: cloudflared installieren, dann named tunnel statt `--url` (letzteres erzeugt bei
+  jedem Start eine neue Adresse und macht ein fertiges APK nach dem Neustart wertlos),
+  URL in eas.json eintragen. Fuer echte Nutzer spaeter VPS statt PC-Tunnel; am App-Code
+  aendert das nichts mehr, nur die URL.

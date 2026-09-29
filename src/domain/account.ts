@@ -41,6 +41,37 @@ export type AccountTier = {
   tagline: string;
   /** Was diese Stufe kann – Grundlage der Upgrade-Liste. */
   perks: readonly string[];
+  /**
+   * Monatsbeitrag in **Cent**, `0` bei Standard.
+   *
+   * Cent als ganze Zahl, nicht `7.99` als Kommazahl: In Gleitkomma ist 7,99
+   * nicht genau darstellbar, und drei Monatsbeiträge ergäben
+   * `23.970000000000002`. Geld zählt man in der kleinsten Einheit – dieselbe
+   * Entscheidung wie bei `points INT` in der Datenbank.
+   *
+   * Das ist der **verbindliche Preis in Euro**, an dem sich Abrechnung und
+   * Buchhaltung ausrichten. Nicht zwangsläufig der Preis, der in der App
+   * steht: Läuft das Abo über die Stores (In-App-Kauf), legt Apple bzw. Google
+   * den Preis je Land und Währung fest, und angezeigt werden MUSS dann der
+   * Wert, den der Store meldet – sonst steht in der App etwas anderes als auf
+   * der Rechnung.
+   */
+  monthlyPriceCents: number;
+  /**
+   * Jahresbeitrag in **Cent**, `0` bei Standard – und `0` auch bei einer Stufe,
+   * die es nur im Monatsabo geben soll.
+   *
+   * **Ausgeschrieben und nicht aus dem Monatsbeitrag gerechnet**, obwohl hier
+   * momentan überall genau zehn Monatsbeiträge stehen. Der Nachlass ist eine
+   * Preisentscheidung je Stufe, keine Formel: Sobald eine Stufe im Jahr 20 %
+   * nachlässt und eine andere 15 %, stimmt keine Formel mehr für beide. Dass der
+   * Jahrespreis niedriger ist als zwölf Monatsbeiträge, hält
+   * `account.test.ts` fest – sonst könnte hier eine Zahl stehen, die das Etikett
+   * „2 Monate gratis" zur Lüge macht.
+   *
+   * Gerechnet und beschriftet wird damit in {@link ./billing-period.ts}.
+   */
+  yearlyPriceCents: number;
   capabilities: AccountCapabilities;
 };
 
@@ -54,6 +85,8 @@ export const ACCOUNT_TIERS: readonly AccountTier[] = [
     label: 'Standard',
     tagline: 'Mitmachen, entdecken, dabei sein.',
     perks: ['Events in deiner Nähe finden', 'Beitreten, Fortschritt und Abzeichen'],
+    monthlyPriceCents: 0,
+    yearlyPriceCents: 0,
     capabilities: {
       canCreateActivities: false,
       hasBusinessArea: false,
@@ -71,6 +104,9 @@ export const ACCOUNT_TIERS: readonly AccountTier[] = [
       'Eigene Events bearbeiten und löschen',
       'Öffentliches Profil mit Beiträgen und Social-Links',
     ],
+    monthlyPriceCents: 799,
+    // Zehn Monatsbeiträge fürs Jahr – zwei sind geschenkt.
+    yearlyPriceCents: 7990,
     capabilities: {
       canCreateActivities: true,
       hasBusinessArea: false,
@@ -89,6 +125,8 @@ export const ACCOUNT_TIERS: readonly AccountTier[] = [
       '1 Event gleichzeitig hervorheben',
       'Rückblick über 3 Monate',
     ],
+    monthlyPriceCents: 1499,
+    yearlyPriceCents: 14990,
     capabilities: {
       canCreateActivities: true,
       hasBusinessArea: true,
@@ -106,6 +144,8 @@ export const ACCOUNT_TIERS: readonly AccountTier[] = [
       '5 Events gleichzeitig hervorheben',
       'Rückblick über 12 Monate',
     ],
+    monthlyPriceCents: 2999,
+    yearlyPriceCents: 29990,
     capabilities: {
       canCreateActivities: true,
       hasBusinessArea: true,
@@ -179,3 +219,28 @@ export function accountAbilities(
     canCreateActivities: true,
   };
 }
+
+/**
+ * Cent → deutscher Preistext: `799` ergibt `"7,99 €"`.
+ *
+ * Von Hand formatiert, kein `Intl.NumberFormat` – aus demselben Grund wie in
+ * {@link ./date-format.ts}: Auf Hermes fehlen je nach Build die Sprachdaten,
+ * und dann steht `€7.99` in einer deutschen App.
+ *
+ * Die Cent-Stelle wird immer zweistellig geschrieben. `1500` ist `"15,00 €"`
+ * und nicht `"15,0 €"` – bei einem Preis fehlt sonst sichtbar eine Ziffer.
+ */
+export function formatPriceCents(cents: number): string {
+  const rounded = Math.round(cents);
+  const sign = rounded < 0 ? '-' : '';
+  const total = Math.abs(rounded);
+  return `${sign}${Math.floor(total / 100)},${String(total % 100).padStart(2, '0')} €`;
+}
+
+/*
+ * Den Preistext („7,99 € / Monat") gibt es hier nicht mehr: Seit es Monats- UND
+ * Jahresabos gibt, hängt er am Zeitraum und steht deshalb als `priceLabel` in
+ * ./billing-period.ts. Eine Monatsvariante daneben wäre eine zweite Wahrheit
+ * für dieselbe Zeile – und die eine, die man vergisst, wenn sich die Schreibweise
+ * ändert.
+ */

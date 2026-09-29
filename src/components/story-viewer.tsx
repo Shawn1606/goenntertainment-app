@@ -1,6 +1,22 @@
 /**
  * Der Story-Betrachter: ein Bild auf schwarzem Grund, das von selbst weiterläuft.
  *
+ * ## Gestaffelt: erst die Person zu Ende, dann die nächste
+ *
+ * Der Betrachter arbeitet auf GRUPPEN (eine je Person, siehe
+ * `groupStories` in src/domain/story.ts), nicht auf einer flachen Liste. Ein Tipp
+ * nach rechts blättert innerhalb der Person weiter und wechselt erst am Ende
+ * ihrer Storys zur nächsten. Vorher war jede Story ein eigener Eintrag – der
+ * zweite Tipp sprang damit zur nächsten Person, obwohl von der ersten noch etwas
+ * kam.
+ *
+ * Die Zeitleiste oben zeigt deshalb nur die Storys der AKTUELLEN Person. Ein
+ * Balken über alle Storys aller Leute wäre keine Auskunft mehr, sondern ein
+ * Fortschrittsbalken über etwas, das niemand am Stück ansieht.
+ *
+ * Wohin ein Schritt führt, entscheidet `stepStory` – die Randfälle (Anfang,
+ * Gruppenende, letzte Gruppe, leere Gruppe) sind dort geprüft.
+ *
  * ## Warum hier ein `Modal` in Ordnung ist
  *
  * Die übrigen Blätter dieser App meiden `Modal`, weil `BlurView` nur weichzeichnen
@@ -35,27 +51,38 @@ import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
 import { accountLabel } from '@/domain/account';
-import { remainingLabel } from '@/domain/story';
+import { firstUnseenIndex, remainingLabel, stepStory, type StoryGroup } from '@/domain/story';
 import type { Story } from '@/lib/api';
 
 /** Wie lange eine Story steht. Aus der Praxis: unter 4 s hetzt, über 7 s langweilt. */
 const STORY_MS = 5000;
 
 export type StoryViewerProps = {
-  stories: Story[];
-  /** Bei welcher Story es losgeht; `null` = geschlossen. */
-  startIndex: number | null;
+  /** Gebündelt nach Person – dieselbe Liste wie in der Leiste. */
+  groups: StoryGroup<Story>[];
+  /** Bei welcher PERSON es losgeht; `null` = geschlossen. */
+  startGroup: number | null;
   onClose: () => void;
   /** Wird für jede Story genau einmal gemeldet – der Screen schickt das zum Server. */
   onSeen: (story: Story) => void;
   /** Nur für eigene Storys angeboten. */
   onDelete?: (story: Story) => void;
+  /** Tipp auf den Namen: führt aufs Profil. Ohne diese Prop bleibt er Text. */
+  onOpenProfile?: (story: Story) => void;
 };
 
-export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: StoryViewerProps) {
+export function StoryViewer({
+  groups,
+  startGroup,
+  onClose,
+  onSeen,
+  onDelete,
+  onOpenProfile,
+}: StoryViewerProps) {
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
-  const [index, setIndex] = useState(startIndex ?? 0);
+  /** Wo wir gerade stehen: welche Person, welche ihrer Storys. */
+  const [at, setAt] = useState({ group: startGroup ?? 0, story: 0 });
   const progress = useSharedValue(0);
 
   /**
@@ -67,30 +94,37 @@ export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: 
    */
   const reported = useRef<Set<number>>(new Set());
 
-  const open = startIndex !== null;
-  const story = stories[index] ?? null;
+  const open = startGroup !== null;
+  const group = groups[at.group] ?? null;
+  const story = group?.stories[at.story] ?? null;
 
-  // Beim Öffnen an die richtige Stelle springen. Ohne das stünde nach dem
-  // zweiten Öffnen noch der Index vom letzten Mal.
+  /**
+   * Beim Öffnen an die richtige Stelle springen: erste Person, erste UNGESEHENE
+   * Story. Ohne das stünde nach dem zweiten Öffnen noch die Stelle vom letzten
+   * Mal – und man begänne mitten in etwas, das man schon kennt.
+   */
   useEffect(() => {
-    if (startIndex !== null) setIndex(startIndex);
-  }, [startIndex]);
+    if (startGroup === null) return;
+    const target = groups[startGroup];
+    setAt({ group: startGroup, story: target ? firstUnseenIndex(target) : 0 });
+    // `groups` bewusst NICHT in den Abhängigkeiten: Die Liste ändert sich bei
+    // jedem „gesehen"-Update, und der Betrachter spränge dann mitten im Ansehen
+    // zurück an den Anfang.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startGroup]);
 
   const goTo = useCallback(
-    (next: number) => {
-      if (next < 0) {
-        // Vor der ersten Story gibt es nichts – dann bleibt sie einfach stehen,
-        // statt den Betrachter zu schließen. Zurücktippen soll nie beenden.
-        setIndex(0);
-        return;
-      }
-      if (next >= stories.length) {
+    (direction: 1 | -1) => {
+      const next = stepStory(groups, at, direction);
+      if (!next) {
+        // Nach der letzten Story der letzten Person ist Schluss. Zurücktippen
+        // gibt nie `null` zurück – Zurück soll nie beenden.
         onClose();
         return;
       }
-      setIndex(next);
+      setAt(next);
     },
-    [stories.length, onClose],
+    [groups, at, onClose],
   );
 
   // Gesehen melden – einmal pro Story und Sitzung.
@@ -101,16 +135,17 @@ export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: 
     onSeen(story);
   }, [open, story, onSeen]);
 
-  // Zeitleiste + Weiterschalten. Hängt an `index`, läuft also bei jedem Wechsel neu.
+  // Zeitleiste + Weiterschalten. Hängt an der Position, läuft also bei jedem
+  // Wechsel neu.
   useEffect(() => {
     if (!open || !story) return;
 
     progress.value = 0;
     progress.value = withTiming(1, { duration: STORY_MS, easing: Easing.linear });
 
-    const timer = setTimeout(() => goTo(index + 1), STORY_MS);
+    const timer = setTimeout(() => goTo(1), STORY_MS);
     return () => clearTimeout(timer);
-  }, [open, story, index, goTo, progress]);
+  }, [open, story, goTo, progress]);
 
   // Beim Schließen zurücksetzen, damit die nächste Sitzung wieder alles meldet.
   useEffect(() => {
@@ -121,7 +156,9 @@ export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: 
     width: `${(reduced ? 1 : progress.value) * 100}%`,
   }));
 
-  if (!open || !story) return null;
+  if (!open || !group || !story) return null;
+
+  const profileLink = onOpenProfile && story.user.username ? () => onOpenProfile(story) : undefined;
 
   return (
     <Modal visible transparent={false} animationType="fade" onRequestClose={onClose} statusBarTranslucent>
@@ -132,13 +169,13 @@ export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: 
           <Image source={{ uri: story.image_url }} style={styles.image} contentFit="contain" />
         ) : null}
 
-        {/* Zeitleiste: ein Segment pro Story. */}
+        {/* Zeitleiste: ein Segment pro Story DIESER Person. */}
         <View style={[styles.bars, { top: insets.top + Spacing.two }]}>
-          {stories.map((item, position) => (
+          {group.stories.map((item, position) => (
             <View key={item.id} style={styles.barTrack}>
-              {position < index ? (
+              {position < at.story ? (
                 <View style={styles.barDone} />
-              ) : position === index ? (
+              ) : position === at.story ? (
                 <Animated.View style={[styles.barDone, bar]} />
               ) : null}
             </View>
@@ -156,13 +193,13 @@ export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: 
         <View style={styles.taps} pointerEvents="box-none">
           <Pressable
             style={styles.tapLeft}
-            onPress={() => goTo(index - 1)}
+            onPress={() => goTo(-1)}
             accessibilityRole="button"
             accessibilityLabel="Vorherige Story"
           />
           <Pressable
             style={styles.tapRight}
-            onPress={() => goTo(index + 1)}
+            onPress={() => goTo(1)}
             accessibilityRole="button"
             accessibilityLabel="Nächste Story"
           />
@@ -171,20 +208,41 @@ export function StoryViewer({ stories, startIndex, onClose, onSeen, onDelete }: 
         {/* Kopfzeile: wer, welche Stufe – und Schließen. Liegt NACH den
             Tippflächen, bekommt seine Tipps also zuverlässig zuerst. */}
         <View style={[styles.head, { top: insets.top + Spacing.four }]}>
-          <View style={styles.headText}>
-            <ThemedText style={styles.author} numberOfLines={1}>
-              {story.is_mine ? 'Deine Story' : story.user.name}
-            </ThemedText>
+          {/* Der Name führt aufs Profil. Genau dafür ist der Ring da: Man sieht
+              etwas Kurzes von jemandem und will dann sehen, wer das ist. */}
+          <Pressable
+            onPress={profileLink}
+            disabled={!profileLink}
+            accessibilityRole={profileLink ? 'link' : 'text'}
+            accessibilityLabel={
+              profileLink ? `Profil von ${story.user.name} öffnen` : story.user.name
+            }
+            hitSlop={6}
+            style={({ pressed }) => [styles.headText, pressed && styles.pressed]}>
+            <View style={styles.authorRow}>
+              {story.user.avatar ? (
+                <Image source={{ uri: story.user.avatar }} style={styles.headAvatar} contentFit="cover" />
+              ) : null}
+              <ThemedText style={styles.author} numberOfLines={1}>
+                {story.is_mine ? 'Deine Story' : story.user.name}
+                {profileLink ? ' ›' : ''}
+              </ThemedText>
+            </View>
             <ThemedText style={styles.tier} numberOfLines={1}>
-              {/* Stufe und Restzeit in einer Zeile. Die Restzeit erklärt, warum
-                  die Story morgen weg ist – ohne sie wirkt das Verschwinden wie
-                  ein Fehler. Fehlt sie (abgelaufen, kein Datum), bleibt die
-                  Stufe allein stehen statt „noch 0 Min." zu behaupten. */}
-              {[accountLabel(story.user.account_type), remainingLabel(story.expires_in_minutes)]
+              {/* Stufe, Position in der Reihe und Restzeit. Die Restzeit erklärt,
+                  warum die Story morgen weg ist – ohne sie wirkt das
+                  Verschwinden wie ein Fehler. Fehlt sie (abgelaufen, kein
+                  Datum), bleibt der Rest stehen statt „noch 0 Min." zu
+                  behaupten. */}
+              {[
+                accountLabel(story.user.account_type),
+                group.stories.length > 1 ? `${at.story + 1}/${group.stories.length}` : null,
+                remainingLabel(story.expires_in_minutes),
+              ]
                 .filter(Boolean)
                 .join(' · ')}
             </ThemedText>
-          </View>
+          </Pressable>
 
           {story.is_mine && onDelete ? (
             <Pressable
@@ -226,7 +284,7 @@ const styles = StyleSheet.create({
   // Schwarz und nicht aus dem Thema: Ein Bild im Vollbild braucht neutrale
   // Umgebung, sonst färbt der Rand die Wahrnehmung der Farben im Bild.
   screen: { flex: 1, backgroundColor: '#000000' },
-  image: { ...StyleSheet.absoluteFillObject },
+  image: { ...StyleSheet.absoluteFill },
   bars: {
     position: 'absolute',
     left: Spacing.three,
@@ -253,10 +311,13 @@ const styles = StyleSheet.create({
     gap: Spacing.three,
   },
   headText: { flex: 1 },
-  author: { color: '#ffffff', fontSize: 15, fontWeight: '700', fontFamily: FontFamily.bold },
+  authorRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  headAvatar: { width: 26, height: 26, borderRadius: 13 },
+  author: { flexShrink: 1, color: '#ffffff', fontSize: 15, fontWeight: '700', fontFamily: FontFamily.bold },
   tier: { color: 'rgba(255,255,255,0.7)', fontSize: 12 },
   headButton: { padding: Spacing.one },
-  taps: { ...StyleSheet.absoluteFillObject, flexDirection: 'row' },
+  pressed: { opacity: 0.7 },
+  taps: { ...StyleSheet.absoluteFill, flexDirection: 'row' },
   // Ein Drittel zurück, zwei Drittel weiter: Weiterblättern ist die Handlung,
   // die man dauernd macht, Zurück die Ausnahme.
   tapLeft: { flex: 1 },

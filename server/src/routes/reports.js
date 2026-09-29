@@ -23,7 +23,7 @@ import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { HttpError } from '../validate.js';
 import { parseReportInput } from '../reports.js';
-import { publicBase } from '../media.js';
+import { mediaUrl, publicBase } from '../media.js';
 
 const router = Router();
 
@@ -122,7 +122,9 @@ async function loadTargets(req, reports) {
           label: row.title,
           author: row.author,
           detail: toIso(row.starts_at),
-          image_url: row.banner_path ? `${publicBase(req)}/storage/${row.banner_path}` : null,
+          // `mediaUrl`, weil `banner_path` auch eine fremde Adresse enthalten
+          // kann (importierte Events, siehe routes/activities.js).
+          image_url: mediaUrl(req, row.banner_path),
         }),
       );
     } else if (type === 'message') {

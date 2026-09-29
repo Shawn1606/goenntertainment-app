@@ -32,23 +32,53 @@
  * konnte nirgends nachsehen, ob ihre Mail angekommen war. Jetzt steht der Stand
  * hier – offen, bestätigt oder abgelehnt samt Grund – und im Panel gegenüber.
  *
- * Bezahlt wird dabei weiter nichts: Es gibt keine Zahlungen in dieser App, und
- * der Bildschirm tut auch nicht so.
+ * ## Monat oder Jahr – die einzige Auswahl auf diesem Bildschirm
+ *
+ * Der Umschalter über dem Knopf ist KEIN zweites Angebot und widerspricht dem
+ * Absatz oben nicht: Es bleibt eine Stufe, nur mit zwei Zahlungsrhythmen. Beide
+ * Preise stehen gleichzeitig da, damit die Wahl eine Wahl ist – vorausgewählt
+ * ist das Jahresabo, weil es das günstigere von beiden ist
+ * (`DEFAULT_BILLING_PERIOD`). Wer monatlich zahlen will, sieht den Preis daneben
+ * und tippt einmal.
+ *
+ * Gerechnet wird hier nichts. „2 Monate gratis" und „entspricht 6,66 € pro
+ * Monat" kommen aus `src/domain/billing-period.ts` und damit aus denselben zwei
+ * Zahlen, die die Stufe kosten – so kann im Etikett nicht stehen, was der Preis
+ * nicht hergibt.
+ *
+ * Bezahlt wird dabei weiter nichts: Es gibt keine Zahlungen in dieser App. Der
+ * Bildschirm nennt den Preis und gibt den gewählten Zeitraum mit der Anfrage
+ * weiter – abgebucht wird nichts, und der Knopf heißt deshalb „anfragen" und
+ * nicht „kaufen".
+ *
+ * Sobald der In-App-Kauf läuft, wird aus demselben Umschalter die Auswahl
+ * zwischen zwei RevenueCat-Packages derselben Stufe; die angezeigten Preise
+ * müssen dann vom Store kommen (begründet an `monthlyPriceCents` in
+ * `src/domain/account.ts`).
  */
 import { Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HomeBackground } from '@/components/home-background';
 import { MascotEmpty } from '@/components/mascot';
 import { ThemedText } from '@/components/themed-text';
-import { GlassButton, GlassCard } from '@/components/ui/glass';
+import { GlassButton, GlassCard, GlassSurface } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { ACCOUNT_TIERS, accountLabel, nextTier, rankOf, tierFor, type AccountTier, type AccountType } from '@/domain/account';
+import {
+  DEFAULT_BILLING_PERIOD,
+  billingPeriodAdverb,
+  monthlyEquivalentLabel,
+  periodsFor,
+  priceLabel,
+  savingsLabel,
+  type BillingPeriod,
+} from '@/domain/billing-period';
 import { formatDay } from '@/domain/date-format';
-import { useBrandSurface } from '@/hooks/use-theme';
+import { useBrandSurface, useGlass } from '@/hooks/use-theme';
 import { ApiError, type UpgradeRequest, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { notifyUser } from '@/lib/confirm';
@@ -56,6 +86,7 @@ import { notifyUser } from '@/lib/confirm';
 export default function UpgradeScreen() {
   const insets = useSafeAreaInsets();
   const surface = useBrandSurface();
+  const glass = useGlass();
   const { user, token, updateProfile, refreshUser } = useAuth();
 
   const isAdmin = !!user?.is_admin;
@@ -66,6 +97,28 @@ export default function UpgradeScreen() {
   const target = nextTier(user?.account_type);
   /** Die Stufe danach – nur als Ausblick, ohne Knopf. */
   const beyond = ACCOUNT_TIERS[currentRank + 2] ?? null;
+
+  /**
+   * Monat oder Jahr. Vorausgewählt ist das Jahresabo – begründet an
+   * `DEFAULT_BILLING_PERIOD`, damit die Entscheidung an einer Stelle steht und
+   * nicht als `useState('yearly')` in einem Bildschirm versteckt ist.
+   */
+  const [period, setPeriod] = useState<BillingPeriod>(DEFAULT_BILLING_PERIOD);
+
+  /** Die Rhythmen, die es für dieses Angebot gibt (Standard: keine). */
+  const periods = periodsFor(target?.type);
+
+  /**
+   * Der Rhythmus, mit dem gerechnet wird.
+   *
+   * Nicht einfach `period`: Eine Stufe könnte es irgendwann nur im Monatsabo
+   * geben. Dann steht die Auswahl auf 'yearly', es gibt aber keinen Jahrespreis –
+   * und der Preis darunter hieße „kostenlos". Deshalb gilt die Auswahl nur,
+   * solange sie im Angebot vorkommt.
+   */
+  const activePeriod: BillingPeriod = periods.some((option) => option.period === period)
+    ? period
+    : (periods[0]?.period ?? 'monthly');
 
   /** Welche Stufe gerade gespeichert wird (null = keine). */
   const [saving, setSaving] = useState<AccountType | null>(null);
@@ -113,7 +166,14 @@ export default function UpgradeScreen() {
     }, [load]),
   );
 
-  /** Admin-Weg: Stufe sofort umstellen. */
+  /**
+   * Admin-Weg: Stufe sofort umstellen.
+   *
+   * Der gewählte Zeitraum spielt hier absichtlich keine Rolle: Ein Admin vergibt
+   * die Stufe, es fließt kein Geld, und es entsteht keine Anfrage, an der ein
+   * Rhythmus hängen könnte. Der Umschalter bleibt trotzdem sichtbar – ein Admin
+   * muss sehen, was allen anderen angeboten wird.
+   */
   async function onSwitch(tier: AccountTier) {
     if (saving) return;
     setSaving(tier.type);
@@ -139,11 +199,11 @@ export default function UpgradeScreen() {
     setSaving(tier.type);
     setError(null);
     try {
-      const res = await api.requestUpgrade(token, tier.type);
+      const res = await api.requestUpgrade(token, tier.type, activePeriod);
       setRequest(res.data);
       await notifyUser(
         'Anfrage ist raus',
-        `Wir haben deine Anfrage auf ${tier.label} bekommen. Sobald sie bestätigt ist, ist die Stufe da – du musst nichts weiter tun.`,
+        `Wir haben deine Anfrage auf ${tier.label} (${priceLabel(tier.type, activePeriod)}) bekommen. Sobald sie bestätigt ist, ist die Stufe da – du musst nichts weiter tun.`,
       );
     } catch (err) {
       setError(
@@ -170,7 +230,7 @@ export default function UpgradeScreen() {
           <ThemedText type="small" style={{ color: surface.textMuted }}>
             {isAdmin
               ? 'Als Admin schaltest du hier direkt um – auch wieder zurück.'
-              : 'Bezahlen kannst du hier noch nicht: Deine Anfrage geht an uns, und wir schalten die Stufe frei.'}
+              : 'Bezahlen kannst du hier noch nicht: Deine Anfrage geht mit dem gewählten Zeitraum an uns, und wir schalten die Stufe frei.'}
           </ThemedText>
         </GlassCard>
 
@@ -205,7 +265,9 @@ export default function UpgradeScreen() {
               />
               <ThemedText type="smallBold" style={{ color: surface.text, flex: 1 }}>
                 {request.status === 'pending'
-                  ? `${accountLabel(request.requested_type)} angefragt`
+                  ? // Mit Zeitraum: Ohne ihn stünde hier nicht, was angefragt
+                    // wurde – „Business" ist zwei verschiedene Beträge.
+                    `${accountLabel(request.requested_type)} ${billingPeriodAdverb(request.billing_period)} angefragt`
                   : request.status === 'approved'
                     ? `${accountLabel(request.requested_type)} ist freigeschaltet`
                     : `${accountLabel(request.requested_type)} wurde abgelehnt`}
@@ -213,7 +275,7 @@ export default function UpgradeScreen() {
             </View>
             <ThemedText type="small" style={{ color: surface.textMuted }}>
               {request.status === 'pending'
-                ? `Deine Anfrage vom ${formatDay(request.created_at)} liegt bei uns. Du musst nichts weiter tun – sobald sie bestätigt ist, ist die Stufe da.`
+                ? `Deine Anfrage vom ${formatDay(request.created_at)} über ${priceLabel(request.requested_type, request.billing_period)} liegt bei uns. Du musst nichts weiter tun – sobald sie bestätigt ist, ist die Stufe da.`
                 : request.status === 'approved'
                   ? 'Viel Spaß damit! Alles, was dazugehört, ist bereits aktiv.'
                   : request.decision_note
@@ -257,6 +319,90 @@ export default function UpgradeScreen() {
                 </View>
               ))}
             </View>
+
+            {/* Monat oder Jahr. Beide Preise stehen gleichzeitig da – eine
+                Auswahl, in der der zweite Preis erst nach dem Umschalten
+                erscheint, ist keine.
+
+                Erst ab zwei Möglichkeiten: Bei einer Stufe ohne Jahresabo wäre
+                das eine Fläche mit einem Feld, die aussieht wie eine Wahl und
+                nichts tut (`periodsFor`). */}
+            {periods.length > 1 ? (
+              /* `radiogroup`/`radio` und nicht `button` wie bei den Pillen in
+                 glass.tsx: Genau eines von beiden gilt, und nur bei dieser Rolle
+                 sagt die Vorlesehilfe auch, WELCHES.
+
+                 Der Zustand steht als `aria-checked` an jedem Feld und NICHT als
+                 `accessibilityState={{ checked }}`: Im Browser nachgemessen –
+                 react-native-web 0.21 bringt `accessibilityState` nicht mehr ins
+                 DOM (das Attribut fehlte ganz), `aria-checked` dagegen schon.
+                 React Native macht daraus auf dem Handy wieder den
+                 Vorlese-Zustand, es ist also derselbe Weg für beide Seiten. */
+              <View style={styles.periodRow} accessibilityRole="radiogroup">
+                {periods.map((option) => {
+                  const selected = option.period === activePeriod;
+                  // Das Etikett nur am Jahresabo, und nur wenn es wirklich etwas
+                  // spart – gerechnet aus den zwei Preisen der Stufe.
+                  const badge = option.period === 'yearly' ? savingsLabel(target.type) : null;
+                  return (
+                    <Pressable
+                      key={option.period}
+                      onPress={() => setPeriod(option.period)}
+                      disabled={saving !== null}
+                      accessibilityRole="radio"
+                      aria-checked={selected}
+                      accessibilityLabel={`${option.label}, ${priceLabel(target.type, option.period)}${badge ? `, ${badge}` : ''}`}
+                      style={({ pressed }) => [styles.periodItem, pressed && styles.periodPressed]}>
+                      <GlassSurface
+                        tone={selected ? 'frost' : 'subtle'}
+                        radius={Radius.field}
+                        sheen={false}
+                        style={[
+                          styles.period,
+                          { borderColor: selected ? surface.accent : glass.border },
+                        ]}>
+                        <ThemedText
+                          type="smallBold"
+                          style={{ color: selected ? surface.text : surface.textMuted }}>
+                          {option.label}
+                        </ThemedText>
+                        <ThemedText
+                          style={[
+                            styles.periodPrice,
+                            { color: selected ? surface.text : surface.textMuted },
+                          ]}>
+                          {priceLabel(target.type, option.period)}
+                        </ThemedText>
+                        {badge ? (
+                          <ThemedText
+                            type="small"
+                            style={[
+                              styles.periodBadge,
+                              { color: surface.accent, backgroundColor: surface.chipBg },
+                            ]}>
+                            {badge}
+                          </ThemedText>
+                        ) : null}
+                      </GlassSurface>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : (
+              /* Nur ein Rhythmus: dann steht der Preis als Zeile da, statt als
+                 Auswahl ohne Alternative. */
+              <ThemedText type="smallBold" style={{ color: surface.text }}>
+                {priceLabel(target.type, activePeriod)}
+              </ThemedText>
+            )}
+
+            {/* Der Vergleichspreis nur beim Jahresabo – beim Monatsabo stünde
+                dort der Preis, der eine Zeile höher schon steht. */}
+            {activePeriod === 'yearly' && monthlyEquivalentLabel(target.type) ? (
+              <ThemedText type="small" style={{ color: surface.textMuted }}>
+                {monthlyEquivalentLabel(target.type)}
+              </ThemedText>
+            ) : null}
 
             <GlassButton
               title={
@@ -364,6 +510,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.two,
     paddingVertical: 3,
     overflow: 'hidden',
+  },
+  /* Zwei gleich große Felder nebeneinander: Ein schmaleres Monatsfeld wäre eine
+     Empfehlung, die nicht im Text steht. */
+  periodRow: { flexDirection: 'row', gap: Spacing.two },
+  periodItem: { flex: 1 },
+  periodPressed: { opacity: 0.75 },
+  /* Kein `borderWidth` – den bringt GlassSurface mit, hier wird nur die Farbe
+     getauscht (genau wie bei der ausgewählten Pille in glass.tsx). */
+  period: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    paddingVertical: Spacing.three,
+    paddingHorizontal: Spacing.two,
+    minHeight: 84,
+  },
+  periodPrice: { fontSize: 15, lineHeight: 20, fontWeight: '800', letterSpacing: -0.2 },
+  periodBadge: {
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    fontSize: 9,
+    borderRadius: 999,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 2,
+    overflow: 'hidden',
+    marginTop: 2,
   },
   perks: { gap: Spacing.one },
   perkRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },

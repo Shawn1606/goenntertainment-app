@@ -35,8 +35,10 @@ export const MAX_MESSAGE_LENGTH = 1000;
  */
 export const SAME_AUTHOR_WINDOW_MS = 5 * 60 * 1000;
 
-/** Ab dieser Zahl zeigt die Plakette nur noch „99+". */
-const BADGE_LIMIT = 99;
+// Die Ungelesen-Plakette liegt in `src/domain/unread-badge.ts`. Sie stand hier,
+// solange nur Chats einen Zähler hatten – seit die Glocke (Benachrichtigungen)
+// denselben trägt, wäre sie hier eine Chat-Regel, die vier Nicht-Chats
+// mitbenutzen.
 
 /** Nur die Felder, die die Anzeige-Regeln brauchen. */
 export type ChatMessageLike = {
@@ -103,17 +105,6 @@ export function showsAuthor(
   if (Number.isNaN(before) || Number.isNaN(current)) return true;
 
   return current - before > SAME_AUTHOR_WINDOW_MS;
-}
-
-/**
- * Text der Ungelesen-Plakette – oder `null`, wenn keine hingehört.
- *
- * `null` und nicht `'0'`: Die Anzeige soll die Plakette dann gar nicht bauen. Ein
- * Kreis mit einer Null darin ist die verwirrendste Form von „nichts Neues".
- */
-export function unreadBadge(count: number): string | null {
-  if (!Number.isFinite(count) || count <= 0) return null;
-  return count > BADGE_LIMIT ? `${BADGE_LIMIT}+` : String(Math.floor(count));
 }
 
 /**

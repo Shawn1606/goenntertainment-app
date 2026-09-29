@@ -2,6 +2,19 @@ import { Router } from 'express';
 import { pool, first } from '../db.js';
 import { createToken, serializeUser, profileComplete } from '../auth.js';
 import { Validator, HttpError } from '../validate.js';
+import { BLOCKED_TERMS, findBlockedTerm } from '../blocked-terms.js';
+
+/**
+ * Name fuer ein neues Google-Konto. Ein gesperrter Google-Name wird durch den
+ * neutralen ersetzt statt die Anmeldung abzulehnen – derselbe Weg und dieselbe
+ * Begruendung wie in Laravel (GoogleController::nameFromGoogle): Den Namen hat die
+ * Person bei Google hinterlegt, nicht bei uns, und in der App gaebe es kein Feld,
+ * in dem sie eine Ablehnung beheben koennte.
+ */
+function nameFromGoogle(name) {
+  if (typeof name !== 'string' || name.trim() === '') return 'Google User';
+  return findBlockedTerm(name, BLOCKED_TERMS, 'name') ? 'Google User' : name;
+}
 
 const router = Router();
 
@@ -44,11 +57,18 @@ router.post('/google', async (req, res, next) => {
         const [result] = await pool.query(
           `INSERT INTO users (name, email, google_id, avatar, email_verified_at, created_at, updated_at)
            VALUES (?, ?, ?, ?, NOW(), NOW(), NOW())`,
-          [g.name ?? 'Google User', g.email, g.sub, g.picture ?? null],
+          [nameFromGoogle(g.name), g.email, g.sub, g.picture ?? null],
         );
         user = await first('SELECT * FROM users WHERE id = ?', [result.insertId]);
       }
       user = await first('SELECT * FROM users WHERE id = ?', [user.id]);
+    }
+
+    // Zwei-Faktor-Konten: kein Token an Laravel vorbei – derselbe Grund wie bei
+    // POST /login in routes/auth.js. Ein gueltiger Google-Token ersetzt den
+    // zweiten Faktor nicht; Laravel fragt ihn nach der Google-Anmeldung ab.
+    if (user.two_factor_method) {
+      return res.status(403).json({ message: 'Bitte melde dich über die App an.' });
     }
 
     const token = await createToken(user.id, b.device_name || 'mobile');

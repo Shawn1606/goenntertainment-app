@@ -11,6 +11,11 @@ import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 
+// Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
+// ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
+// eingeschaltet, sonst gaebe es nichts zu pruefen. Wird pro Anfrage gelesen.
+process.env.FEATURE_ACCOUNT_TIERS = 'true';
+
 let base;
 let server;
 const createdUserIds = [];
@@ -1246,12 +1251,14 @@ test('POST /api/me/upgrade-request: Standard fragt Creator an, Admin bestaetigt'
 
   const created = await post('/api/me/upgrade-request', person.token, {
     account_type: 'creator',
+    billing_period: 'yearly',
     message: 'Ich moechte Events veranstalten.',
   });
   assert.equal(created.status, 201);
   const request = (await created.json()).data;
   assert.equal(request.status, 'pending');
   assert.equal(request.requested_type, 'creator');
+  assert.equal(request.billing_period, 'yearly');
 
   // Die Anfrage taucht beim Admin auf – und die Kennzahl zaehlt sie mit.
   const list = await (await get('/api/admin/upgrade-requests', admin.token)).json();
@@ -1259,6 +1266,9 @@ test('POST /api/me/upgrade-request: Standard fragt Creator an, Admin bestaetigt'
   assert.ok(mine, 'die offene Anfrage muss beim Admin stehen');
   assert.equal(mine.user.id, person.user.id);
   assert.equal(mine.message, 'Ich moechte Events veranstalten.');
+  // Ohne den Rhythmus wuesste der Admin nicht, was angefragt wurde: "Creator"
+  // sind 7,99 € im Monat oder 79,90 € im Jahr.
+  assert.equal(mine.billing_period, 'yearly');
   assert.ok(list.pending >= 1);
   const stats = await (await get('/api/admin/stats', admin.token)).json();
   assert.ok(stats.totals.pending_requests >= 1);
@@ -1315,6 +1325,49 @@ test('POST /api/me/upgrade-request: eine neue Anfrage ersetzt die alte', async (
   assert.equal(second.status, 'pending');
   assert.equal(second.requested_type, 'business');
   assert.equal(second.decision_note, null);
+});
+
+test('POST /api/me/upgrade-request: ohne Rhythmus gilt monatlich, Unsinn wird abgelehnt', async () => {
+  const person = await registerUser('upgperiod', 'standard');
+
+  // Eine aeltere App-Version im Store kennt das Feld nicht. Ihre Anfragen muessen
+  // weiter durchgehen – sonst kann diese Person keine Stufe mehr anfragen, und
+  // der Fehler stuende in unserem Log statt in ihrem Bildschirm.
+  const created = await post('/api/me/upgrade-request', person.token, { account_type: 'creator' });
+  assert.equal(created.status, 201);
+  assert.equal((await created.json()).data.billing_period, 'monthly');
+
+  // Steht dagegen etwas drin, das es nicht gibt, wird nicht geraten: 'jaehrlich'
+  // (verschrieben) waere sonst von einem gemeinten 'monthly' nicht zu
+  // unterscheiden.
+  const wrong = await post('/api/me/upgrade-request', person.token, {
+    account_type: 'creator',
+    billing_period: 'jaehrlich',
+  });
+  assert.equal(wrong.status, 422);
+
+  // Und die vorhandene Anfrage bleibt, wie sie war.
+  const own = await (await get('/api/me/upgrade-request', person.token)).json();
+  assert.equal(own.data.billing_period, 'monthly');
+});
+
+test('POST /api/me/upgrade-request: ein neuer Rhythmus ersetzt den alten', async () => {
+  const person = await registerUser('upgperiod2', 'standard');
+
+  await post('/api/me/upgrade-request', person.token, {
+    account_type: 'creator',
+    billing_period: 'yearly',
+  });
+  // Wer sich umentscheidet, hat danach genau eine Anfrage – mit dem neuen
+  // Rhythmus. Sonst stuende beim Admin weiter das Jahresabo.
+  await post('/api/me/upgrade-request', person.token, {
+    account_type: 'business',
+    billing_period: 'monthly',
+  });
+
+  const own = await (await get('/api/me/upgrade-request', person.token)).json();
+  assert.equal(own.data.requested_type, 'business');
+  assert.equal(own.data.billing_period, 'monthly');
 });
 
 test('POST /api/me/upgrade-request: die eigene Stufe kann man nicht anfragen', async () => {

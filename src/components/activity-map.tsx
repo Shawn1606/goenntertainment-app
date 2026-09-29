@@ -1,15 +1,18 @@
 import * as Location from 'expo-location';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import MapView, { Marker, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ActivityDetailModal } from '@/components/activity-detail-modal';
+import { ActivityListSheet } from '@/components/activity-list-sheet';
 import { Mascot, MascotEmpty, MascotError } from '@/components/mascot';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
+import { formatDayTimeShort } from '@/domain/date-format';
 import { reactionFor } from '@/domain/mascot-mood';
+import { groupByPlace, type PlaceGroup } from '@/domain/place-group';
 import { useBrandSurface, useTheme } from '@/hooks/use-theme';
 import { type Activity } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -53,6 +56,19 @@ export default function MapScreen() {
   const [selected, setSelected] = useState<MapActivity | null>(null);
   const [showUser, setShowUser] = useState(false);
   const [userCoords, setUserCoords] = useState<LatLng | null>(null);
+
+  /**
+   * Ein Pin je ORT, nicht je Termin.
+   *
+   * Das Nörgelbuff allein bringt 143 Termine – als Marker je Termin lägen 143
+   * Pins exakt übereinander, sichtbar wäre einer, und die Karte behauptete, in
+   * Göttingen gäbe es einen einzigen Abend. Warum ausführlich in
+   * `src/domain/place-group.ts`.
+   */
+  const places = useMemo(() => groupByPlace(items), [items]);
+
+  /** Der angetippte Ort mit mehreren Terminen – `null` heißt: Liste zu. */
+  const [place, setPlace] = useState<PlaceGroup<MapActivity> | null>(null);
 
   // Standort-Berechtigung beim Öffnen anfragen und Position holen – erst dann
   // zeigt die Karte den blauen „Ich bin hier"-Punkt.
@@ -123,9 +139,13 @@ export default function MapScreen() {
 
   // Kein Standort verfügbar (z. B. Berechtigung abgelehnt): grob auf die Pins
   // einpassen, damit man überhaupt etwas sieht.
+  //
+  // Eingepasst wird auf die ORTE und nicht auf die Termine: 143 Punkte, die
+  // hundertfach derselbe sind, verzerren den Ausschnitt nicht – aber sie kosten
+  // bei jedem Lauf 143 Rechnungen für eine Antwort mit einer Handvoll Punkten.
   useEffect(() => {
-    if (userCoords || didCenter.current || items.length === 0) return;
-    const coords = items.map((a) => ({ latitude: a.coords.lat, longitude: a.coords.lng }));
+    if (userCoords || didCenter.current || places.length === 0) return;
+    const coords = places.map((p) => ({ latitude: p.coords.lat, longitude: p.coords.lng }));
     if (coords.length === 1) {
       mapRef.current?.animateToRegion(regionAround(coords[0], RADIUS_KM), 500);
       return;
@@ -134,7 +154,7 @@ export default function MapScreen() {
       edgePadding: { top: 100, right: 80, bottom: 260, left: 80 },
       animated: true,
     });
-  }, [items, userCoords]);
+  }, [places, userCoords]);
 
   // Falls die ausgewählte Activity aus der Liste fällt: Karte schließen.
   useEffect(() => {
@@ -142,6 +162,24 @@ export default function MapScreen() {
       setSelected(null);
     }
   }, [items, selected]);
+
+  /**
+   * Das offene Orts-Blatt am frischen Stand halten.
+   *
+   * `useMapActivities` lädt bei jedem Fokus neu und setzt zwischendurch
+   * Teilergebnisse. Ohne diesen Abgleich zeigt ein offenes Blatt die Objekte des
+   * vorherigen Laufs – Teilnehmerzahlen und „du bist dabei" stünden dann falsch
+   * darin, während die Karte darunter schon richtig ist.
+   *
+   * Verglichen wird über den Schlüssel und nicht über die Objektgleichheit: Die
+   * Gruppen werden bei jedem Lauf neu gebaut und sind nie dasselbe Objekt.
+   */
+  useEffect(() => {
+    if (!place) return;
+    const fresh = places.find((candidate) => candidate.key === place.key);
+    if (!fresh) setPlace(null);
+    else if (fresh !== place) setPlace(fresh);
+  }, [places, place]);
 
   return (
     <ThemedView style={styles.container}>
@@ -152,20 +190,38 @@ export default function MapScreen() {
         showsUserLocation={showUser}
         showsMyLocationButton={false}
         onPress={() => setSelected(null)}>
-        {items.map((activity) => (
-          <Marker
-            key={activity.id}
-            coordinate={{ latitude: activity.coords.lat, longitude: activity.coords.lng }}
-            title={activity.title}
-            description={activity.location}
-            pinColor={theme.tint}
-            onPress={(e) => {
-              // Verhindert, dass onPress der Karte gleich wieder schließt.
-              e.stopPropagation();
-              setSelected(activity);
-            }}
-          />
-        ))}
+        {places.map((group) => {
+          const count = group.activities.length;
+          const next = group.activities[0];
+
+          return (
+            <Marker
+              key={group.key}
+              coordinate={{ latitude: group.coords.lat, longitude: group.coords.lng }}
+              // Bei einem Termin steht sein Titel am Pin, bei mehreren der Ort:
+              // „jules" hilft niemandem, wenn dahinter dreizehn weitere Abende
+              // liegen.
+              title={count === 1 ? next.title : group.location}
+              description={count === 1 ? group.location : `${count} Termine`}
+              pinColor={theme.tint}
+              onPress={(e) => {
+                // Verhindert, dass onPress der Karte gleich wieder schließt.
+                e.stopPropagation();
+                // Ein Termin führt direkt ins Detail – ein Zwischenblatt mit
+                // genau einem Eintrag wäre ein Tipp ohne Gegenwert.
+                if (count === 1) setSelected(next);
+                else setPlace(group);
+              }}>
+              {count > 1 ? (
+                <View style={[styles.cluster, { backgroundColor: theme.tint }]}>
+                  <ThemedText style={[styles.clusterText, { color: theme.tintText }]}>
+                    {count}
+                  </ThemedText>
+                </View>
+              ) : null}
+            </Marker>
+          );
+        })}
       </MapView>
 
       {/* Kopf-Hinweis. Goenni sitzt mit in der Pille und schaut hier nachdenklich
@@ -201,7 +257,7 @@ export default function MapScreen() {
           </View>
         </View>
       ) : null}
-      {!loading && !error && items.length === 0 ? (
+      {!loading && !error && places.length === 0 ? (
         <View style={[styles.center, { top: insets.top }]} pointerEvents="none">
           <View style={[styles.headerPill, styles.centerCard, pillStyle]}>
             <MascotEmpty mood="asleep" size={72} color={theme.tint}>
@@ -226,6 +282,22 @@ export default function MapScreen() {
         ]}>
         <ThemedText style={[styles.locateIcon, { color: theme.tint }]}>◎</ThemedText>
       </Pressable>
+
+      {/* Ein Ort mit mehreren Terminen: erst die Liste, dann das Detail. Das
+          Blatt bleibt beim Öffnen eines Termins offen – wer zurückkommt, steht
+          wieder in der Liste statt auf der Karte. */}
+      <ActivityListSheet
+        title={place ? place.location : null}
+        subtitle={
+          place
+            ? `${place.activities.length} Termine · nächster ${formatDayTimeShort(place.activities[0].starts_at)}`
+            : undefined
+        }
+        icon="map-pin"
+        activities={place?.activities ?? []}
+        onSelect={setSelected}
+        onClose={() => setPlace(null)}
+      />
 
       {/* Detail-Popup mit allen Infos + Beitreten/Verlassen (wie auf Home),
           zusätzlich mit „Route anzeigen". */}
@@ -302,5 +374,33 @@ const styles = StyleSheet.create({
     fontSize: 24,
     lineHeight: 28,
     fontWeight: '600',
+  },
+  /**
+   * Der Pin für einen Ort mit mehreren Terminen: ein Kreis mit der Anzahl.
+   *
+   * Die Zahl ist der ganze Zweck – ohne sie sieht ein zusammengefasster Ort
+   * genauso aus wie ein einzelner Termin, und niemand käme auf die Idee zu
+   * tippen. Feste Maße statt `padding`, damit alle Zähler-Pins gleich groß sind:
+   * „3" und „143" dürfen die Karte nicht unterschiedlich schwer machen.
+   */
+  cluster: {
+    minWidth: 34,
+    height: 34,
+    borderRadius: 17,
+    paddingHorizontal: Spacing.two,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+  },
+  clusterText: {
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
   },
 });

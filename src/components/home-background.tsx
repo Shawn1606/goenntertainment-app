@@ -1,87 +1,65 @@
-import { LinearGradient } from 'expo-linear-gradient';
+import { BlurTargetView } from 'expo-blur';
+import type { ReactNode, RefObject } from 'react';
 import { StyleSheet, View, type ViewProps } from 'react-native';
-import Svg, { Defs, Line, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 
 import { Palette } from '@/constants/theme';
 import { useResolvedScheme } from '@/lib/theme-preference';
 
 /**
- * Leinwand der App – gebaut wie der Hintergrund von cira.systems, nur hell.
+ * Leinwand der App – eine ruhige, einfarbige Fläche wie bei Instagram und TikTok.
  *
- * Drei Schichten:
- *   1. fast weißer Grund (#fafafa) mit einem Hauch Verlauf,
- *   2. ein feines 1px-Raster (bei der Referenz weiß auf schwarz, hier dunkel
- *      auf weiß) – gibt Struktur, ohne aufzufallen,
- *   3. ein sehr dezenter Indigo-Schein oben rechts als einzige Farbe.
- *
- * Im Dunkelmodus liegen die Werte fast auf dem Original der Referenz.
+ * Vorher lagen hier ein 1px-Raster, zwei Farbscheine und ein Verlauf (cira.systems-
+ * Look). Für eine App, deren Inhalt Fotos von Events sind, war das Unruhe hinter
+ * den Bildern: Instagram und TikTok zeigen bewusst NUR Weiß bzw. Schwarz, damit
+ * die Fotos das Farbigste auf dem Bildschirm sind. Der Name bleibt, weil über
+ * zwanzig Screens ihn benutzen.
  */
-
-const GRID_SIZE = 32;
-
-const LIGHT = {
-  base: Palette.canvas,
-  gradient: [Palette.canvas, '#f7f7f8', Palette.canvasAlt] as const,
-  grid: Palette.grid,
-  glow: Palette.indigo,
-  glowOpacity: 0.1,
-  glow2: Palette.cyan,
-  glow2Opacity: 0.06,
+type HomeBackgroundProps = ViewProps & {
+  /**
+   * Macht die Leinwand samt Inhalt zur Vorlage für einen `BlurView`. Seit Expo
+   * SDK 55 zeichnet Android nur noch weich, was in einem `BlurTargetView`
+   * liegt – ohne dieses Ziel bliebe vom Glas nur die Tönung übrig.
+   */
+  blurTarget?: RefObject<View | null>;
+  /**
+   * Liegt über der Leinwand, aber AUSSERHALB des Blur-Ziels. Hierhin gehört
+   * das Glas selbst (das Konto-Blatt): Läge es im Ziel, müsste es sich selbst
+   * weichzeichnen.
+   */
+  overlay?: ReactNode;
 };
 
-const DARK = {
-  base: Palette.canvasDark,
-  gradient: [Palette.canvasDark, '#0d0d0d', Palette.canvasAltDark] as const,
-  grid: Palette.gridDark,
-  glow: Palette.indigoLight,
-  glowOpacity: 0.16,
-  glow2: Palette.cyan,
-  glow2Opacity: 0.08,
-};
-
-/**
- * Bewusst OHNE `useWindowDimensions`: Die Fenstergröße ändert sich jedes Mal,
- * wenn die Tastatur auf- oder zugeht (Android läuft seit Expo SDK 54 zwingend
- * randlos). Hing die Leinwand daran, wurde bei jedem Tastendruck das komplette
- * SVG neu gezeichnet – Raster und Scheine flackerten sichtbar, während man ein
- * Formular ausfüllte. Prozentangaben überlässt das Skalieren dem nativen SVG,
- * ohne dass React neu rendern muss.
- */
-export function HomeBackground({ children, style, ...rest }: ViewProps) {
+export function HomeBackground({
+  children,
+  style,
+  blurTarget,
+  overlay,
+  ...rest
+}: HomeBackgroundProps) {
   const scheme = useResolvedScheme();
-  const p = scheme === 'dark' ? DARK : LIGHT;
+  const base = scheme === 'dark' ? Palette.canvasDark : Palette.canvas;
 
+  if (!blurTarget) {
+    return (
+      <View style={[styles.container, { backgroundColor: base }, style]} {...rest}>
+        {children}
+        {overlay}
+      </View>
+    );
+  }
+
+  // Nur mit Ziel eine zusätzliche Hülle: Sie schöbe sich sonst zwischen den
+  // Bildschirm und seine Kinder, und Layout-Styles wie `styles.centered` kämen
+  // bei den Kindern nicht mehr an.
   return (
-    <View style={[styles.container, { backgroundColor: p.base }, style]} {...rest}>
-      <LinearGradient
-        colors={p.gradient}
-        start={{ x: 0.1, y: 0 }}
-        end={{ x: 0.9, y: 1 }}
-        style={StyleSheet.absoluteFill}
-      />
-
-      <Svg style={StyleSheet.absoluteFill} width="100%" height="100%" pointerEvents="none">
-        <Defs>
-          {/* Feines Raster – zwei 1px-Linien, gekachelt. */}
-          <Pattern id="grid" width={GRID_SIZE} height={GRID_SIZE} patternUnits="userSpaceOnUse">
-            <Line x1="0" y1="0" x2={GRID_SIZE} y2="0" stroke={p.grid} strokeWidth="1" />
-            <Line x1="0" y1="0" x2="0" y2={GRID_SIZE} stroke={p.grid} strokeWidth="1" />
-          </Pattern>
-          <RadialGradient id="home-glow" cx="86%" cy="4%" r="62%">
-            <Stop offset="0" stopColor={p.glow} stopOpacity={String(p.glowOpacity)} />
-            <Stop offset="0.75" stopColor={p.glow} stopOpacity="0" />
-          </RadialGradient>
-          <RadialGradient id="home-glow-2" cx="6%" cy="78%" r="55%">
-            <Stop offset="0" stopColor={p.glow2} stopOpacity={String(p.glow2Opacity)} />
-            <Stop offset="0.8" stopColor={p.glow2} stopOpacity="0" />
-          </RadialGradient>
-        </Defs>
-        <Rect x="0" y="0" width="100%" height="100%" fill="url(#grid)" />
-        <Rect x="0" y="0" width="100%" height="100%" fill="url(#home-glow)" />
-        <Rect x="0" y="0" width="100%" height="100%" fill="url(#home-glow-2)" />
-      </Svg>
-
-      {children}
+    <View style={[styles.container, { backgroundColor: base }, style]} {...rest}>
+      {/* Das Ziel trägt den Grund noch einmal selbst: Der Weichzeichner sieht
+          nur, was IM Ziel gezeichnet wird – ohne eigene Farbe wäre die
+          Leinwand für ihn durchsichtig. */}
+      <BlurTargetView ref={blurTarget} style={[styles.canvas, { backgroundColor: base }]}>
+        {children}
+      </BlurTargetView>
+      {overlay}
     </View>
   );
 }
@@ -91,4 +69,5 @@ const styles = StyleSheet.create({
     flex: 1,
     overflow: 'hidden',
   },
+  canvas: { flex: 1 },
 });

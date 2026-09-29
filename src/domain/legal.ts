@@ -33,6 +33,16 @@
  */
 import { APP_NAME, MIN_AGE, OPERATOR, operatorAddressLines } from '../constants/operator.ts';
 import { SUPPORT_EMAIL } from '../constants/links.ts';
+import { Features } from '../constants/features.ts';
+
+/**
+ * Wer die KI-Prüfung für uns rechnet. Steht als Konstante, weil Datenschutz und
+ * Bedingungen ihn nennen – und weil ein Wechsel des Anbieters dann genau eine
+ * Zeile ist. VOR DER VERÖFFENTLICHUNG PRÜFEN: Vertragsgrundlage (AV-Vertrag,
+ * Standardvertragsklauseln bzw. DPF-Zertifizierung) mit dem aktuellen Stand beim
+ * Anbieter abgleichen.
+ */
+const AI_PROCESSOR = 'Anthropic PBC, 548 Market Street, San Francisco, CA 94104, USA';
 
 /**
  * Stand der Nutzungsbedingungen.
@@ -46,7 +56,7 @@ import { SUPPORT_EMAIL } from '../constants/links.ts';
  * Nutzer:innen wegen eines Kommas erneut zustimmen, und dann klickt es niemand
  * mehr bewusst weg.
  */
-export const LEGAL_VERSION = '2026-07-28';
+export const LEGAL_VERSION = '2026-09-29';
 
 /** Reihenfolge der Dokumente – so stehen sie auch in den Einstellungen. */
 export const LEGAL_DOC_IDS = ['terms', 'liability', 'conduct', 'privacy', 'imprint'] as const;
@@ -71,12 +81,27 @@ export type LegalDocument = {
 
 const ADDRESS = operatorAddressLines().join(', ');
 
+/**
+ * Nummeriert Abschnitte fortlaufend („1. …", „2. …").
+ *
+ * Die Nummer steht nicht fest im Text, weil Abschnitte je nach eingeschalteten
+ * Funktionen fehlen können (Kontostufen, Prämien – siehe constants/features.ts).
+ * Mit festen Nummern stünde dann 3 direkt vor 5, und jeder Verweis „siehe Punkt 7"
+ * zeigte daneben.
+ */
+function numbered(sections: LegalSection[]): LegalSection[] {
+  return sections.map((section, index) => ({
+    ...section,
+    heading: `${index + 1}. ${section.heading.replace(/^\d+\.\s*/, '')}`,
+  }));
+}
+
 const terms: LegalDocument = {
   id: 'terms',
   title: 'Nutzungsbedingungen',
   summary: `Die Regeln für die Nutzung von ${APP_NAME}.`,
   related: ['liability', 'conduct', 'privacy'],
-  sections: [
+  sections: numbered([
     {
       heading: '1. Wer diese App anbietet und für wen sie gilt',
       paragraphs: [
@@ -96,23 +121,24 @@ const terms: LegalDocument = {
       heading: '3. Dein Konto',
       paragraphs: [
         `Für ein Konto musst du mindestens ${MIN_AGE} Jahre alt sein. Deine Angaben müssen zutreffen; ein Konto im Namen einer anderen Person ist nicht erlaubt.`,
-        'Du bist für die Sicherheit deiner Zugangsdaten verantwortlich. Wenn du den Verdacht hast, dass jemand anderes Zugriff hat, ändere dein Passwort und schreib uns.',
+        'Du bist für die Sicherheit deiner Zugangsdaten verantwortlich. Wir empfehlen dir die Zwei-Faktor-Anmeldung (Einstellungen → Sicherheit). Wenn du den Verdacht hast, dass jemand anderes Zugriff hat, ändere dein Passwort und schreib uns.',
+        'Namen und Benutzernamen, die beleidigend, rassistisch oder anstößig sind, lassen wir nicht zu. Die App prüft sie bei der Eingabe automatisch; was trotzdem durchrutscht, benennen wir um oder sperren es.',
         'Pro Person ein Konto. Mehrere Konten, um eine Sperre zu umgehen, sind ein Verstoß gegen diese Bedingungen.',
       ],
     },
-    {
+    ...(Features.accountTiers ? [{
       heading: '4. Höhere Kontostufen',
       paragraphs: [
         'Manche Funktionen – Events erstellen, ein öffentliches Profil, der Business-Bereich – hängen an einer Kontostufe. Diese Stufen werden auf Anfrage freigeschaltet; ein Anspruch auf Freischaltung besteht nicht.',
         'Wir können eine Stufe zurücknehmen, wenn die Voraussetzungen entfallen oder gegen diese Bedingungen verstoßen wird.',
       ],
-    },
+    }] : []),
     {
       heading: '5. Deine Inhalte',
       paragraphs: [
         'Alles, was du einträgst – Events, Beiträge, Storys, Chat-Nachrichten, Bilder, Profilangaben – bleibt inhaltlich deine Sache und deine Verantwortung. Du versicherst, dass du die nötigen Rechte daran hast, insbesondere an Bildern und an Aufnahmen anderer Personen.',
         `Du räumst uns das Recht ein, deine Inhalte in der App anzuzeigen, technisch zu verarbeiten und zu speichern, soweit das für den Betrieb nötig ist. Weiter geht dieses Recht nicht: Wir verkaufen deine Inhalte nicht und nutzen sie nicht für Werbung außerhalb von ${APP_NAME}.`,
-        'Verboten sind Inhalte, die gegen Gesetze verstoßen oder gegen unsere Regeln (siehe „Regeln für das Miteinander"). Bilder und Texte in Events, Beiträgen und Storys werden vor dem Veröffentlichen automatisiert auf nicht jugendfreie Inhalte geprüft; Einzelheiten dazu stehen im Datenschutz-Text.',
+        'Verboten sind Inhalte, die gegen Gesetze verstoßen oder gegen unsere Regeln (siehe „Regeln für das Miteinander"). Texte werden beim Absenden mit einer Liste von Beleidigungen und Hassbegriffen abgeglichen; Bilder und Texte in Events, Beiträgen und Storys prüft vor dem Veröffentlichen zusätzlich eine KI auf nicht jugendfreie Inhalte. Einzelheiten dazu stehen im Datenschutz-Text.',
       ],
     },
     {
@@ -129,6 +155,7 @@ const terms: LegalDocument = {
         'Du kannst Events, Nachrichten, Beiträge, Storys und Konten melden. Eine Meldung ist ein Hinweis an uns; sie entfernt nichts automatisch. Wenn du sofort Ruhe willst, blockiere das Konto – das wirkt unmittelbar.',
         'Wir können Inhalte entfernen und Konten befristet oder dauerhaft sperren, wenn gegen diese Bedingungen oder gegen Gesetze verstoßen wird. Bei schweren Verstößen geschieht das ohne Vorwarnung.',
         'Über das Ergebnis einer Meldung informieren wir die meldende Person nicht. Das schützt beide Seiten.',
+        `Gegen eine Sperre oder die Entfernung eines Inhalts kannst du widersprechen – über „Widerspruch einlegen" in der Sperrmeldung oder per Mail an ${SUPPORT_EMAIL}. Ein Mensch aus unserem Team sieht sich die Entscheidung dann erneut an, auch wenn sie automatisch getroffen wurde, und teilt dir das Ergebnis mit.`,
       ],
     },
     {
@@ -138,17 +165,17 @@ const terms: LegalDocument = {
         'Wir können Funktionen ändern oder einstellen. Bei Änderungen, die dich erheblich betreffen, informieren wir dich in der App.',
       ],
     },
-    {
+    ...(Features.rewards ? [{
       heading: '9. Punkte und Prämien',
       paragraphs: [
         'Punkte, die du in der App sammelst, sind kein Geld und kein Guthaben. Sie sind nicht übertragbar, nicht auszahlbar und verfallen, wenn dein Konto endet.',
         'Eingelöste Coupons werden bei den jeweiligen Partnern vorgezeigt. Ob und wie ein Partner den Coupon annimmt, liegt bei diesem Partner.',
       ],
-    },
+    }] : []),
     {
       heading: '10. Konto beenden',
       paragraphs: [
-        `Du kannst dein Konto jederzeit löschen lassen – der Weg dazu steht in den Einstellungen unter „Konto beenden". Schreib uns dafür an ${SUPPORT_EMAIL}.`,
+        'Du kannst dein Konto jederzeit selbst löschen: in den Einstellungen unter „Konto beenden", bestätigt mit deinem Passwort. Die Löschung geschieht sofort und lässt sich nicht rückgängig machen.',
         'Mit der Löschung verschwinden deine Inhalte. Nachrichten in Gruppen-Chats können bei den anderen Teilnehmenden sichtbar bleiben, wenn sie zum Verlauf eines Gesprächs gehören. Rechtlich vorgeschriebene Aufbewahrung bleibt unberührt.',
       ],
     },
@@ -166,7 +193,7 @@ const terms: LegalDocument = {
         'Sollte eine Bestimmung dieser Bedingungen unwirksam sein, bleiben die übrigen wirksam.',
       ],
     },
-  ],
+  ]),
 };
 
 const liability: LegalDocument = {
@@ -187,7 +214,7 @@ const liability: LegalDocument = {
       heading: 'Die Teilnahme erfolgt auf eigene Verantwortung',
       paragraphs: [
         'Du entscheidest selbst, ob du zu einem Treffen gehst, mit wem du dich verabredest und was du dort tust. Diese Entscheidung liegt bei dir – mit allem, was daran hängt.',
-        'Für Schäden, Verletzungen, Verluste, Diebstahl, Streitigkeiten oder sonstige Folgen, die bei oder im Zusammenhang mit einem Event entstehen, haften wir nicht. Das gilt auch für das Verhalten anderer Teilnehmenden, für den Zustand von Orten und Ausstattung und für alles, was auf dem Weg zu einem Treffen oder von dort weg passiert.',
+        'Für Schäden, Verletzungen, Verluste, Diebstahl, Streitigkeiten oder sonstige Folgen, die bei oder im Zusammenhang mit einem Event entstehen, haften wir nicht – soweit das Gesetz das zulässt; die Grenzen stehen unten unter „Woran wir uns nicht vorbeischreiben". Das gilt auch für das Verhalten anderer Teilnehmenden, für den Zustand von Orten und Ausstattung und für alles, was auf dem Weg zu einem Treffen oder von dort weg passiert.',
         'Prüfe selbst, ob du für eine Tätigkeit versichert, gesundheitlich in der Lage und – wo nötig – berechtigt bist. Bei Sport, Wasser, Höhe, Feuer, Fahrzeugen oder Alkohol gilt das besonders.',
       ],
     },
@@ -259,7 +286,7 @@ const conduct: LegalDocument = {
       heading: 'Was passiert bei einem Verstoß',
       paragraphs: [
         'Wir entfernen Inhalte und sperren Konten – befristet oder dauerhaft, je nachdem, was passiert ist. Bei Straftaten wenden wir uns an die Behörden.',
-        'Jede Sperre wird mit Grund festgehalten. Hältst du eine Sperre für falsch, schreib uns; wir sehen uns das erneut an.',
+        'Jede Sperre wird mit Grund festgehalten. Hältst du eine Sperre für falsch, tipp in der Sperrmeldung auf „Widerspruch einlegen" oder schreib uns – ein Mensch sieht sich das erneut an.',
       ],
     },
   ],
@@ -280,7 +307,8 @@ const privacy: LegalDocument = {
     {
       heading: 'Was wir speichern',
       paragraphs: [
-        'Konto: Name, Benutzername, E-Mail-Adresse, verschlüsseltes Passwort, gewählte Interessen, Kontostufe und – falls du eins hochlädst – Profil- und Hintergrundbild.',
+        'Konto: Name, Benutzername, E-Mail-Adresse, dein Passwort als nicht umkehrbare Prüfsumme (nie im Klartext), gewählte Interessen und – falls du eins hochlädst – Profil- und Hintergrundbild.',
+        'Zwei-Faktor-Anmeldung, wenn du sie einschaltest: das verschlüsselt gespeicherte Geheimnis deiner Authenticator-App bzw. kurzlebige Einmal-Codes für die E-Mail-Variante (höchstens 10 Minuten gültig) und die Prüfsummen deiner Wiederherstellungscodes. Codes per E-Mail verschicken wir über unseren Mail-Dienstleister.',
         'Inhalte: Events, Beiträge, Storys, Chat-Nachrichten und Bilder, die du einträgst, samt Zeitpunkt.',
         'Nutzung: welche Events du erstellt hast oder besuchst, welche du dir gemerkt hast, wen du als Freund:in bestätigt hast, in welchen Gruppen du bist, gesammelte Punkte und aktive Tage.',
         'Standort: nur, wenn du es einschaltest, und nur zur Anzeige von Entfernungen und Events in deiner Nähe. Wir speichern keine Bewegungsprofile.',
@@ -298,21 +326,23 @@ const privacy: LegalDocument = {
     {
       heading: 'Automatisierte Prüfung von Inhalten',
       paragraphs: [
-        'Bilder und Texte in Events, Beiträgen und Storys werden vor dem Veröffentlichen automatisiert daraufhin geprüft, ob sie nicht jugendfrei sind. Dazu wird der geprüfte Inhalt an einen KI-Dienstleister übermittelt, der ihn in unserem Auftrag verarbeitet.',
-        'Das Ergebnis wird protokolliert – auch bei unauffälligen Prüfungen, damit jede automatische Sperre nachvollziehbar bleibt. Führt eine Prüfung zu einer Sperre, kannst du dich bei uns melden; darüber entscheidet dann ein Mensch.',
+        'Namen, Benutzernamen und Texte gleichen wir beim Absenden mit einer Liste von Beleidigungen, rassistischen Begriffen und Nazi-Codes ab. Das geschieht auf unserem eigenen Server; dabei verlässt nichts das System.',
+        `Bilder und Texte in Events, Beiträgen und Storys prüft vor dem Veröffentlichen zusätzlich eine KI darauf, ob sie nicht jugendfrei sind. Dazu werden Text und Bild an unseren Auftragsverarbeiter ${AI_PROCESSOR} (KI-Modell „Claude") übermittelt. Weil der Anbieter in den USA sitzt, stützt sich die Übermittlung auf die Standardvertragsklauseln der EU-Kommission (Art. 46 Abs. 2 lit. c DSGVO). Nach den Vertragsbedingungen des Anbieters werden die Inhalte nicht zum Training seiner Modelle verwendet.`,
+        'Das Ergebnis wird protokolliert – auch bei unauffälligen Prüfungen, damit jede automatische Sperre nachvollziehbar bleibt.',
+        `Eine automatische Sperre ist eine Entscheidung, die ohne einen Menschen zustande kommt (Art. 22 DSGVO). Du hast das Recht, dass ein Mensch sie überprüft, deinen Standpunkt darzulegen und die Entscheidung anzufechten – über „Widerspruch einlegen" in der Sperrmeldung oder per Mail an ${SUPPORT_EMAIL}.`,
       ],
     },
     {
       heading: 'Wer die Daten sieht',
       paragraphs: [
         'Andere Nutzer:innen sehen, was du selbst sichtbar machst: dein Profil, deine Events, deine Beiträge und Storys, deine Nachrichten in Gruppen und Event-Chats.',
-        'Technische Dienstleister (Server, Speicher, KI-Prüfung) verarbeiten Daten in unserem Auftrag und sind daran gebunden. Wir verkaufen keine Daten.',
+        'Technische Dienstleister (Server, Speicher, E-Mail-Versand, KI-Prüfung) verarbeiten Daten in unserem Auftrag und sind vertraglich daran gebunden. Wir verkaufen keine Daten.',
       ],
     },
     {
       heading: 'Wie lange',
       paragraphs: [
-        'Kontodaten, solange dein Konto besteht. Storys laufen nach 24 Stunden ab. Einträge im Verlauf verschwinden sieben Tage, nachdem ein Event gelöscht wurde oder du ausgetreten bist.',
+        'Kontodaten, solange dein Konto besteht. Löschst du dein Konto, entfernen wir es samt deinen Bildern sofort. Storys laufen nach 24 Stunden ab. Einträge im Verlauf verschwinden sieben Tage, nachdem ein Event gelöscht wurde oder du ausgetreten bist.',
         'Nachweise zu Sperren bewahren wir länger auf – sie sind der Grund, aus dem eine Sperre überprüfbar bleibt.',
       ],
     },

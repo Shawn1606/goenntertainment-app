@@ -6,6 +6,7 @@ import {
   accountAbilities,
   accountLabel,
   capabilitiesFor,
+  formatPriceCents,
   nextTier,
   normalizeAccountType,
   rankOf,
@@ -114,4 +115,75 @@ test('alles ausser Erstellen bleibt auch fuer Admins an die Stufe gebunden', () 
 test('ohne Nutzer gilt die kleinste Stufe', () => {
   assert.equal(accountAbilities(null).canCreateActivities, false);
   assert.equal(accountAbilities(undefined).hasBusinessArea, false);
+});
+
+test('die Monatsbeitraege stehen in Cent und Standard ist kostenlos', () => {
+  assert.equal(tierFor('standard').monthlyPriceCents, 0);
+  assert.equal(tierFor('creator').monthlyPriceCents, 799);
+  assert.equal(tierFor('business').monthlyPriceCents, 1499);
+  assert.equal(tierFor('business_plus').monthlyPriceCents, 2999);
+});
+
+test('jede Stufe kostet mindestens so viel wie die darunter', () => {
+  // Sonst waere die Leiter kaputt: Wer aufsteigt, zahlt mehr und bekommt mehr.
+  // Ein Preis, der nach oben faellt, macht die naechste Stufe zum Abstieg.
+  ACCOUNT_TIERS.forEach((tier, index) => {
+    if (index === 0) return;
+    assert.ok(
+      tier.monthlyPriceCents >= ACCOUNT_TIERS[index - 1].monthlyPriceCents,
+      `${tier.type}: Preis faellt gegenueber der Stufe darunter`,
+    );
+  });
+});
+
+test('nur Standard ist kostenlos – jede hoehere Stufe kostet etwas', () => {
+  ACCOUNT_TIERS.forEach((tier, index) => {
+    if (index === 0) assert.equal(tier.monthlyPriceCents, 0, 'Standard');
+    else assert.ok(tier.monthlyPriceCents > 0, `${tier.type}: kostet nichts`);
+  });
+});
+
+test('Preise stehen deutsch mit Komma und zwei Cent-Stellen', () => {
+  assert.equal(formatPriceCents(799), '7,99 €');
+  assert.equal(formatPriceCents(1499), '14,99 €');
+  assert.equal(formatPriceCents(2999), '29,99 €');
+});
+
+test('die Cent-Stelle bleibt zweistellig', () => {
+  // Der Fall, der ohne padStart falsch aussieht: "15,0 €" statt "15,00 €".
+  assert.equal(formatPriceCents(1500), '15,00 €');
+  assert.equal(formatPriceCents(1505), '15,05 €');
+  assert.equal(formatPriceCents(5), '0,05 €');
+  assert.equal(formatPriceCents(0), '0,00 €');
+});
+
+test('die Jahresbeitraege stehen in Cent und Standard ist kostenlos', () => {
+  assert.equal(tierFor('standard').yearlyPriceCents, 0);
+  assert.equal(tierFor('creator').yearlyPriceCents, 7990);
+  assert.equal(tierFor('business').yearlyPriceCents, 14990);
+  assert.equal(tierFor('business_plus').yearlyPriceCents, 29990);
+});
+
+test('kein Jahresbeitrag ist so hoch wie zwoelf Monatsbeitraege', () => {
+  // Der Fehler, den dieser Test verhindert: Jemand aendert einen Preis von Hand
+  // und das Jahresabo ist danach teurer als monatlich zahlen – waehrend im
+  // Upgrade-Bildschirm weiter "2 Monate gratis" steht (siehe billing-period.ts,
+  // das diese Zusage aus genau diesen zwei Zahlen ableitet).
+  ACCOUNT_TIERS.forEach((tier) => {
+    if (tier.yearlyPriceCents === 0) return; // Stufe ohne Jahresabo
+    assert.ok(
+      tier.yearlyPriceCents < tier.monthlyPriceCents * 12,
+      `${tier.type}: Jahresabo spart nichts`,
+    );
+  });
+});
+
+test('eine Stufe mit Preis hat auch einen Jahrespreis', () => {
+  // Umgekehrt darf es eine Stufe ohne Jahresabo geben – der Umschalter im
+  // Upgrade-Bildschirm verschwindet dann von selbst (periodsFor). Solange aber
+  // alle drei bezahlten Stufen eines haben, soll keine still herausfallen.
+  ACCOUNT_TIERS.forEach((tier) => {
+    if (tier.monthlyPriceCents === 0) return; // Standard
+    assert.ok(tier.yearlyPriceCents > 0, `${tier.type}: kein Jahrespreis`);
+  });
 });

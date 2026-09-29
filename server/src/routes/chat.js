@@ -33,6 +33,7 @@ import { Router } from 'express';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError } from '../validate.js';
+import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm } from '../blocked-terms.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { isRoomKind, nextBurst, pageLimit, parseMessageInput } from '../messaging.js';
 
@@ -180,9 +181,9 @@ function transformMessage(req, row, userId) {
           title: row.activity_title ?? row.shared_title,
           location: row.activity_location ?? null,
           starts_at: toIso(row.activity_starts_at ?? null),
-          banner_url: row.activity_banner
-            ? `${publicBase(req)}/storage/${row.activity_banner}`
-            : null,
+          // `mediaUrl`, weil `banner_path` auch eine fremde Adresse enthalten
+          // kann (importierte Events, siehe routes/activities.js).
+          banner_url: mediaUrl(req, row.activity_banner),
         }
       : null,
   };
@@ -405,6 +406,13 @@ router.post('/chats/:kind/:refId/messages', requireAuth, async (req, res, next) 
 
     const parsed = parseMessageInput(req.body);
     if (parsed.error) throw new HttpError(422, parsed.error, { body: [parsed.error] });
+
+    // Gesperrte Begriffe: klar ablehnen statt maskieren. Ein „***" im Verlauf
+    // sagte allen, dass da etwas stand – und dem Absender nicht, was.
+    if (parsed.body && findBlockedTerm(parsed.body, BLOCKED_TERMS, 'text')) {
+      const message = blockedTermMessageFor('text');
+      throw new HttpError(422, message, { body: [message] });
+    }
 
     checkBurst(req.user.id);
 

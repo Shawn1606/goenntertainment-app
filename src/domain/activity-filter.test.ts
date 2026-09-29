@@ -5,6 +5,7 @@ import {
   EMPTY_FILTER,
   activeFilterCount,
   filterActivities,
+  isAlwaysOn,
   type FilterableActivity,
 } from './activity-filter.ts';
 
@@ -160,4 +161,147 @@ test('Filtern veraendert die Ausgangsliste nicht', () => {
   const copy = [...items];
   filterActivities(items, { ...EMPTY_FILTER, query: 'kickern' }, { now: NOW });
   assert.deepEqual(items, copy);
+});
+
+// ---------------------------------------------------------------------------
+// Tageszeit und die weiteren Zeitfenster.
+// ---------------------------------------------------------------------------
+
+test('Tageszeit: abends trifft 17-21 Uhr, nicht den Nachmittag', () => {
+  const items = [
+    activity({ id: 1, starts_at: '2026-07-27T15:00:00' }),
+    activity({ id: 2, starts_at: '2026-07-27T20:00:00' }),
+  ];
+  assert.deepEqual(
+    filterActivities(items, { ...EMPTY_FILTER, daytime: 'evening' }, { now: NOW }).map((a) => a.id),
+    [2],
+  );
+});
+
+test('Tageszeit: nachts laeuft ueber Mitternacht (23 Uhr UND 2 Uhr)', () => {
+  // Der Fall, an dem eine naive Von-Bis-Pruefung scheitert: 2 Uhr liegt
+  // zahlenmaessig unter dem Startwert 22.
+  const items = [
+    activity({ id: 1, starts_at: '2026-07-27T23:00:00' }),
+    activity({ id: 2, starts_at: '2026-07-28T02:00:00' }),
+    activity({ id: 3, starts_at: '2026-07-28T14:00:00' }),
+  ];
+  assert.deepEqual(
+    filterActivities(items, { ...EMPTY_FILTER, daytime: 'night' }, { now: NOW }).map((a) => a.id),
+    [1, 2],
+  );
+});
+
+test('Tageszeit: ohne Startzeit kein Treffer', () => {
+  const items = [activity({ id: 1, starts_at: null })];
+  assert.equal(filterActivities(items, { ...EMPTY_FILTER, daytime: 'evening' }, { now: NOW }).length, 0);
+});
+
+test('Tageszeit laesst sich mit dem Zeitfenster kombinieren', () => {
+  const items = [
+    activity({ id: 1, starts_at: '2026-07-27T20:00:00' }), // heute abend
+    activity({ id: 2, starts_at: '2026-07-27T14:00:00' }), // heute mittag
+    activity({ id: 3, starts_at: '2026-07-29T20:00:00' }), // spaeter abend
+  ];
+  assert.deepEqual(
+    filterActivities(items, { ...EMPTY_FILTER, when: 'today', daytime: 'evening' }, { now: NOW }).map(
+      (a) => a.id,
+    ),
+    [1],
+  );
+});
+
+test('Wochenende: Freitagabend gehoert dazu, Freitagmittag nicht', () => {
+  const freitag = new Date('2026-07-31T09:00:00');
+  const items = [
+    activity({ id: 1, starts_at: '2026-07-31T12:00:00' }),
+    activity({ id: 2, starts_at: '2026-07-31T20:00:00' }),
+    activity({ id: 3, starts_at: '2026-08-02T15:00:00' }), // Sonntag
+    activity({ id: 4, starts_at: '2026-08-03T20:00:00' }), // Montag
+  ];
+  assert.deepEqual(
+    filterActivities(items, { ...EMPTY_FILTER, when: 'weekend' }, { now: freitag }).map((a) => a.id),
+    [2, 3],
+  );
+});
+
+test('Wochenende: am Samstag ist das LAUFENDE gemeint, nicht das naechste', () => {
+  const samstag = new Date('2026-08-01T14:00:00');
+  const items = [activity({ id: 1, starts_at: '2026-08-01T22:00:00' })];
+  assert.deepEqual(
+    filterActivities(items, { ...EMPTY_FILTER, when: 'weekend' }, { now: samstag }).map((a) => a.id),
+    [1],
+  );
+});
+
+test('Monat: reicht weiter als eine Woche', () => {
+  const items = [activity({ id: 1, starts_at: '2026-08-20T19:00:00Z' })];
+  assert.equal(filterActivities(items, { ...EMPTY_FILTER, when: 'week' }, { now: NOW }).length, 0);
+  assert.equal(filterActivities(items, { ...EMPTY_FILTER, when: 'month' }, { now: NOW }).length, 1);
+});
+
+test('activeFilterCount zaehlt die Tageszeit mit', () => {
+  assert.equal(activeFilterCount({ ...EMPTY_FILTER, daytime: 'night' }), 1);
+  assert.equal(activeFilterCount({ ...EMPTY_FILTER, when: 'weekend', daytime: 'night' }), 2);
+});
+
+// ---------------------------------------------------------------------------
+// Dauerangebote (Bowling, Trampolinhalle, Freibad).
+// ---------------------------------------------------------------------------
+
+/** Ein Dauerangebot: `starts_at` traegt nur den Anlege-Zeitpunkt, siehe schema.sql. */
+function dauerangebot(id: number) {
+  return activity({
+    id,
+    title: 'Freibad',
+    starts_at: '2026-07-01T12:00:00Z', // laengst vorbei – und genau das ist der Punkt
+    is_permanent: true,
+  });
+}
+
+test('isAlwaysOn erkennt nur echte Dauerangebote', () => {
+  assert.equal(isAlwaysOn(dauerangebot(1)), true);
+  assert.equal(isAlwaysOn(activity({ id: 2 })), false);
+});
+
+test('ein Dauerangebot ueberlebt JEDES Zeitfenster', () => {
+  // Der wichtigste Fall: Sein `starts_at` liegt in der Vergangenheit. Nach Datum
+  // beurteilt fiele es ueberall heraus – ein Freibad ist aber „heute" offen.
+  const items = [dauerangebot(1)];
+  for (const when of ['today', 'tomorrow', 'weekend', 'week', 'month'] as const) {
+    assert.equal(
+      filterActivities(items, { ...EMPTY_FILTER, when }, { now: NOW }).length,
+      1,
+      `Zeitfenster "${when}" haette es nicht ausblenden duerfen`,
+    );
+  }
+});
+
+test('ein Dauerangebot ueberlebt JEDE Tageszeit', () => {
+  const items = [dauerangebot(1)];
+  for (const daytime of ['morning', 'afternoon', 'evening', 'night'] as const) {
+    assert.equal(
+      filterActivities(items, { ...EMPTY_FILTER, daytime }, { now: NOW }).length,
+      1,
+      `Tageszeit "${daytime}" haette es nicht ausblenden duerfen`,
+    );
+  }
+});
+
+test('ein normales Event mit demselben Datum faellt dagegen heraus', () => {
+  // Beweist, dass oben das Kennzeichen wirkt und nicht ein weiches Datum.
+  const items = [activity({ id: 1, starts_at: '2026-07-01T12:00:00Z' })];
+  assert.equal(filterActivities(items, { ...EMPTY_FILTER, when: 'today' }, { now: NOW }).length, 0);
+});
+
+test('Dauerangebote unterliegen weiter Suche, Kategorie und Plaetzen', () => {
+  // „Immer offen" heisst nur „immer zeitlich passend", nicht „immer sichtbar".
+  const items = [dauerangebot(1)];
+  assert.equal(filterActivities(items, { ...EMPTY_FILTER, query: 'freibad' }, { now: NOW }).length, 1);
+  assert.equal(filterActivities(items, { ...EMPTY_FILTER, query: 'oper' }, { now: NOW }).length, 0);
+  assert.equal(
+    filterActivities(items, { ...EMPTY_FILTER, interestIds: [999] }, { now: NOW }).length,
+    0,
+    'eine fremde Kategorie blendet es weiterhin aus',
+  );
 });

@@ -17,6 +17,7 @@ import {
   activeFilterCount,
   type ActivityFilter,
   type DateWindow,
+  type Daytime,
 } from '@/domain/activity-filter';
 import { type Interest } from '@/lib/api';
 
@@ -24,15 +25,27 @@ const WHEN_OPTIONS: { value: DateWindow; label: string }[] = [
   { value: 'all', label: 'Jederzeit' },
   { value: 'today', label: 'Heute' },
   { value: 'tomorrow', label: 'Morgen' },
+  { value: 'weekend', label: 'Wochenende' },
   { value: 'week', label: 'Diese Woche' },
+  { value: 'month', label: 'Diesen Monat' },
+];
+
+const DAYTIME_OPTIONS: { value: Daytime; label: string }[] = [
+  { value: 'all', label: 'Ganztags' },
+  { value: 'morning', label: 'Vormittags' },
+  { value: 'afternoon', label: 'Nachmittags' },
+  { value: 'evening', label: 'Abends' },
+  { value: 'night', label: 'Nachts' },
 ];
 
 const DISTANCE_OPTIONS: { value: number | null; label: string }[] = [
   { value: null, label: 'Egal wie weit' },
+  { value: 2, label: 'bis 2 km' },
   { value: 5, label: 'bis 5 km' },
   { value: 15, label: 'bis 15 km' },
   { value: 50, label: 'bis 50 km' },
 ];
+
 
 export type ActivityFilterBarProps = {
   filter: ActivityFilter;
@@ -111,6 +124,19 @@ export function ActivityFilterBar({
                 label={option.label}
                 selected={filter.when === option.value}
                 onPress={() => patch({ when: option.value })}
+              />
+            ))}
+          </FilterRow>
+
+          {/* Tageszeit getrennt von „Wann": „diese Woche abends" ist die
+              häufigste Suche und mit einer einzigen Reihe nicht ausdrückbar. */}
+          <FilterRow label="Tageszeit">
+            {DAYTIME_OPTIONS.map((option) => (
+              <GlassChip
+                key={option.value}
+                label={option.label}
+                selected={filter.daytime === option.value}
+                onPress={() => patch({ daytime: option.value })}
               />
             ))}
           </FilterRow>

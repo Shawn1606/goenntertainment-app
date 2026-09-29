@@ -44,14 +44,14 @@ import { GroupForm } from '@/components/friends/group-form';
 import { PersonRow } from '@/components/friends/person-row';
 import { HomeBackground } from '@/components/home-background';
 import { MascotEmpty, MascotError } from '@/components/mascot';
-import { TabMascot } from '@/components/tab-mascot';
+import { useStoryPeek } from '@/components/story-peek';
 import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
 import { GlassButton, GlassCard, GlassChip, GlassSearchField, SectionHeader } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
 import { Segmented } from '@/components/ui/segmented';
 import { BottomTabInset, FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
-import { unreadBadge } from '@/domain/chat';
+import { unreadBadge } from '@/domain/unread-badge';
 import { useBrandSurface } from '@/hooks/use-theme';
 import { ApiError, api, type FriendGroup, type PersonCard } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -200,11 +200,34 @@ export default function FriendsScreen() {
     }
   }
 
-  function openProfile(person: PersonCard) {
-    if (!person.username) return;
-    feedback.tapped();
-    router.push({ pathname: '/profile/[username]', params: { username: person.username } });
-  }
+  const openProfile = useCallback(
+    (person: Pick<PersonCard, 'username'>) => {
+      if (!person.username) return;
+      feedback.tapped();
+      router.push({ pathname: '/profile/[username]', params: { username: person.username } });
+    },
+    [router],
+  );
+
+  /**
+   * Ring am Profilbild antippen: Story ansehen, ohne über das Profil zu gehen.
+   *
+   * `onViewed` stellt den Ring in ALLEN Listen dieses Screens ruhig – dieselbe
+   * Person kann gleichzeitig in den Treffern und in der Freundesliste stehen, und
+   * dann müssen beide Ringe dasselbe sagen.
+   */
+  const markStorySeen = useCallback((userId: number) => {
+    const quiet = (rows: PersonCard[]) =>
+      rows.map((row) =>
+        row.id === userId && row.story ? { ...row, story: { ...row.story, unseen: false } } : row,
+      );
+    setFriends(quiet);
+    setIncoming(quiet);
+    setOutgoing(quiet);
+    setResults((prev) => (prev ? quiet(prev) : prev));
+  }, []);
+
+  const story = useStoryPeek({ onEmpty: openProfile, onViewed: markStorySeen });
 
   function openChat(group: FriendGroup) {
     feedback.tapped();
@@ -305,7 +328,7 @@ export default function FriendsScreen() {
         contentContainerStyle={[
           styles.content,
           {
-            paddingTop: insets.top + Spacing.four,
+            paddingTop: insets.top + Spacing.three,
             paddingBottom: insets.bottom + BottomTabInset + Spacing.four,
           },
         ]}
@@ -354,7 +377,13 @@ export default function FriendsScreen() {
             </Pressable>
           </View>
 
-          <TabMascot tab="friends" line={mascotLine} />
+          {/* Ohne Maskottchen-Kopf (Instagram-Stil): Der Hinweis bleibt als eine
+              ruhige Zeile, wenn er etwas zu sagen hat. */}
+          {mascotLine ? (
+            <ThemedText type="small" style={{ color: surface.textMuted }}>
+              {mascotLine}
+            </ThemedText>
+          ) : null}
 
           <GlassSearchField
             value={query}
@@ -405,6 +434,7 @@ export default function FriendsScreen() {
                   <PersonRow
                     person={person}
                     onPress={() => openProfile(person)}
+                    onOpenStory={() => story.open(person)}
                     action={
                       <FriendAction
                         state={person.friendship ?? 'none'}
@@ -428,6 +458,7 @@ export default function FriendsScreen() {
                     <PersonRow
                       person={person}
                       onPress={() => openProfile(person)}
+                      onOpenStory={() => story.open(person)}
                       action={
                         <View style={styles.actionRow}>
                           <GlassChip label="Annehmen" selected onPress={() => onAdd(person)} />
@@ -459,6 +490,7 @@ export default function FriendsScreen() {
                       <PersonRow
                         person={person}
                         onPress={() => openProfile(person)}
+                        onOpenStory={() => story.open(person)}
                         action={
                           <Pressable
                             onPress={() => onRemove(person, 'friend')}
@@ -484,6 +516,7 @@ export default function FriendsScreen() {
                         key={person.id}
                         person={person}
                         onPress={() => openProfile(person)}
+                        onOpenStory={() => story.open(person)}
                         action={
                           <GlassChip label="Zurückziehen" onPress={() => onRemove(person, 'request')} />
                         }
@@ -548,6 +581,11 @@ export default function FriendsScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Der Story-Betrachter ist ein eigenes Fenster (`Modal`) und liegt damit
+          über allem – auch über der Tab-Leiste. Deshalb steht er zuletzt und
+          nicht in der Liste, aus der er geöffnet wird. */}
+      {story.viewer}
     </HomeBackground>
   );
 }

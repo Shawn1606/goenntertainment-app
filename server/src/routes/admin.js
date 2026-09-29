@@ -6,9 +6,11 @@ import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEvidence } from '../auth.js';
 import { Validator, HttpError, isAlphaDash } from '../validate.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
 import { transformRequest } from './upgrades.js';
 import { mediaUrl, publicBase } from '../media.js';
+import { deleteUserAccount } from '../account-deletion.js';
 
 const router = Router();
 
@@ -190,6 +192,10 @@ router.patch('/users/:id', requireAuth, requireAdmin, async (req, res, next) => 
     const v = new Validator(req.body ?? {});
     if (username.length < 3 || username.length > 30 || !isAlphaDash(username)) {
       v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+    } else {
+      // Auch fuer Admins: Umbenennen ist genau der Weg, auf dem ein anstoessiger
+      // Altname verschwinden soll – nicht der, auf dem ein neuer entsteht.
+      rejectBlockedTerms(v, 'username', username, 'username');
     }
     if (!v.fails() && (await first('SELECT id FROM users WHERE username = ? AND id <> ?', [username, user.id]))) {
       v.add('username', 'Dieser Benutzername ist bereits vergeben.');
@@ -266,12 +272,15 @@ router.post('/users/:id/unban', requireAuth, requireAdmin, async (req, res, next
 });
 
 // DELETE /api/admin/users/:id  (nur Admin) – Konto endgueltig loeschen.
-// Verknuepfte Daten (Events, Beitritte, Verlauf, Interessen) raeumt die DB per Cascade.
+// Verknuepfte Daten raeumt die DB per Cascade; Tokens und hochgeladene Dateien
+// raeumt deleteUserAccount (src/account-deletion.js) – derselbe Ablauf wie beim
+// Selbst-Loeschen ueber DELETE /api/me. Der letzte Admin ist hier nicht zu
+// schuetzen: Wer loescht, ist selbst Admin und bleibt (loadTargetUser verbietet
+// das eigene Konto).
 router.delete('/users/:id', requireAuth, requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
-    await pool.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [user.id]);
-    await pool.query('DELETE FROM users WHERE id = ?', [user.id]);
+    await deleteUserAccount(user.id);
     res.json({ message: 'Nutzer geloescht.' });
   } catch (err) {
     next(err);

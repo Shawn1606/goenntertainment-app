@@ -12,6 +12,8 @@ import {
 } from '../auth.js';
 import { Validator, HttpError, isEmail, isAlphaDash, missingIds } from '../validate.js';
 import { ACCOUNT_TYPES, SELF_SERVICE_ACCOUNT_TYPES, normalizeAccountType } from '../accounts.js';
+import { passwordProblem } from '../password-policy.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 
 const router = Router();
 
@@ -44,15 +46,24 @@ router.post('/register', async (req, res, next) => {
     const v = new Validator(b);
 
     if (!b.name || typeof b.name !== 'string') v.add('name', 'Der Name ist erforderlich.');
+    // Gesperrte Begriffe nach dem Format – wie in Laravel (NoBlockedTerms), damit
+    // derselbe Wert auf beiden Wegen dieselbe Meldung bekommt.
+    else rejectBlockedTerms(v, 'name', b.name, 'name');
     if (!b.username || typeof b.username !== 'string') {
       v.add('username', 'Der Benutzername ist erforderlich.');
     } else if (b.username.length < 3 || b.username.length > 30 || !isAlphaDash(b.username)) {
       v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+    } else {
+      rejectBlockedTerms(v, 'username', b.username, 'username');
     }
     if (!isEmail(b.email)) v.add('email', 'Bitte eine gueltige E-Mail-Adresse angeben.');
-    if (!b.password || String(b.password).length < 8 || !/[a-zA-Z]/.test(b.password) || !/\d/.test(b.password)) {
-      v.add('password', 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.');
-    }
+    // Grundregel, haeufige Passwoerter, Name/E-Mail im Passwort – siehe
+    // src/password-policy.js (dieselbe Regel wie in Laravel).
+    const passwordError = passwordProblem(b.password, {
+      username: typeof b.username === 'string' ? b.username : null,
+      email: typeof b.email === 'string' ? b.email : null,
+    });
+    if (passwordError) v.add('password', passwordError);
     // Unbekannte Werte werden abgewiesen statt stillschweigend auf Standard
     // gedreht: Ein Tippfehler im Client soll auffallen, nicht durchrutschen.
     if (!REGISTRABLE_TYPES.includes(b.account_type)) {
@@ -151,6 +162,22 @@ router.post('/login', async (req, res, next) => {
       return res.status(403).json({ message: 'Dein Konto ist gesperrt.', ban: banInfo(user) });
     }
 
+    /**
+     * Zwei-Faktor-Konten bekommen HIER keinen Token.
+     *
+     * Den zweiten Schritt (Code pruefen) kann nur Laravel: Das TOTP-Secret ist
+     * mit Laravels APP_KEY verschluesselt, und die Code-Hashes haengen am selben
+     * Schluessel. Gaebe dieser Endpunkt nach dem Passwort einen Token heraus,
+     * waere die ganze Zwei-Faktor-Anmeldung mit einem Aufruf direkt an Port 8001
+     * umgangen – ein Passwort genuegte wieder.
+     *
+     * Die Pruefung steht bewusst NACH dem Passwort: Davor verriete die Antwort
+     * jedem, der nur eine E-Mail-Adresse kennt, ob das Konto 2FA nutzt.
+     */
+    if (user.two_factor_method) {
+      return res.status(403).json({ message: 'Bitte melde dich über die App an.' });
+    }
+
     await tokenResponse(req, res, user, b.device_name);
   } catch (err) {
     next(err);
@@ -191,7 +218,10 @@ router.patch('/user', requireAuth, async (req, res, next) => {
     if (b.name !== undefined) {
       if (!b.name || typeof b.name !== 'string') {
         v.add('name', 'Der Name ist erforderlich.');
-      } else {
+      } else if (b.name === req.user.name || !rejectBlockedTerms(v, 'name', b.name, 'name')) {
+        // Gesperrte Begriffe nur bei einem NEUEN Wert – wie in Laravel: Ein
+        // Altname, den die Liste heute traefe, soll nicht jede andere Aenderung
+        // am Profil blockieren.
         updates.name = b.name.trim();
       }
     }
@@ -201,7 +231,7 @@ router.patch('/user', requireAuth, async (req, res, next) => {
         v.add('username', 'Der Benutzername ist erforderlich.');
       } else if (b.username.length < 3 || b.username.length > 30 || !isAlphaDash(b.username)) {
         v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
-      } else {
+      } else if (b.username === req.user.username || !rejectBlockedTerms(v, 'username', b.username, 'username')) {
         updates.username = b.username;
       }
     }

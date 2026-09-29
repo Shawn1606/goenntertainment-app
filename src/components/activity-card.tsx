@@ -1,6 +1,8 @@
 import { Image, Platform, Pressable, StyleSheet, View } from 'react-native';
 
+import { HostBanner } from '@/components/host-banner';
 import { ThemedText } from '@/components/themed-text';
+import { BannerImage } from '@/components/ui/banner-image';
 import { Icon } from '@/components/ui/icon';
 import { Glow, PulseDot } from '@/components/ui/glow';
 import { PressableScale } from '@/components/ui/pressable-scale';
@@ -22,6 +24,14 @@ type Props = {
   distanceKm?: number | null;
   /** `card` = große Kachel mit Banner, `row` = kompakte Zeile für Trefferlisten. */
   layout?: 'card' | 'row';
+  /**
+   * Höhe des Banners auf der Kachel.
+   *
+   * Standard 130: die Höhe, mit der die Kacheln in den Regalen stehen. Größer nur
+   * dort, wo eine Kachel fast die ganze Breite hat und das Bild die Hauptsache ist
+   * (die Sektionen „Für dich empfohlen" und „In deiner Nähe").
+   */
+  bannerHeight?: number;
   /**
    * Referenz-„jetzt" für die Dringlichkeit. Kommt von außen, damit alle Karten
    * einer Liste vom selben Zeitpunkt ausgehen – sonst rechnet jede Karte mit
@@ -149,38 +159,69 @@ export function ActivityCard({
   onDelete,
   distanceKm,
   layout = 'card',
+  bannerHeight = 130,
   now,
 }: Props) {
   const surface = useBrandSurface();
   const glass = useGlass();
   const isDark = useResolvedScheme() === 'dark';
-  const when = formatDateTime(activity.starts_at);
+  /**
+   * Dauerangebot: Bowling, Trampolinhalle, Freibad.
+   *
+   * Hier wird `starts_at` NICHT angefasst – bei diesen Zeilen steht dort nur der
+   * Anlege-Zeitpunkt (siehe server/schema.sql). Ein Datum daraus zu zeigen wäre
+   * eine Falschaussage, und die Dringlichkeit würde die Karte als „vergangen"
+   * ausgrauen.
+   */
+  const immerOffen = activity.is_permanent === true;
+
+  const when = immerOffen ? 'Immer möglich' : formatDateTime(activity.starts_at);
   const distance = formatDistance(distanceKm);
 
   // Ohne `now` von außen: einmal pro Render. Für eine einzeln stehende Karte
   // völlig ausreichend, für Listen gibt der Bildschirm den Zeitpunkt vor.
-  const urgency = urgencyFor(activity, now ?? new Date());
+  //
+  // `starts_at: null` bei Dauerangeboten: Damit liefert `urgencyFor` Ton „none"
+  // und kein Zeit-Abzeichen – die Platz-Lage („noch 3 frei") kommt weiterhin.
+  const urgency = urgencyFor(
+    immerOffen ? { ...activity, starts_at: null } : activity,
+    now ?? new Date(),
+  );
 
   // Farbton der „Worauf hast du Lust?"-Kacheln – aber DECKEND. Die Kacheln
   // nutzen chipBg mit nur 12 % Deckkraft; auf einer kleinen Kachel mit Emoji
   // liest sich das, aber eine große, fast durchsichtige Kartenfläche verschwimmt
   // mit der Leinwand. Deshalb hier die deckende Wirkfarbe + eine dezente Tiefe,
   // damit die Karte klar als Karte sichtbar ist.
+  /**
+   * Der Rand ist die einzige Hervorhebung – und bei Dauerangeboten kräftiger.
+   *
+   * Sie stehen zwischen Terminen und sind etwas anderes: Man kann jederzeit hin.
+   * Ein dickerer Rand in der Markenfarbe sagt das ohne ein weiteres Abzeichen,
+   * das um Platz mit Zeit und Plätzen konkurrieren würde.
+   */
   const tileStyle = {
     backgroundColor: isDark ? '#1d1f30' : '#e8e8f9',
-    borderColor: glass.border,
+    borderColor: immerOffen ? surface.accent : glass.border,
   };
 
   if (layout === 'row') {
     return (
       <PressableScale onPress={onPress} accessibilityRole="button" scaleTo={0.985}>
-        <View style={[styles.tile, styles.row, tileStyle, urgency.tone === 'past' && styles.faded]}>
+        <View
+          style={[
+            styles.tile,
+            styles.row,
+            immerOffen && styles.permanent,
+            tileStyle,
+            urgency.tone === 'past' && styles.faded,
+          ]}>
           {activity.banner_url ? (
             <Image source={{ uri: activity.banner_url }} style={styles.thumb} resizeMode="cover" />
           ) : (
-            <View style={[styles.thumb, styles.thumbEmpty, { backgroundColor: surface.accent }]}>
-              <Icon name="balloon" size={20} color={surface.accentText} />
-            </View>
+            // Statt für jedes Event dasselbe Ballon-Symbol das Zeichen des
+            // Anbieters – siehe `host-banner.tsx`.
+            <HostBanner host={activity.host} variant="thumb" />
           )}
           <View style={styles.rowBody}>
             <ThemedText type="smallBold" style={{ color: surface.text }} numberOfLines={1}>
@@ -202,16 +243,31 @@ export function ActivityCard({
 
   return (
     <PressableScale onPress={onPress} accessibilityRole="button" scaleTo={0.975}>
-      <View style={[styles.tile, tileStyle, urgency.tone === 'past' && styles.faded]}>
+      <View
+        style={[
+          styles.tile,
+          immerOffen && styles.permanent,
+          tileStyle,
+          urgency.tone === 'past' && styles.faded,
+        ]}>
         {activity.banner_url ? (
-          <Image source={{ uri: activity.banner_url }} style={styles.banner} resizeMode="cover" />
-        ) : null}
+          <BannerImage uri={activity.banner_url} height={bannerHeight} />
+        ) : (
+          // Kein eigenes Bild: der weichgezeichnete Grund des Hauses mit seinem
+          // Zeichen davor. Damit hat JEDE Kachel ein Banner, und die Abzeichen
+          // darüber liegen immer auf demselben Untergrund.
+          <HostBanner host={activity.host} variant="banner" height={bannerHeight} />
+        )}
 
-        {/* Zeit- und Platz-Lage immer an derselben Stelle: oben links. Über dem
-            Banner mit dunklem Grund, ohne Banner direkt auf der Kachel. */}
+        {/* Zeit- und Platz-Lage immer an derselben Stelle: oben links, jetzt
+            immer über einem Banner – deshalb braucht es den Sonderfall für
+            „ohne Banner" nicht mehr. */}
         {urgency.label || urgency.seatsLabel ? (
-          <View style={[styles.overlay, !activity.banner_url && styles.overlayNoBanner]}>
-            <TimeBadge urgency={urgency} onBanner={Boolean(activity.banner_url)} />
+          <View style={styles.overlay}>
+            {/* Immer `true`: Seit `HostBanner` einspringt, liegt das Abzeichen
+                auf jeder Kachel über einem Bild und braucht denselben dunklen
+                Grund. */}
+            <TimeBadge urgency={urgency} onBanner />
             <SeatsBadge urgency={urgency} />
           </View>
         ) : null}
@@ -279,6 +335,18 @@ export function ActivityCard({
 const styles = StyleSheet.create({
   pressed: { opacity: 0.7 },
   /** Vergangene Events bleiben lesbar, treten aber zurück. */
+  /**
+   * Der kräftigere Rand für Dauerangebote.
+   *
+   * Nur die BREITE steht hier, die Farbe kommt aus `tileStyle` – sie hängt am
+   * Thema (hell/dunkel) und kann deshalb nicht in einem StyleSheet stehen.
+   *
+   * 3 px, und der Wert ist gemessen und nicht geraten: Die normale Karte nutzt
+   * `StyleSheet.hairlineWidth * 2`, und das sind im Browser bereits 2 px. Mit 2 px
+   * wäre der Rand hier also nur andersfarbig, nicht dicker – am Gerät (hairline
+   * ≈ 0,5) wäre er es gewesen. 3 px liest sich auf BEIDEN als kräftiger.
+   */
+  permanent: { borderWidth: 3 },
   faded: { opacity: 0.55 },
   // Kachel-Optik: deckende Füllung + Haarlinie und eine dezente Tiefe, damit
   // die große Fläche klar sichtbar bleibt. Farbe kommt aus `tileStyle`.
@@ -296,7 +364,6 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  banner: { width: '100%', height: 130 },
   overlay: {
     position: 'absolute',
     top: Spacing.two,
@@ -308,8 +375,6 @@ const styles = StyleSheet.create({
     // Platz für den Papierkorb rechts oben freihalten.
     maxWidth: '72%',
   },
-  /** Ohne Banner liegen die Abzeichen im Textbereich – dort brauchen sie Luft. */
-  overlayNoBanner: { position: 'relative', top: 0, left: 0, margin: Spacing.three, marginBottom: 0 },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -379,6 +444,5 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, padding: Spacing.two },
   rowMeta: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one, alignItems: 'center' },
   thumb: { width: 68, height: 68, borderRadius: Radius.field },
-  thumbEmpty: { alignItems: 'center', justifyContent: 'center' },
   rowBody: { flex: 1, gap: 2, paddingRight: Spacing.two },
 });

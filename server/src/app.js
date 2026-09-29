@@ -11,6 +11,7 @@ import { pool } from './db.js';
 import { HttpError } from './validate.js';
 import interestsRouter from './routes/interests.js';
 import authRouter from './routes/auth.js';
+import accountRouter from './routes/account.js';
 import passwordRouter from './routes/password.js';
 import googleRouter from './routes/google.js';
 import activitiesRouter from './routes/activities.js';
@@ -25,9 +26,24 @@ import groupsRouter from './routes/groups.js';
 import chatRouter from './routes/chat.js';
 import reportsRouter from './routes/reports.js';
 import upgradesRouter from './routes/upgrades.js';
+import notificationsRouter from './routes/notifications.js';
+import revenueCatRouter from './routes/revenuecat.js';
 
 export function createApp() {
   const app = express();
+
+  /**
+   * Hinter einem Reverse Proxy (nginx/Traefik in Produktion) steht in
+   * `req.protocol` sonst 'http' – denn der Proxy spricht per Klartext mit Node,
+   * das TLS endet eine Schicht davor. Genau dieser Wert baut in media.js die
+   * Bild-Adressen. Ohne diese Zeile liefert das Backend also `http://...`-URLs,
+   * und die App zeigt KEIN einziges Bild mehr: iOS (App Transport Security) und
+   * Android 9+ verbieten Klartext-HTTP im Release-Build. Mit 'trust proxy'
+   * liest Express `X-Forwarded-Proto` und gibt 'https' zurueck.
+   *
+   * In der Entwicklung (kein Proxy, kein X-Forwarded-Proto) aendert das nichts.
+   */
+  app.set('trust proxy', 1);
 
   /**
    * CORS. Ohne diese Header ist die App im BROWSER komplett blind: Der
@@ -72,6 +88,7 @@ export function createApp() {
 
   // Routen (gleiche Pfade wie das alte Laravel-Backend)
   app.use('/api', authRouter); // /register, /login, /logout, /user
+  app.use('/api', accountRouter); // DELETE /me – eigenes Konto loeschen
   app.use('/api', passwordRouter); // /forgot-password, /reset-password
   app.use('/api', progressRouter); // /me/progress, /leaderboard
   app.use('/api/auth', googleRouter); // /auth/google
@@ -88,7 +105,12 @@ export function createApp() {
   // weil es dieselbe Sache von zwei Seiten ist.
   app.use('/api', reportsRouter);
   app.use('/api', upgradesRouter); // /me/upgrade-request – Kontostufe anfragen
-  app.use('/api', profileRouter); // /users, /users/:username, /posts, /me/links
+  app.use('/api', notificationsRouter); // /notifications (+ /read) – Glocke
+  // /webhooks/revenuecat (Store meldet Kauf/Ablauf), /me/subscription (eigener Stand)
+  app.use('/api', revenueCatRouter);
+  // /users, /users/:username (+ /followers, /following, /follow), /posts
+  // (+ /like, /comments), /comments/:id, /me/links, /me/avatar, /me/banner
+  app.use('/api', profileRouter);
 
   // 404 fuer unbekannte API-Pfade
   app.use('/api', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));

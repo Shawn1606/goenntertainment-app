@@ -128,7 +128,19 @@ export function serializeUser(row, req = null) {
   if (!row) {
     return null;
   }
-  const { password, remember_token, ...safe } = row;
+  // Die Zwei-Faktor-Spalten ausser `two_factor_method` bleiben draussen – genau
+  // wie im #[Hidden] von api/app/Models/User.php. Secret und Codes sind zwar
+  // verschluesselt, aber verschluesselt ist nicht dasselbe wie „darf raus":
+  // Jede Kopie ausserhalb der DB ist eine, die man nicht mehr zurueckholt.
+  const {
+    password,
+    remember_token,
+    two_factor_secret,
+    two_factor_recovery_codes,
+    two_factor_confirmed_at,
+    two_factor_last_step,
+    ...safe
+  } = row;
   // is_admin kommt aus der DB als 0/1 (oder fehlt bei alten DBs) -> echter Boolean.
   return {
     ...safe,

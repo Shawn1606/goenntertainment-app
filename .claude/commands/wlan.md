@@ -1,6 +1,6 @@
 ---
-description: Prüft Internet + Backend und repariert die WLAN-IP in config.ts, damit die App das Backend erreicht.
-allowed-tools: Read, Edit, Bash(curl:*), Bash(ping:*), Bash(powershell.exe:*), Bash(npm run server:*)
+description: Prüft Internet + Backend und repariert die WLAN-IP in .env.local, damit die App das Backend erreicht.
+allowed-tools: Read, Edit, Write, Bash(curl:*), Bash(ping:*), Bash(powershell.exe:*), Bash(npm run server:*)
 ---
 
 Du bist die WLAN-/Backend-Diagnose für die Goenntertainment-App (Expo-App + Node-Backend in `server/`, Port 8000).
@@ -15,10 +15,12 @@ Arbeite die Schritte der Reihe nach ab und **repariere selbstständig**, was ohn
 
 Das ist die IP, die das **Handy** erreichen muss. **Nicht** die Hamachi-`25.x`, nicht `127.0.0.1`. Kommen mehrere `192.168.*` zurück, nimm die `192.168.178.x` (Fritzbox-WLAN).
 
-## 3. config.ts abgleichen & ggf. fixen
-Lies `src/constants/config.ts`, Konstante `HARDCODED_API_URL`.
+## 3. .env.local abgleichen & ggf. fixen
+Lies `.env.local` im Projekt-Root, Zeile `EXPO_PUBLIC_API_URL=`. (Die Adresse steht **nicht** mehr in `src/constants/config.ts` – die Datei liest nur noch diese Variable.)
 - IP dort ≠ aktuelle WLAN-IP → mit Edit auf `http://<WLAN-IP>:8000` setzen (Port 8000 behalten). Das ist der häufigste Grund für „Backend geht nicht": DHCP hat dem PC eine neue IP gegeben.
 - IP stimmt → nichts ändern.
+- Datei fehlt ganz → aus `.env.example` anlegen (Write) und die aktuelle WLAN-IP eintragen.
+- Steht dort eine `https://…`-Adresse (Cloudflare-Tunnel), ist das **Absicht**: dann ist die App bewusst WLAN-unabhängig eingestellt. Nicht auf die LAN-IP zurückdrehen, sondern in Schritt 5 diese URL prüfen.
 
 ## 4. Backend-Health (lokal)
 `curl -s -m 3 http://127.0.0.1:8000/api/health` — erwartet `{"ok":true}`.
@@ -36,9 +38,9 @@ Lies `src/constants/config.ts`, Konstante `HARDCODED_API_URL`.
 ## 6. Statusbericht
 Kompakt, ein ✅/❌ pro Zeile:
 - Internet
-- WLAN-IP (+ ob `config.ts` geändert wurde: alt → neu)
+- WLAN-IP (+ ob `.env.local` geändert wurde: alt → neu)
 - Backend lokal (`127.0.0.1`)
 - Backend über WLAN-IP
 - ggf. Firewall-Hinweis
 
-Wurde `config.ts` geändert: **erinnere daran, Metro/App neu zu laden** (im Expo-Terminal `r`), sonst nutzt die App noch die alte IP.
+Wurde `.env.local` geändert: **erinnere daran, Metro/App neu zu laden** (im Expo-Terminal `r`), sonst steckt die alte IP noch im Bundle.

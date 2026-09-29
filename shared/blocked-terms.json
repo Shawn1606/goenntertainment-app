@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "about": [
+    "Gesperrte Begriffe fuer Namen, Benutzernamen und nutzergeschriebene Texte - die EINE Quelle fuer App (src/domain/blocked-terms.ts), Node (server/src/blocked-terms.js) und Laravel (api/app/Support/BlockedTerms.php).",
+    "Das ist die deterministische erste Stufe vor der KI-Moderation: Sie greift immer, auch ohne API-Schluessel und wenn die KI ausfaellt.",
+    "Jede Gruppe gilt nur in ihren 'modes' (username = Benutzername, name = Anzeigename, text = Titel/Beschreibungen/Chat/Beitraege).",
+    "substring: greift ueberall, auch mitten in zusammengeschriebenen Benutzernamen ('xXkillniggerXx'). Nur fuer Begriffe, die in keinem harmlosen Wort stecken - sonst gehoert der Fehlalarm in 'allow'.",
+    "prefix: greift am Wortanfang, der Rest ist egal ('Negerkuss', 'wichsen'). Fuer Stamm-Woerter, die HINTEN in harmlosen Woertern oder an Namensgrenzen auftauchen ('Schwarzenegger', 'annegerber').",
+    "word: nur als ganzes Wort. Fuer alles, was als Teil harmloser Woerter vorkommt ('Arsch' in 'Marsch', 'cock' in 'Cocktail').",
+    "Begriffe mit Leerzeichen sind Wortfolgen ('sieg heil'): Sie greifen als Folge und zusammengeschrieben ('SiegHeil', 'sieg_heil').",
+    "Schreibweise: normal, mit Umlauten und Akzenten - die Normalisierung macht aus 'kuemmeltuerke' und 'Kümmeltürke' dasselbe. Nicht mitgedacht wird die Schreibweise OHNE e ('kummelturke'), die steht eigens da, wo sie ueblich ist.",
+    "Buchstaben-Wiederholungen muss man nicht auffuehren: 'nigger' greift auch bei 'niiiggger', aber NICHT bei 'Niger' - doppelte Buchstaben im Begriff muessen mindestens doppelt vorkommen.",
+    "Zahlen-Codes: '88' allein ist bewusst NICHT gesperrt - in Benutzernamen ist es meist ein Geburtsjahr. Gesperrt sind die eindeutigen Kombinationen 1488 und HH88 (im Benutzernamen auch mitten im Wort, sonst nur als eigenes Wort - '14,88 Euro' ist ein Preis).",
+    "Gemeinsame Pruefbeispiele fuer alle drei Umsetzungen: shared/blocked-terms.fixtures.json."
+  ],
+  "messages": {
+    "username": "Dieser Benutzername ist nicht erlaubt – bitte wähle einen anderen.",
+    "name": "Dieser Name ist nicht erlaubt.",
+    "text": "Dein Text enthält Wörter, die hier nicht erlaubt sind."
+  },
+  "groups": [
+    {
+      "id": "ueberall",
+      "modes": ["username", "name", "text"],
+      "note": "Rassismus, Antisemitismus, Nazi-Parolen, schwere Beleidigungen und sexuell Vulgaeres - in keinem Feld akzeptabel.",
+      "substring": [
+        "kanake", "kanacke", "schlitzauge", "kümmeltürke", "kummelturke", "kameltreiber",
+        "polacke", "dreckspolack", "drecksneger", "scheißneger", "zigeunerpack", "dreckszigeuner",
+        "drecksaraber", "scheißaraber", "dreckstürke", "drecksturke", "scheißtürke", "scheissturke",
+        "drecksausländer", "drecksauslander", "scheißausländer", "scheissauslander",
+        "judensau", "saujude", "drecksjude", "scheißjude", "judenschwein", "judenpack",
+
+        "sieg heil", "sieg hail", "heil hitler", "hail hitler", "meine ehre heißt treue", "blut und ehre",
+        "juden raus", "juden vergasen", "juden ins gas", "gas the jews",
+        "ausländer raus", "auslander raus", "kanaken raus", "türken raus", "turken raus",
+        "deutschland den deutschen", "14 words", "fourteen words", "rahowa",
+
+        "nigger", "nigga", "wetback", "raghead", "towelhead", "jigaboo", "porch monkey",
+        "jungle bunny", "spearchucker", "bougnoule", "kutmarokkaan",
+
+        "schwuchtel", "kampflesbe", "faggot", "gotveren", "götveren", "pidoras", "pidaras",
+
+        "hurensohn", "huren sohn", "hurensöhne", "hurnsohn", "hurenson", "huresohn", "huhrensohn", "hurenbock",
+        "fotze", "votze", "fodze",
+        "wichser", "wixer", "wichsa", "wixa",
+        "arschloch", "arschlöcher", "arsloch", "arschgeige", "arschkriecher", "arschgesicht", "arschfick", "arschlecker",
+        "missgeburt", "misgeburt", "schlampe", "schwanzlutscher", "pimmel", "titten", "spermaschlucker",
+        "ficker", "ficken", "gefickt", "fick deine mutter",
+
+        "fuck", "cunt", "bitch", "whore", "asshole", "arsehole", "cocksucker", "dickhead",
+        "blowjob", "handjob", "rimjob", "cumshot", "gangbang", "buttplug", "suck my dick",
+        "kill yourself", "hang yourself",
+
+        "orospu", "siktir", "sikerim", "sikeyim",
+        "amina koyim", "amina koyayim", "amina koyarim", "amina koydum",
+
+        "sharmut", "sharmout", "sharmoot", "charmut", "scharmut",
+        "kusemak", "kusumak", "kusomak", "kosomak", "kusukhtak", "kusokhtak", "nik ummak", "nik ukhtak",
+
+        "blyat", "blyad", "bljad", "bljat", "pizda", "pizdec", "pizdets", "pisdets",
+
+        "kurwa", "pierdol", "pierdal", "skurwysyn", "skurwiel",
+
+        "salope", "nique ta mère", "fils de pute",
+
+        "hijo de puta", "hijueputa", "concha tu madre", "concha de tu madre",
+
+        "fanculo", "puttana",
+
+        "klootzak", "kankerlijer", "kankerhoer", "hoerenzoon", "hoerenjong", "kutwijf", "tyfuslijer", "teringlijer",
+
+        "jebem ti mater", "jebem ti majku", "pička ti materina",
+
+        "qifsha", "bythqir"
+      ],
+      "prefix": [
+        "neger", "arsch", "spast", "wichs", "nutte", "pussy"
+      ],
+      "word": [
+        "hure", "huren", "hurerei", "spacko", "spackos", "spacken", "behindi", "bastard", "bastarde",
+        "transe", "transen", "kanak", "huso", "hackfresse", "fickfresse", "pissnelke", "kackbratze",
+        "bumsen", "möse", "fick dich", "fick euch", "fick mich", "fickt euch",
+
+        "1488", "hh88",
+
+        "slut", "sluts", "slutty", "twat", "twats", "wanker", "wankers", "bellend", "cock", "cocks",
+        "pussies", "tits", "titties", "boobs", "milf", "dildo", "horny", "rape", "raping", "rapist",
+        "retarded", "tranny", "trannies", "fag", "fags", "chink", "chinks", "gook", "gooks",
+        "spic", "spics", "paki", "pakis", "beaner", "beaners", "jizz", "deepthroat", "jerk off", "jack off",
+
+        "amk", "amcık", "yarrak", "yarak", "pezevenk", "kahpe", "yavşak", "ibne", "ibneler", "gavat",
+        "sikik", "sikim",
+
+        "kahba", "qahba", "kahbe", "qahbe", "qehbe",
+
+        "cyka", "pidor", "pidar", "пидор", "пидорас", "mudak", "мудак", "eblan", "еблан",
+        "yobany", "jobany", "ёбаный", "yebat", "zalupa", "залупа", "shluha", "shlyukha", "шлюха",
+        "nahui", "nahuy", "nakhui", "nakhuy", "нахуй", "хуй", "хуйня", "сучка", "уёбок",
+
+        "chuj", "chuja", "chuju", "chujowy", "chujowa", "chujnia", "jebac", "jebany", "jebana", "jebane",
+        "pojeb", "pojebany", "zjeb", "dziwka", "cwel", "ciota", "kurwy", "kurwo",
+
+        "putain", "connard", "connasse", "enculé", "enculer", "enculés", "youpin", "nègre", "tarlouze",
+
+        "puta", "putas", "puto", "putos", "pendejo", "pendeja", "cabrón", "cabrona", "maricón", "maricones",
+        "gilipollas", "chingada", "chingado", "chingar", "chíngate", "joder", "jódete", "follar",
+        "sudaca", "negrata",
+
+        "cazzo", "cazzi", "stronzo", "stronza", "stronzi", "minchia", "coglione", "coglioni",
+        "frocio", "froci", "zoccola", "bastardo", "mignotta", "ricchione",
+
+        "kut", "flikker", "flikkers", "neuken",
+
+        "pička", "pičko", "pičku", "kurac", "kurcina", "kurva", "drolja", "šupak",
+        "jebem", "jebote", "jebiga", "šiptar", "šiptari",
+
+        "pidh", "pidhi", "pidhin"
+      ]
+    },
+    {
+      "id": "selbstbezeichnung",
+      "modes": ["username", "name"],
+      "note": "Wie man sich selbst nennt: Nazi-Begriffe und Pornografisches. Im Text bleibt das erlaubt - dort geht es auch um Geschichte ('Doku ueber Hitler', 'Nazis raus', 'Gedenkfahrt nach Auschwitz'), und 'Food Porn' ist ein Wort der Werbung.",
+      "substring": [
+        "hitler", "neonazi", "nsdap", "hakenkreuz", "swastika", "zyklon b", "arbeit macht frei",
+        "waffen ss", "white power", "white pride", "wpww", "combat 18", "blood and honour", "blood and honor",
+        "hammerskin", "ku klux klan", "untermensch", "endlösung", "endlosung", "mein kampf",
+        "reichsführer", "reichsfuhrer", "gestapo", "auschwitz", "holocaust", "gaskammer", "herrenrasse",
+        "zigeuner", "pornhub", "pornstar", "youporn"
+      ],
+      "prefix": [
+        "nazi"
+      ],
+      "word": [
+        "kkk", "retard", "porn", "porno", "pornos"
+      ]
+    },
+    {
+      "id": "nicht-im-namen",
+      "modes": ["username", "text"],
+      "note": "Echte Nachnamen oder Vornamen, die zugleich vulgaer sind (Fick, Kutas, Gandon, Polack, Suka, spanisch Kike fuer Enrique). Im Namen-Feld muss man so heissen duerfen; als selbst gewaehlter Benutzername und im Text sind sie fast immer das Schimpfwort.",
+      "substring": [
+        "fick"
+      ],
+      "word": [
+        "kutas", "gandon", "гандон", "polack", "kike", "kikes", "suka"
+      ]
+    },
+    {
+      "id": "nur-benutzername",
+      "modes": ["username"],
+      "note": "Nur im selbst gewaehlten Benutzernamen: 'Schwanz' ist im Text der Schwanz des Hundes und als Nachname moeglich. Die Zahlen-Codes und 'schwanz' stehen hier als substring, weil Benutzernamen sie ohne Trenner anhaengen ('max1488', 'bigschwanz').",
+      "substring": [
+        "1488", "hh88", "schwanz"
+      ]
+    }
+  ],
+  "allow": [
+    "snigger", "niggard", "negeri", "scunthorpe", "fotzel", "schlamperei", "verschlampe",
+    "fickert", "fickenscher", "fickler", "fickinger",
+    "arschbombe", "spastik", "spastisch", "nutter", "pussycat", "pussyfoot", "pussywillow",
+    "nazim", "nazif", "nazir", "nazih", "nazik", "nazila", "nazira", "nazire", "naziye", "nazilli", "nazion"
+  ],
+  "normalize": {
+    "about": "Wird in allen drei Umsetzungen gleich angewandt: NFKD, Vollbreite zu ASCII, Kleinschreibung, dann 'umlauts' (nur in der ersten Variante), dann 'chars', dann alle kombinierenden Zeichen (U+0300-U+036F) weg. 'leet' und 'leet_alt' siehe server/src/blocked-terms.js.",
+    "umlauts": {
+      "ä": "ae", "ö": "oe", "ü": "ue",
+      "ä": "ae", "ö": "oe", "ü": "ue"
+    },
+    "leet": {
+      "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "9": "g",
+      "@": "a", "$": "s", "€": "e", "!": "i"
+    },
+    "leet_alt": {
+      "1": "l"
+    },
+    "chars": {
+      "ß": "ss",
+      "à": "a", "á": "a", "â": "a", "ã": "a", "ä": "a", "å": "a", "ā": "a", "ă": "a", "ą": "a",
+      "ç": "c", "ć": "c", "ĉ": "c", "ċ": "c", "č": "c", "ď": "d",
+      "è": "e", "é": "e", "ê": "e", "ë": "e", "ē": "e", "ĕ": "e", "ė": "e", "ę": "e", "ě": "e",
+      "ĝ": "g", "ğ": "g", "ġ": "g", "ģ": "g", "ĥ": "h",
+      "ì": "i", "í": "i", "î": "i", "ï": "i", "ĩ": "i", "ī": "i", "ĭ": "i", "į": "i",
+      "ĵ": "j", "ķ": "k", "ĺ": "l", "ļ": "l", "ľ": "l",
+      "ñ": "n", "ń": "n", "ņ": "n", "ň": "n",
+      "ò": "o", "ó": "o", "ô": "o", "õ": "o", "ö": "o", "ō": "o", "ŏ": "o", "ő": "o",
+      "ŕ": "r", "ŗ": "r", "ř": "r",
+      "ś": "s", "ŝ": "s", "ş": "s", "š": "s", "ș": "s",
+      "ţ": "t", "ť": "t", "ț": "t",
+      "ù": "u", "ú": "u", "û": "u", "ü": "u", "ũ": "u", "ū": "u", "ŭ": "u", "ů": "u", "ű": "u", "ų": "u",
+      "ŵ": "w", "ý": "y", "ÿ": "y", "ŷ": "y", "ź": "z", "ż": "z", "ž": "z",
+
+      "ø": "o", "đ": "d", "ł": "l", "ħ": "h", "ı": "i", "ŧ": "t", "æ": "ae", "œ": "oe", "þ": "th", "ð": "d",
+      "ŀ": "l", "ĸ": "k", "ƒ": "f", "ɑ": "a", "ɡ": "g", "ȷ": "j", "ɨ": "i", "ʉ": "u", "ɵ": "o",
+      "ǝ": "e", "ə": "e", "ɛ": "e", "ɔ": "o", "ŋ": "n",
+      "ᴀ": "a", "ʙ": "b", "ᴄ": "c", "ᴅ": "d", "ᴇ": "e", "ғ": "f", "ɢ": "g", "ʜ": "h", "ɪ": "i", "ᴊ": "j",
+      "ᴋ": "k", "ʟ": "l", "ᴍ": "m", "ɴ": "n", "ᴏ": "o", "ᴘ": "p", "ʀ": "r", "ꜱ": "s", "ᴛ": "t", "ᴜ": "u",
+      "ᴠ": "v", "ᴡ": "w", "ʏ": "y", "ᴢ": "z",
+
+      "а": "a", "б": "b", "в": "b", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh", "з": "z",
+      "и": "i", "й": "i", "к": "k", "л": "l", "м": "m", "н": "h", "о": "o", "п": "p", "р": "p",
+      "с": "c", "т": "t", "у": "y", "ф": "f", "х": "x", "ц": "c", "ч": "ch", "ш": "sh", "щ": "sch",
+      "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+      "і": "i", "ї": "i", "є": "e", "ґ": "g", "ј": "j", "ѕ": "s", "ԁ": "d", "һ": "h", "ԛ": "q", "ԝ": "w", "ӏ": "l",
+
+      "α": "a", "β": "b", "γ": "y", "ε": "e", "η": "n", "ι": "i", "κ": "k", "μ": "u", "ν": "v",
+      "ο": "o", "ρ": "p", "ς": "s", "τ": "t", "υ": "u", "χ": "x", "ω": "w",
+
+      "­": "", "᠎": "", "​": "", "‌": "", "‍": "", "‎": "", "‏": "",
+      "⁠": "", "⁡": "", "⁢": "", "⁣": "", "⁤": "", "﻿": "",
+      "︀": "", "︁": "", "︂": "", "︃": "", "︄": "", "︅": "", "︆": "", "︇": "",
+      "︈": "", "︉": "", "︊": "", "︋": "", "︌": "", "︍": "", "︎": "", "️": "",
+      " ": " ", " ": " "
+    }
+  }
+}

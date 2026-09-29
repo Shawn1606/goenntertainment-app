@@ -9,7 +9,7 @@ import { LockIcon, MailIcon } from '@/components/ui/icons';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { TextField } from '@/components/ui/text-field';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
-import { api, ApiError, type User } from '@/lib/api';
+import { api, ApiError, needsTwoFactor, type User } from '@/lib/api';
 
 // Vorerst wird der Admin nur an dieser E-Mail erkannt. Eine echte Admin-Rolle
 // (Flag/Rechte im Backend) kommt später als eigenes Ticket.
@@ -41,12 +41,33 @@ function AdminLogin({ onSuccess, topInset }: { onSuccess: (u: User) => void; top
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [needsCode, setNeedsCode] = useState(false);
+  const [code, setCode] = useState('');
+  const [challenge, setChallenge] = useState<string | null>(null);
 
   async function onLogin() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.login(email.trim(), password);
+      const first = await api.login(email.trim(), password);
+      // Mit Zwei-Faktor-Anmeldung braucht auch der Admin-Zugang den Code – sonst
+      // wäre diese Seite der Weg, den zweiten Faktor zu umgehen.
+      let res;
+      if (needsTwoFactor(first)) {
+        if (!code.trim()) {
+          setNeedsCode(true);
+          setChallenge(first.two_factor.challenge);
+          setError(
+            first.two_factor.method === 'email'
+              ? `Wir haben dir einen Code an ${first.two_factor.destination ?? 'deine E-Mail'} geschickt.`
+              : 'Gib den Code aus deiner Authenticator-App ein.',
+          );
+          return;
+        }
+        res = await api.loginTwoFactor(challenge ?? first.two_factor.challenge, code.trim());
+      } else {
+        res = first;
+      }
       if (res.user.email.toLowerCase() !== ADMIN_EMAIL) {
         setError('Dieser Account hat keinen Admin-Zugang.');
         return;
@@ -91,6 +112,18 @@ function AdminLogin({ onSuccess, topInset }: { onSuccess: (u: User) => void; top
             autoComplete="current-password"
             leftIcon={<LockIcon />}
           />
+
+          {needsCode ? (
+            <TextField
+              label="Bestätigungscode"
+              value={code}
+              onChangeText={setCode}
+              placeholder="123456"
+              keyboardType="number-pad"
+              autoComplete="one-time-code"
+              leftIcon={<LockIcon />}
+            />
+          ) : null}
 
           <BrandButton title="Anmelden" onPress={onLogin} loading={loading} />
         </View>

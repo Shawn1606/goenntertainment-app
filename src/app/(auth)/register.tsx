@@ -10,13 +10,17 @@ import { InterestPicker, type InterestPickerPalette } from '@/components/interes
 import { BrandButton } from '@/components/ui/brand-button';
 import { AtIcon, CheckIcon, DotIcon, LockIcon, MailIcon, UserIcon } from '@/components/ui/icons';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
+import { PasswordMeter } from '@/components/ui/password-meter';
 import { TextField } from '@/components/ui/text-field';
+import { Features } from '@/constants/features';
 import { MIN_AGE } from '@/constants/operator';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
 import { tierFor } from '@/domain/account';
 import { LEGAL_VERSION } from '@/domain/legal';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { blockedTermMessage } from '@/lib/blocked-terms';
+import { passwordStrength } from '@/lib/password-strength';
 
 /**
  * Jedes neue Konto ist Standard – hier gibt es nichts zu wählen.
@@ -88,11 +92,17 @@ export default function RegisterScreen() {
     const p = password;
     return {
       nameOk: name.trim().length > 0,
+      // Beleidigungen, Rassismus, Nazi-Codes – dieselbe Liste wie am Server
+      // (shared/blocked-terms.json). Hier nur, damit man es beim Tippen sieht und
+      // nicht erst nach dem Absenden; ablehnen tut der Server ohnehin.
+      nameBlocked: blockedTermMessage(name, 'name'),
+      userBlocked: blockedTermMessage(u, 'username'),
       userLenOk: u.length >= 3 && u.length <= 30,
       userCharsOk: u.length > 0 && USERNAME_RE.test(u),
       emailOk: EMAIL_RE.test(email.trim()),
-      passLenOk: p.length >= 8,
-      passMixOk: /[A-Za-z]/.test(p) && /\d/.test(p),
+      // Dieselbe Regel wie am Server (Länge, Buchstaben + Zahl, keine Liste häufiger
+      // Passwörter, kein Benutzername darin) – siehe src/domain/password-strength.ts.
+      passOk: passwordStrength(p, [u, email.trim(), name.trim()]).meetsPolicy,
     };
   }, [name, username, email, password]);
 
@@ -100,11 +110,12 @@ export default function RegisterScreen() {
 
   const formValid =
     checks.nameOk &&
+    !checks.nameBlocked &&
+    !checks.userBlocked &&
     checks.userLenOk &&
     checks.userCharsOk &&
     checks.emailOk &&
-    checks.passLenOk &&
-    checks.passMixOk &&
+    checks.passOk &&
     interestsOk &&
     acceptedTerms;
 
@@ -154,10 +165,10 @@ export default function RegisterScreen() {
           <View style={styles.card}>
             {generalError ? <Text style={styles.generalError}>{generalError}</Text> : null}
 
-            <TextField label="Name" value={name} onChangeText={setName} placeholder="Dein Name" autoComplete="name" leftIcon={<UserIcon />} error={errors.name?.[0]} />
+            <TextField label="Name" value={name} onChangeText={setName} placeholder="Dein Name" autoComplete="name" leftIcon={<UserIcon />} error={errors.name?.[0] ?? checks.nameBlocked ?? undefined} />
 
             <View>
-              <TextField label="Benutzername" value={username} onChangeText={setUsername} placeholder="benutzername" autoCapitalize="none" autoComplete="username" leftIcon={<AtIcon />} error={errors.username?.[0]} />
+              <TextField label="Benutzername" value={username} onChangeText={setUsername} placeholder="benutzername" autoCapitalize="none" autoComplete="username" leftIcon={<AtIcon />} error={errors.username?.[0] ?? checks.userBlocked ?? undefined} />
               {username.length > 0 && !(checks.userLenOk && checks.userCharsOk) ? (
                 <View style={styles.reqs}>
                   <Requirement ok={checks.userLenOk} label="3 bis 30 Zeichen" />
@@ -170,14 +181,15 @@ export default function RegisterScreen() {
 
             <View>
               <TextField label="Passwort" value={password} onChangeText={setPassword} placeholder="Passwort wählen" secureTextEntry autoComplete="new-password" leftIcon={<LockIcon />} error={errors.password?.[0]} />
-              {password.length > 0 && !(checks.passLenOk && checks.passMixOk) ? (
-                <View style={styles.reqs}>
-                  <Requirement ok={checks.passLenOk} label="Mindestens 8 Zeichen" />
-                  <Requirement ok={checks.passMixOk} label="Buchstaben und Zahlen" />
-                </View>
-              ) : null}
+              {/* Stärke statt Checkliste: Die Liste sagte nur „8 Zeichen, Buchstaben und
+                  Zahlen" – und hielt damit „Passwort1" für in Ordnung. */}
+              <PasswordMeter password={password} personal={[username.trim(), email.trim(), name.trim()]} />
+
             </View>
 
+            {/* Kontostufen sind gerade ausgeblendet (src/constants/features.ts) – ein
+                Hinweis auf „Creator" und „Upgrade" zeigte auf etwas, das es nicht gibt. */}
+            {Features.accountTiers ? (
             <View>
               <Text style={styles.typeLabel}>Konto-Typ</Text>
               <View style={styles.typeNote}>
@@ -195,6 +207,9 @@ export default function RegisterScreen() {
                   gibt (siehe onSubmit). */}
               {errors.account_type?.[0] ? <Text style={styles.generalError}>{errors.account_type[0]}</Text> : null}
             </View>
+            ) : errors.account_type?.[0] ? (
+              <Text style={styles.generalError}>{errors.account_type[0]}</Text>
+            ) : null}
 
             <View>
               <Text style={styles.typeLabel}>Interessen</Text>

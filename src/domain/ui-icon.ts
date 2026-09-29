@@ -101,6 +101,22 @@ export const UI_ICON_NAMES = [
   'contrast',
   'vibrate',
   'speaker',
+  // Navigation und Feed im Instagram-/TikTok-Stil
+  'home',
+  'map',
+  'plus-square',
+  'bookmark',
+  'bookmark-filled',
+  'grid',
+  'menu',
+  'heart-filled',
+  'chevron-right',
+  'chevron-left',
+  'user-plus',
+  'logout',
+  'phone',
+  'copy',
+  'shield-check',
 ] as const;
 
 export type UiIconName = (typeof UI_ICON_NAMES)[number];

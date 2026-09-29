@@ -3,25 +3,40 @@ import Constants from 'expo-constants';
 /**
  * Basis-URL des JS-Backends (Ordner `server/`, ersetzt das alte Laravel).
  *
- * Fürs Handy zählt NICHT `localhost` (das wäre das Handy selbst), sondern die
- * LAN-IP deines PCs. Im Dev-Betrieb raten wir sie automatisch aus der Metro-
- * Adresse (gleiche Adresse wie Expo, nur Port 8000).
+ * Die Adresse steht bewusst NICHT mehr im Code, sondern kommt aus der Umgebung:
  *
- * Backend dafür so starten (im Ordner `server/`):
- *   npm run dev        (oder: npm start)
+ *   `.env.local`      → dieser Rechner (liegt nicht im Git, siehe `.gitignore`)
+ *   `eas.json` → env  → die gebauten Apps (APK/IPA)
  *
- * Wenn das Raten mal nicht passt, trage die URL hier fest ein, z. B.:
- *   const HARDCODED_API_URL = 'http://192.168.178.44:8000';
+ * Warum? Eine hier verdrahtete WLAN-IP fesselt die App ans Heimnetz: Ein
+ * fertiges APK mit `192.168.178.x` läuft nur, solange das Handy in derselben
+ * Fritzbox hängt, und ist unterwegs auf Mobilfunk tot. Über die Variable zeigt
+ * der Dev-Betrieb weiter auf die LAN-IP, der Build dagegen auf eine öffentliche
+ * Adresse (Cloudflare-Tunnel, später die eigene Domain) – ohne dass an dieser
+ * Datei eine Zeile geändert werden muss.
+ *
+ * WICHTIG: `process.env.EXPO_PUBLIC_API_URL` muss genau so ausgeschrieben
+ * dastehen. Metro ersetzt diesen Ausdruck beim Bündeln durch den Wert; ein
+ * Umweg wie `process.env['EXPO_PUBLIC_API_URL']` oder Destrukturieren wird
+ * NICHT ersetzt und ist im Build `undefined`.
+ *
+ * Ändert sich die WLAN-IP (neuer DHCP-Lease), gehört die neue in `.env.local` –
+ * der Slash-Befehl `/wlan` macht genau das. Danach Metro neu laden (`r`), sonst
+ * steckt der alte Wert noch im Bundle.
  */
-// Fest auf die WLAN-IP dieses PCs gesetzt: Das automatische Raten aus der Expo-
-// Adresse liefert hier eine unbrauchbare Adresse (127.0.0.1 = das Handy selbst,
-// oder die Hamachi-VPN-IP 25.x, die das Handy im WLAN nicht erreicht) -> Login
-// lief in einen Timeout. Das Handy muss im selben Fritzbox-WLAN (192.168.178.x) sein.
-// Aendert sich die PC-IP, hier anpassen (ipconfig -> IPv4 des WLAN-Adapters).
-const HARDCODED_API_URL: string | null = 'http://192.168.178.44:8000';
+const CONFIGURED_API_URL = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/+$/, '');
 
 const BACKEND_PORT = 8000;
 
+/**
+ * Notnagel für den Dev-Betrieb ohne `.env.local`: dieselbe Adresse wie Metro,
+ * nur auf Port 8000.
+ *
+ * Vorsicht, das Raten geht auf diesem Rechner regelmäßig schief – es liefert
+ * `127.0.0.1` (das wäre das Handy selbst) oder die Hamachi-VPN-IP `25.x`, die
+ * das Handy im WLAN nicht erreicht. Beides endet im Login-Timeout. Deshalb ist
+ * `.env.local` der normale Weg und das hier nur der letzte Ausweg.
+ */
 function guessDevHost(): string {
   const hostUri =
     Constants.expoConfig?.hostUri ??
@@ -33,6 +48,15 @@ function guessDevHost(): string {
   return host ? `http://${host}:${BACKEND_PORT}` : `http://localhost:${BACKEND_PORT}`;
 }
 
-export const API_BASE_URL = HARDCODED_API_URL ?? guessDevHost();
+export const API_BASE_URL = CONFIGURED_API_URL || guessDevHost();
+
+if (__DEV__ && !CONFIGURED_API_URL) {
+  // Nicht nur ein Schönheitsfehler: geraten wird meist die falsche Adresse, und
+  // der Fehler zeigt sich erst als hängender Login.
+  console.warn(
+    `[config] EXPO_PUBLIC_API_URL ist nicht gesetzt – geraten wird ${API_BASE_URL}. ` +
+      'Trag die WLAN-IP in .env.local ein (Vorlage: .env.example) oder nutze /wlan.',
+  );
+}
 
 export const API_URL = `${API_BASE_URL}/api`;

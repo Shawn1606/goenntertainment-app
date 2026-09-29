@@ -14,6 +14,11 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 
+// Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
+// ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
+// eingeschaltet, sonst gaebe es nichts zu pruefen. Wird pro Anfrage gelesen.
+process.env.FEATURE_ACCOUNT_TIERS = 'true';
+
 let base;
 let server;
 const createdUserIds = [];

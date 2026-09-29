@@ -3,9 +3,17 @@
   "configurations": [
     {
       "name": "api",
+      "runtimeExecutable": "php",
+      "runtimeArgs": ["api/artisan", "serve", "--host=0.0.0.0", "--port=8000"],
+      "port": 8000,
+      "autoPort": false
+    },
+    {
+      "name": "api-node-rest",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "server", "run", "dev"],
-      "port": 8000
+      "port": 8001,
+      "autoPort": false
     },
     {
       "name": "expo-web",
@@ -74,6 +82,13 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["expo", "start", "--web", "--port", "8096"],
       "port": 8096,
+      "autoPort": false
+    },
+    {
+      "name": "expo-web-import",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8092"],
+      "port": 8092,
       "autoPort": false
     }
   ]

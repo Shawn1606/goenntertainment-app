@@ -7,6 +7,9 @@
     // TypeScript nativ). Node braucht dort die vollstaendige Dateiendung im
     // Import – genau das erlaubt diese Option.
     "allowImportingTsExtensions": true,
+    // TypeScript 6 bindet @types-Pakete nicht mehr von selbst ein. Die Tests
+    // brauchen die Node-Typen (node:test, node:assert, import.meta.dirname).
+    "types": ["node"],
     "paths": {
       "@/*": [
         "./src/*"

@@ -22,7 +22,7 @@ import { ThemedText } from '@/components/themed-text';
 import { GlassCard, GlassChip } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
-import { unreadBadge } from '@/domain/chat';
+import { unreadBadge } from '@/domain/unread-badge';
 import { useBrandSurface } from '@/hooks/use-theme';
 import type { FriendGroup, PersonCard } from '@/lib/api';
 

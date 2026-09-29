@@ -21,6 +21,7 @@ import { Router } from 'express';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError, Validator } from '../validate.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 import {
   USER_COLUMNS,
   areFriends,
@@ -39,6 +40,17 @@ const MAX_GROUP_NAME = 60;
 
 /** Laenge der Beschreibung; gleiche Zahl wie die Spalte in schema.sql. */
 const MAX_GROUP_DESCRIPTION = 200;
+
+/**
+ * Gruppenname gegen die Liste gesperrter Begriffe – im Modus 'name', nicht
+ * 'text': Der Name ist eine Selbstbezeichnung wie ein Anzeigename und steht in
+ * jeder Mitgliederliste und ueber dem Gruppenchat. „Hitler-Fanclub" gehoert dort
+ * so wenig hin wie im Profil. Die Meldung („Dieser Name ist nicht erlaubt.")
+ * passt auch hier woertlich.
+ */
+function rejectGroupName(v, name) {
+  rejectBlockedTerms(v, 'name', name, 'name');
+}
 
 /** Mitglieder einer Gruppe (Anlegende:r zuerst). */
 async function membersOf(req, groupId, ownerId) {
@@ -138,10 +150,10 @@ router.post('/groups', requireAuth, async (req, res, next) => {
     if (!name) v.add('name', 'Gib der Gruppe einen Namen.');
     else if (name.length > MAX_GROUP_NAME) {
       v.add('name', `Der Name fasst hoechstens ${MAX_GROUP_NAME} Zeichen.`);
-    }
+    } else rejectGroupName(v, name);
     if (description.length > MAX_GROUP_DESCRIPTION) {
       v.add('description', `Die Beschreibung fasst hoechstens ${MAX_GROUP_DESCRIPTION} Zeichen.`);
-    }
+    } else rejectBlockedTerms(v, 'description', description, 'text');
     v.throwIfFails();
 
     // Mitglieder, die direkt mit angelegt werden – nur bestaetigte Freunde.
@@ -214,10 +226,14 @@ router.patch('/groups/:id', requireAuth, async (req, res, next) => {
       if (!name) v.add('name', 'Gib der Gruppe einen Namen.');
       else if (name.length > MAX_GROUP_NAME) {
         v.add('name', `Der Name fasst hoechstens ${MAX_GROUP_NAME} Zeichen.`);
-      }
+      } else if (name !== group.name) rejectGroupName(v, name);
     }
+    // Nur NEUE Werte pruefen (wie beim Profil): Ein Altname, den die Liste heute
+    // traefe, soll das Aendern der Beschreibung nicht blockieren – und umgekehrt.
     if (hasDescription && description.length > MAX_GROUP_DESCRIPTION) {
       v.add('description', `Die Beschreibung fasst hoechstens ${MAX_GROUP_DESCRIPTION} Zeichen.`);
+    } else if (hasDescription && description !== (group.description ?? '')) {
+      rejectBlockedTerms(v, 'description', description, 'text');
     }
     v.throwIfFails();
 

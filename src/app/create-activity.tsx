@@ -1,5 +1,5 @@
 import DateTimePicker, { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -22,13 +22,13 @@ import { MapPinIcon } from '@/components/ui/icons';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { TextField } from '@/components/ui/text-field';
 import { MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
-import { accountAbilities } from '@/domain/account';
+import { Features } from '@/constants/features';
 import { POINTS_PER_ACTIVITY } from '@/domain/rewards';
 import { useBrandSurface, useTheme } from '@/hooks/use-theme';
+import { canCreateActivities } from '@/lib/abilities';
 import { api, ApiError, type Interest } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { notifyUser } from '@/lib/confirm';
-import { goBack } from '@/lib/go-back';
 import { takePickedLocation } from '@/lib/pending-location';
 import { useResolvedScheme } from '@/lib/theme-preference';
 
@@ -71,7 +71,11 @@ export default function CreateActivityScreen() {
   const isDark = useResolvedScheme() === 'dark';
 
   /** Events erstellen gibt es ab dem Creator-Konto (siehe src/domain/account.ts). */
-  const canCreate = accountAbilities(user).canCreateActivities;
+  const canCreate = canCreateActivities(user);
+
+  // Schnellstart aus dem ＋-Tab: Die gewählte Kategorie steht schon drin.
+  const params = useLocalSearchParams<{ interest?: string }>();
+  const presetInterest = Number(params.interest) || null;
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -82,7 +86,7 @@ export default function CreateActivityScreen() {
   const [iosPicker, setIosPicker] = useState<null | 'date' | 'time'>(null);
   const [banner, setBanner] = useState<Banner | null>(null);
   const [interests, setInterests] = useState<Interest[]>([]);
-  const [selected, setSelected] = useState<number[]>([]);
+  const [selected, setSelected] = useState<number[]>(presetInterest ? [presetInterest] : []);
   const [customInterests, setCustomInterests] = useState<string[]>([]);
   const [customInput, setCustomInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -267,13 +271,17 @@ export default function CreateActivityScreen() {
       // sie auch nicht auf der Prämien-Karte. Ein Satz reicht – der Stand steht
       // gleich danach auf der Startseite.
       await notifyUser(
-        'Event steht',
-        `Deine Aktivität ist online – dafür gibt es ${POINTS_PER_ACTIVITY} Prämien-Punkte.`,
-        'Weiter',
+        'Aktivität ist online',
+        Features.rewards
+          ? `Deine Aktivität ist online – dafür gibt es ${POINTS_PER_ACTIVITY} Prämien-Punkte.`
+          : 'Sie steht jetzt im Feed – Leute können direkt mitmachen.',
+        'Zum Feed',
       );
-      // Dieselbe Regel wie überall: Ohne Verlauf tut `back()` nichts, dann ersetzen
-      // wir durch die Startseite (siehe `src/lib/go-back.ts`).
-      goBack();
+      // Zurück in den Feed, wo die neue Aktivität steht – nicht auf den ＋-Tab, von
+      // dem man kam. `dismissTo` räumt dabei den Formular-Bildschirm vom Stapel;
+      // ohne Stapel (Direktaufruf) ersetzt es einfach durch die Startseite.
+      if (router.canDismiss()) router.dismissTo('/');
+      else router.replace('/');
     } catch (error) {
       if (error instanceof ApiError) {
         // Nicht jugendfreier Inhalt + automatische Sperre: Der Token ist ab
@@ -317,7 +325,7 @@ export default function CreateActivityScreen() {
         <Stack.Screen
           options={{
             headerShown: true,
-            title: 'Activity erstellen',
+            title: 'Neue Aktivität',
             headerTintColor: colors.tint,
             headerBackTitle: 'Zurück',
             headerStyle: { backgroundColor: colors.background },
@@ -342,7 +350,7 @@ export default function CreateActivityScreen() {
       <Stack.Screen
         options={{
           headerShown: true,
-          title: 'Activity erstellen',
+          title: 'Neue Aktivität',
           headerTintColor: colors.tint,
           headerBackTitle: 'Zurück',
           headerStyle: { backgroundColor: colors.background },
@@ -517,7 +525,7 @@ export default function CreateActivityScreen() {
             </Text>
           </View>
 
-          <BrandButton title="Activity erstellen" onPress={onSubmit} loading={submitting} />
+          <BrandButton title="Veröffentlichen" onPress={onSubmit} loading={submitting} />
         </KeyboardForm>
       </View>
 
@@ -651,8 +659,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  overlay: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.25)' },
+  overlay: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
+  modalBackdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.25)' },
   modalSheet: {
     position: 'absolute',
     left: 0,

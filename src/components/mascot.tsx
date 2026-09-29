@@ -95,7 +95,9 @@ export type MascotMood =
  * Ebenen (siehe `MascotShadow`) wäre ein doppeltes Literal genau die Stelle, an
  * der irgendwann ein indigofarbener Körper über einem violetten Schatten steht.
  */
-const DEFAULT_BODY = '#6366f1';
+// Das Pink des Akzents (TikTok-Stil, siehe constants/theme.ts). Vorher Indigo – mit
+// dem neuen Akzent stand Goenni als einzige blaue Figur auf einer pinken App.
+const DEFAULT_BODY = '#fe2c55';
 
 /**
  * Die Stimmungen mit OFFENEN Augen.
@@ -315,7 +317,7 @@ export function Mascot({
   mood = 'idle',
   size = 96,
   color,
-  faceColor = '#312e81',
+  faceColor = '#4c0519',
   celebrate = false,
   gesture = 'none',
   style,

@@ -1,7 +1,7 @@
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import {
   Animated,
   BackHandler,
@@ -17,6 +17,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { Icon } from '@/components/ui/icon';
 import { useSheetDrag } from '@/components/ui/use-sheet-drag';
+import { Features } from '@/constants/features';
 import { BottomTabInset, BrandGradient, FontFamily, Radius, Spacing } from '@/constants/theme';
 import { accountAbilities, accountLabel } from '@/domain/account';
 import type { UiIconName } from '@/domain/ui-icon';
@@ -132,7 +133,20 @@ export function AccountWidget({ onPress }: { onPress: () => void }) {
  *
  * Gehört als LETZTES Kind in den Bildschirm, damit es über allem liegt.
  */
-export function AccountSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AccountSheet({
+  open,
+  onClose,
+  blurTarget,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /**
+   * Was hinter dem Blatt weichgezeichnet wird. Android braucht das seit Expo
+   * SDK 55 ausdrücklich (`BlurTargetView`, siehe `HomeBackground`); iOS und
+   * Web zeichnen auch ohne weich.
+   */
+  blurTarget?: RefObject<View | null>;
+}) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const surface = useBrandSurface();
@@ -233,7 +247,7 @@ export function AccountSheet({ open, onClose }: { open: boolean; onClose: () => 
     // Nur ab Creator: Darunter gibt es keine öffentliche Seite (siehe
     // src/domain/account.ts). Ohne Benutzernamen fehlt zudem die Adresse –
     // Google-Konten starten ohne einen.
-    ...(publicProfileName
+    ...(publicProfileName && Features.posts
       ? ([
           {
             icon: 'id-card',
@@ -244,28 +258,37 @@ export function AccountSheet({ open, onClose }: { open: boolean; onClose: () => 
           },
         ] satisfies Entry[])
       : []),
+    // Fortschritt und Prämien sind gerade ausgeblendet (src/constants/features.ts).
+    ...(Features.progress
+      ? ([
+          {
+            icon: 'medal',
+            title: 'Fortschritt & Abzeichen',
+            hint: 'Level, XP und Rangliste',
+            onPress: () => go('/progress'),
+          },
+        ] satisfies Entry[])
+      : []),
+    ...(Features.rewards
+      ? ([
+          {
+            icon: 'ticket',
+            title: 'Prämien',
+            hint: 'Punkte einlösen und deine Codes',
+            onPress: () => go('/rewards'),
+          },
+        ] satisfies Entry[])
+      : []),
     {
-      icon: 'medal',
-      title: 'Fortschritt & Abzeichen',
-      hint: 'Level, XP und Rangliste',
-      onPress: () => go('/progress'),
-    },
-    {
-      icon: 'ticket',
-      title: 'Prämien',
-      hint: 'Punkte einlösen und deine Codes',
-      onPress: () => go('/rewards'),
-    },
-    {
-      icon: 'folder',
-      title: 'Meine Aktivitäten',
-      hint: 'Erstellt, dabei und Verlauf',
-      onPress: () => go('/my-activities'),
+      icon: 'user',
+      title: 'Mein Profil',
+      hint: 'Erstellt, dabei und gemerkt',
+      onPress: () => go('/me'),
     },
     // Nur ab Business. Der Bereich war einmal ein Tab; seit „Freunde" dazukam,
     // sind Androids fünf Ziele mit dem belegt, was ALLE Konten haben (siehe
     // src/components/app-tabs.tsx). Ein Bereich für eine Stufe gehört ans Konto.
-    ...(accountAbilities(user).hasBusinessArea
+    ...(Features.accountTiers && accountAbilities(user).hasBusinessArea
       ? ([
           {
             icon: 'trend-up',
@@ -325,7 +348,8 @@ export function AccountSheet({ open, onClose }: { open: boolean; onClose: () => 
           <BlurView
             intensity={BACKDROP_BLUR}
             tint={isDark ? 'dark' : 'light'}
-            experimentalBlurMethod={BLUR_METHOD}
+            blurMethod={BLUR_METHOD}
+            blurTarget={blurTarget}
             style={StyleSheet.absoluteFill}
           />
           {/* Der Schleier deckt den GANZEN Bildschirm, nicht nur die Fläche über
@@ -357,7 +381,8 @@ export function AccountSheet({ open, onClose }: { open: boolean; onClose: () => 
         <BlurView
           intensity={SHEET_BLUR}
           tint={isDark ? 'dark' : 'light'}
-          experimentalBlurMethod={BLUR_METHOD}
+          blurMethod={BLUR_METHOD}
+          blurTarget={blurTarget}
           style={[StyleSheet.absoluteFill, styles.sheetCorners]}
         />
         {/* Lichtsaum an der Oberkante – wie bei allen anderen Glasflächen. */}

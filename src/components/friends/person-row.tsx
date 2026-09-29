@@ -13,44 +13,84 @@
  * Freundesliste ein Kreuz und bei den blockierten Konten „Freigeben". Eine Zeile,
  * die alle vier Fälle selbst kennt, wächst mit jedem fünften – und muss dann
  * wissen, in welcher Liste sie steht.
+ *
+ * ## Das Bild ist ein eigenes Ziel, sobald eine Story dahinter liegt
+ *
+ * Zeile antippen öffnet das Profil, Bild antippen die Story. Das ist die Regel
+ * der ganzen App (siehe `components/story-avatar.tsx`), und sie funktioniert nur,
+ * wenn sie hier genauso gilt wie auf der Profilseite.
+ *
+ * Das Bild liegt dafür NEBEN der großen Tippfläche und nicht darin: Zwei
+ * Pressables ineinander streiten sich um denselben Tipp – auf dem Handy gewinnt
+ * das innere, im Web feuern je nach Aufbau beide, und dann öffnet ein Tipp die
+ * Story und schiebt gleichzeitig das Profil darüber. Ohne Story bleibt das Bild
+ * Teil der großen Fläche: Sonst wäre genau dort ein toter Fleck in einer Zeile,
+ * die insgesamt aufs Profil führt.
  */
-import { Image } from 'expo-image';
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import { StoryAvatar } from '@/components/story-avatar';
 import { ThemedText } from '@/components/themed-text';
 import { GlassCard } from '@/components/ui/glass';
-import { FontFamily, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
 import { accountLabel } from '@/domain/account';
-import { useBrandSurface, useGlass } from '@/hooks/use-theme';
+import { useBrandSurface } from '@/hooks/use-theme';
 import type { PersonCard } from '@/lib/api';
 
-/** Erste Buchstaben des Namens – Rückfallbild ohne Profilbild. */
-export function initialsOf(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '?';
-  return parts
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? '')
-    .join('');
-}
+/** Außendurchmesser des Bildes inklusive Story-Ring. */
+const AVATAR = 48;
 
 export function PersonRow({
   person,
   onPress,
+  onOpenStory,
   action,
   /** Zusatzzeile statt Benutzername/Stufe – z. B. „blockiert seit …". */
   subtitle,
 }: {
   person: PersonCard;
   onPress: () => void;
+  /**
+   * Tipp auf das Profilbild. Ohne diese Prop bleibt das Bild Teil der Zeile und
+   * führt wie sie aufs Profil – in einer Liste blockierter Konten soll gar keine
+   * Story aufgehen.
+   */
+  onOpenStory?: () => void;
   action?: React.ReactNode;
   subtitle?: string;
 }) {
   const surface = useBrandSurface();
-  const glass = useGlass();
+
+  const count = person.story?.count ?? 0;
+  /** Nur ein eigenes Ziel, wenn es auch etwas zu öffnen gibt. */
+  const storyTap = count > 0 && onOpenStory ? onOpenStory : null;
+
+  const avatar = (
+    <StoryAvatar
+      size={AVATAR}
+      avatar={person.avatar}
+      name={person.name}
+      stories={count}
+      seen={!person.story?.unseen}
+    />
+  );
 
   return (
     <GlassCard tone="card" style={styles.row}>
+      {storyTap ? (
+        <Pressable
+          onPress={storyTap}
+          accessibilityRole="button"
+          accessibilityLabel={
+            `${count === 1 ? 'Story' : `${count} Storys`} von ${person.name} ansehen` +
+            (person.story?.unseen ? '' : ', schon gesehen')
+          }
+          hitSlop={4}
+          style={({ pressed }) => pressed && styles.pressed}>
+          {avatar}
+        </Pressable>
+      ) : null}
+
       <Pressable
         onPress={onPress}
         accessibilityRole="button"
@@ -59,19 +99,7 @@ export function PersonRow({
         // der Handlungsknopf rechts innerhalb einer größeren Trefferfläche und
         // beide stritten um denselben Tipp.
         style={({ pressed }) => [styles.rowMain, pressed && styles.pressed]}>
-        <View
-          style={[
-            styles.avatar,
-            { backgroundColor: surface.chipBgSolid, borderColor: glass.border },
-          ]}>
-          {person.avatar ? (
-            <Image source={{ uri: person.avatar }} style={styles.avatarImage} contentFit="cover" />
-          ) : (
-            <ThemedText style={[styles.initials, { color: surface.accent }]}>
-              {initialsOf(person.name)}
-            </ThemedText>
-          )}
-        </View>
+        {storyTap ? null : avatar}
         <View style={styles.rowText}>
           <ThemedText type="smallBold" style={{ color: surface.text }} numberOfLines={1}>
             {person.name}
@@ -98,16 +126,5 @@ const styles = StyleSheet.create({
   },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   rowText: { flex: 1, gap: 1 },
-  avatar: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarImage: { width: '100%', height: '100%' },
-  initials: { fontSize: 14, fontWeight: '800', fontFamily: FontFamily.bold },
   pressed: { opacity: 0.7 },
 });

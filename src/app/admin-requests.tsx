@@ -36,6 +36,7 @@ import { Icon } from '@/components/ui/icon';
 import { TextField } from '@/components/ui/text-field';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { accountLabel, rankOf } from '@/domain/account';
+import { billingPeriodAdverb, priceLabel } from '@/domain/billing-period';
 import { formatDay } from '@/domain/date-format';
 import { useKeyboardInset } from '@/hooks/use-keyboard-inset';
 import { useBrandSurface } from '@/hooks/use-theme';
@@ -212,8 +213,13 @@ export default function AdminRequestsScreen() {
                 </ThemedText>
               )}
 
+              {/* Der gewünschte Zeitraum steht hier und nicht in der Zeile
+                  darüber: Er bleibt auch nach der Entscheidung ablesbar, während
+                  „Standard → Business" verschwindet, sobald der Schritt getan
+                  ist. Ohne ihn wäre „Business" zwei verschiedene Beträge. */}
               <ThemedText type="small" style={{ color: surface.textMuted, fontSize: 11 }}>
                 {[
+                  `${billingPeriodAdverb(item.billing_period)} · ${priceLabel(item.requested_type, item.billing_period)}`,
                   item.created_at ? `angefragt am ${formatDay(item.created_at)}` : null,
                   item.user.member_since ? `Konto seit ${formatDay(item.user.member_since)}` : null,
                 ]

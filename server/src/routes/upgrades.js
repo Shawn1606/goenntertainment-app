@@ -28,6 +28,7 @@ import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { Validator } from '../validate.js';
 import { REQUESTABLE_ACCOUNT_TYPES, normalizeAccountType, rankOf, requestableTypesFor } from '../accounts.js';
+import { BILLING_PERIODS, normalizeBillingPeriod } from '../subscriptions.js';
 
 const router = Router();
 
@@ -42,6 +43,12 @@ export function transformRequest(row) {
   return {
     id: row.id,
     requested_type: normalizeAccountType(row.requested_type),
+    /**
+     * Monats- oder Jahresabo. Normalisiert und nicht durchgereicht, damit
+     * Bestandszeilen (die Spalte kam erst mit dem Jahresabo dazu) und ein
+     * unerwarteter Wert dasselbe ergeben: 'monthly'.
+     */
+    billing_period: normalizeBillingPeriod(row.billing_period),
     status: row.status,
     message: row.message ?? null,
     /** Grund der Ablehnung – steht in der App unter der abgelehnten Anfrage. */
@@ -72,12 +79,33 @@ router.get('/me/upgrade-request', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/me/upgrade-request  (geschuetzt) – Stufe anfragen.
-// Body: { account_type, message? }
+// Body: { account_type, billing_period?, message? }
 router.post('/me/upgrade-request', requireAuth, async (req, res, next) => {
   try {
     const type = typeof req.body?.account_type === 'string' ? req.body.account_type : '';
     const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
     const v = new Validator(req.body ?? {});
+
+    /**
+     * Fehlt der Rhythmus GANZ, gilt 'monthly'.
+     *
+     * Nicht aus Bequemlichkeit: Im Store laufen aeltere Versionen dieser App
+     * weiter, die das Feld nicht kennen. Wuerde es Pflicht, koennten deren
+     * Nutzer von einem Tag auf den anderen keine Stufe mehr anfragen – und der
+     * Fehler stuende in unserem Log, nicht in ihrem Bildschirm.
+     *
+     * Steht dagegen etwas drin, das wir nicht kennen, ist das ein Fehler und
+     * kein Grund zu raten: Ein verschriebenes 'jaehrlich' waere sonst von einem
+     * gemeinten 'monthly' nicht mehr zu unterscheiden.
+     */
+    const rawPeriod = req.body?.billing_period;
+    const period =
+      rawPeriod === undefined || rawPeriod === null || rawPeriod === ''
+        ? 'monthly'
+        : String(rawPeriod);
+    if (!BILLING_PERIODS.includes(period)) {
+      v.add('billing_period', 'Waehle zwischen Monats- und Jahresabo.');
+    }
 
     if (!REQUESTABLE_ACCOUNT_TYPES.includes(type)) {
       v.add('account_type', 'Diese Kontostufe kann man nicht anfragen.');
@@ -95,17 +123,26 @@ router.post('/me/upgrade-request', requireAuth, async (req, res, next) => {
     // unter einer offenen Anfrage noch der Grund der letzten Ablehnung.
     await pool.query(
       `INSERT INTO account_upgrade_requests
-         (user_id, requested_type, status, message, created_at, updated_at)
-       VALUES (?, ?, 'pending', ?, NOW(), NOW())
+         (user_id, requested_type, billing_period, status, message, created_at, updated_at)
+       VALUES (?, ?, ?, 'pending', ?, NOW(), NOW())
        ON DUPLICATE KEY UPDATE
          requested_type = ?,
+         billing_period = ?,
          status         = 'pending',
          message        = ?,
          decided_by     = NULL,
          decided_at     = NULL,
          decision_note  = NULL,
          updated_at     = NOW()`,
-      [req.user.id, type, message || null, type, message || null],
+      [
+        req.user.id,
+        type,
+        normalizeBillingPeriod(period),
+        message || null,
+        type,
+        normalizeBillingPeriod(period),
+        message || null,
+      ],
     );
 
     res.status(201).json({ data: transformRequest(await ownRequest(req.user.id)) });

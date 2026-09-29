@@ -1,8 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
-  Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   useWindowDimensions,
@@ -13,13 +10,16 @@ import {
 } from 'react-native';
 
 import { ActivityCard } from '@/components/activity-card';
+import { HostGroupCard } from '@/components/host-group-card';
 import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
+import { CategoryIcon } from '@/components/ui/category-icon';
 import { GlassSurface } from '@/components/ui/glass';
 import { Skeleton } from '@/components/ui/glow';
 import { Icon } from '@/components/ui/icon';
-import { ChevronLeftIcon, ChevronRightIcon } from '@/components/ui/icons';
+import { ScrollHint } from '@/components/ui/scroll-hint';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { groupByHost, type GroupableHost } from '@/domain/host-group';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useBrandSurface, useGlass } from '@/hooks/use-theme';
 import type { Activity } from '@/lib/api';
@@ -29,9 +29,25 @@ type Props = {
   title: string;
   /** Kleines Zeichen vor der Überschrift – gibt jedem Regal ein Gesicht. */
   icon?: UiIconName;
+  /**
+   * Statt `icon`: das Zeichen DIESER Kategorie.
+   *
+   * Nötig, weil Kategorie- und Oberflächen-Symbole zwei getrennte Sätze sind
+   * (`CategoryIconName` vs. `UiIconName`) – ein Musik-Regal kann sein Zeichen
+   * nicht aus dem Oberflächen-Satz nehmen, dort gibt es keine Note. Bei den
+   * Regalen je Interesse ist genau das der Punkt: Ohne eigenes Zeichen sähen
+   * zehn Kategorien gleich aus.
+   */
+  interest?: { name?: string | null; icon?: string | null } | null;
   activities: Activity[];
   onPress: (activity: Activity) => void;
   onDelete?: (activity: Activity) => void;
+  /**
+   * Ein Veranstalter mit mehreren Terminen wurde angetippt – der Bildschirm
+   * öffnet damit die Liste. Ohne diese Prop wird NICHT gebündelt: Ein Regal, das
+   * gruppiert, aber die Gruppe nicht öffnen kann, wäre eine Sackgasse.
+   */
+  onOpenHost?: (host: GroupableHost, activities: Activity[]) => void;
   /** Spinner statt Inhalt (z. B. während Standort/Geocoding laufen). */
   loading?: boolean;
   /** Text, wenn nichts in diesem Regal liegt. */
@@ -52,9 +68,6 @@ type Props = {
   now?: Date;
 };
 
-/** Am Gerät nativer Treiber, im Browser JS – wie im Anmelde-Hintergrund. */
-const NATIVE_DRIVER = Platform.OS !== 'web';
-
 /** Teilt eine Liste in Spalten zu je `size` Einträgen. */
 function chunk<T>(items: T[], size: number): T[][] {
   const columns: T[][] = [];
@@ -62,6 +75,11 @@ function chunk<T>(items: T[], size: number): T[][] {
     columns.push(items.slice(i, i + size));
   }
   return columns;
+}
+
+/** Ein Event als Regal-Eintrag, wenn nicht gebündelt wird. */
+function asSingle(activity: Activity) {
+  return { kind: 'single' as const, key: `activity-${activity.id}`, activity };
 }
 
 /**
@@ -73,9 +91,11 @@ function chunk<T>(items: T[], size: number): T[][] {
 export function ActivityShelf({
   title,
   icon,
+  interest,
   activities,
   onPress,
   onDelete,
+  onOpenHost,
   loading,
   emptyText,
   distanceById,
@@ -93,7 +113,20 @@ export function ActivityShelf({
   const columnWidth = Math.min(rows > 1 ? 360 : 272, contentWidth - Spacing.four - Spacing.five);
   const step = columnWidth + Spacing.three;
 
-  const columns = chunk(activities, Math.max(1, rows));
+  /**
+   * Was im Regal steht: einzelne Events, und je Veranstalter mit vielen Terminen
+   * EINE Karte.
+   *
+   * Ohne `onOpenHost` bleibt alles einzeln – dann kann der Bildschirm die Gruppe
+   * nicht öffnen, und eine Karte, die auf nichts führt, ist schlimmer als
+   * Wiederholung. Warum überhaupt gebündelt wird: `src/domain/host-group.ts`.
+   */
+  const entries = useMemo(
+    () => (onOpenHost ? groupByHost(activities) : activities.map(asSingle)),
+    [activities, onOpenHost],
+  );
+
+  const columns = chunk(entries, Math.max(1, rows));
 
   // Wohin lässt sich noch wischen? Die Maße liegen in einem Ref, damit das
   // Scrollen selbst nichts neu rendert – nur wenn ein Pfeil tatsächlich
@@ -153,7 +186,11 @@ export function ActivityShelf({
         <View style={styles.headRow}>
           {/* Ohne `label`: Das Symbol wiederholt nur die Überschrift daneben,
               vorgelesen wäre es Lärm. */}
-          {icon ? <Icon name={icon} size={19} color={surface.accent} /> : null}
+          {interest ? (
+            <CategoryIcon interest={interest} size={19} color={surface.accent} />
+          ) : icon ? (
+            <Icon name={icon} size={19} color={surface.accent} />
+          ) : null}
           <ThemedText style={[styles.title, { color: surface.text }]} numberOfLines={1}>
             {title}
           </ThemedText>
@@ -213,16 +250,25 @@ export function ActivityShelf({
                 Welle läuft von links nach rechts, also in Wischrichtung. */}
             {columns.map((column, index) => (
               <Entrance key={index} index={index} style={[styles.column, { width: columnWidth }]}>
-                {column.map((activity) => (
-                  <ActivityCard
-                    key={activity.id}
-                    activity={activity}
-                    onPress={() => onPress(activity)}
-                    onDelete={onDelete ? () => onDelete(activity) : undefined}
-                    distanceKm={distanceById?.get(activity.id) ?? null}
-                    now={now}
-                  />
-                ))}
+                {column.map((entry) =>
+                  entry.kind === 'host' ? (
+                    <HostGroupCard
+                      key={entry.key}
+                      host={entry.host}
+                      activities={entry.activities}
+                      onPress={() => onOpenHost?.(entry.host, entry.activities)}
+                    />
+                  ) : (
+                    <ActivityCard
+                      key={entry.key}
+                      activity={entry.activity}
+                      onPress={() => onPress(entry.activity)}
+                      onDelete={onDelete ? () => onDelete(entry.activity) : undefined}
+                      distanceKm={distanceById?.get(entry.activity.id) ?? null}
+                      now={now}
+                    />
+                  ),
+                )}
               </Entrance>
             ))}
           </ScrollView>
@@ -230,8 +276,18 @@ export function ActivityShelf({
           {/* Die Pfeile sagen „hier geht es weiter" und blättern auf Tippen eine
               Spalte. Sie liegen über dem Regal, fangen aber nur ihre eigene
               Fläche ab – gewischt wird weiter überall. */}
-          <ScrollHint side="left" visible={reach.left} onPress={() => page(-1)} />
-          <ScrollHint side="right" visible={reach.right} onPress={() => page(1)} />
+          <ScrollHint
+            side="left"
+            visible={reach.left}
+            onPress={() => page(-1)}
+            label="Eine Karte zurück"
+          />
+          <ScrollHint
+            side="right"
+            visible={reach.right}
+            onPress={() => page(1)}
+            label="Weitere Karten anzeigen"
+          />
         </View>
       )}
     </View>
@@ -265,62 +321,6 @@ function CardSkeleton({ width }: { width: number }) {
         <Skeleton color={base} sheenColor={sheen} width={120} height={20} radius={999} />
       </View>
     </View>
-  );
-}
-
-/**
- * Der Wisch-Hinweis: ein kleiner Pfeil am Rand des Regals.
- *
- * Warum überhaupt? Ein Regal, das rechts einfach am Bildschirmrand endet, sieht
- * aus wie ein Regal, das dort aufhört. Der Pfeil macht sichtbar, dass da noch
- * mehr liegt – und wer nicht wischen mag, tippt ihn einfach an. Er blendet sich
- * weg, sobald es in seine Richtung nichts mehr zu holen gibt.
- */
-function ScrollHint({
-  side,
-  visible,
-  onPress,
-}: {
-  side: 'left' | 'right';
-  visible: boolean;
-  onPress: () => void;
-}) {
-  const surface = useBrandSurface();
-  const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
-
-  // Weich ein- und ausblenden statt hart umschalten: Der Pfeil erscheint und
-  // verschwindet mitten in einer Wischbewegung, ein Aufblitzen würde stören.
-  useEffect(() => {
-    Animated.timing(opacity, {
-      toValue: visible ? 1 : 0,
-      duration: 180,
-      useNativeDriver: NATIVE_DRIVER,
-    }).start();
-  }, [visible, opacity]);
-
-  return (
-    <Animated.View
-      // Unsichtbar heißt auch unantastbar – sonst fängt der Pfeil am Ende des
-      // Regals weiter Tipper ab, die auf die Karte darunter zielen.
-      pointerEvents={visible ? 'box-none' : 'none'}
-      style={[styles.hint, side === 'left' ? styles.hintLeft : styles.hintRight, { opacity }]}>
-      <Pressable
-        onPress={onPress}
-        accessibilityRole="button"
-        accessibilityLabel={side === 'left' ? 'Eine Karte zurück' : 'Weitere Karten anzeigen'}
-        hitSlop={8}
-        style={({ pressed }) => [
-          styles.hintButton,
-          { backgroundColor: surface.card, borderColor: surface.cardBorder },
-          pressed && styles.hintPressed,
-        ]}>
-        {side === 'left' ? (
-          <ChevronLeftIcon size={18} color={surface.accent} />
-        ) : (
-          <ChevronRightIcon size={18} color={surface.accent} />
-        )}
-      </Pressable>
-    </Animated.View>
   );
 }
 
@@ -380,31 +380,4 @@ const styles = StyleSheet.create({
   emptyText: {
     textAlign: 'center',
   },
-  // Senkrecht mittig über dem Regal, waagerecht knapp am Rand.
-  hint: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    justifyContent: 'center',
-  },
-  hintLeft: { left: Spacing.one },
-  hintRight: { right: Spacing.one },
-  hintButton: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    ...Platform.select({
-      android: { elevation: 3 },
-      default: {
-        shadowColor: 'rgba(23,23,23,0.28)',
-        shadowOpacity: 1,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 2 },
-      },
-    }),
-  },
-  hintPressed: { opacity: 0.7, transform: [{ scale: 0.92 }] },
 });

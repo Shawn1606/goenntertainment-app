@@ -6,10 +6,13 @@ import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { Validator, HttpError, missingIds } from '../validate.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 import { moderateActivity, fieldErrorsFor, interestNames } from '../moderation.js';
 import { abilitiesFor } from '../accounts.js';
+import { accountTiersEnabled, hideImportedSql } from '../features.js';
 import { awardActivityPoints } from '../rewards.js';
-import { publicBase } from '../media.js';
+import { mediaUrl, publicBase } from '../media.js';
+import { notifyFollowers } from '../notifications.js';
 
 const router = Router();
 
@@ -44,14 +47,31 @@ function transform(
     description: activity.description,
     location: activity.location,
     starts_at: toIso(activity.starts_at),
-    banner_url: activity.banner_path ? `${publicBase(req)}/storage/${activity.banner_path}` : null,
+    // `mediaUrl` statt eines fest gebauten /storage/-Pfads: In `banner_path`
+    // stehen seit dem Event-Import ZWEI Sorten Werte – selbst hochgeladene
+    // Banner als relativer Pfad ('banners/ab12.jpg') und bei importierten Events
+    // die Adresse beim Veranstalter. Genau dieselbe Doppelrolle wie bei
+    // `users.avatar`, und `mediaUrl` ist die Stelle, die beides kennt.
+    banner_url: mediaUrl(req, activity.banner_path),
     max_participants: activity.max_participants ?? null,
+    // Dauerangebot ohne festen Termin. Wenn true, ist `starts_at` bedeutungslos –
+    // die App zeigt „Immer möglich" statt eines Datums (siehe schema.sql).
+    is_permanent: Boolean(activity.is_permanent),
     // Wie viele verschiedene Leute das Event angeschaut haben (ohne den Host).
     views_count: viewsCount,
     // account_type kommt mit, damit die App weiss, ob sich der Name zum Profil
     // verlinken laesst: Ein Standard-Konto hat keine oeffentliche Seite.
     host: host
-      ? { id: host.id, name: host.name, username: host.username, account_type: host.account_type }
+      ? {
+          id: host.id,
+          name: host.name,
+          username: host.username,
+          // Fertige Adresse statt des rohen Wertes: In `users.avatar` stehen
+          // zwei Sorten (eigener Upload als Pfad, Google als fremde URL), und
+          // die App soll den Wert unveraendert in ein <Image> setzen koennen.
+          avatar_url: mediaUrl(req, host.avatar),
+          account_type: host.account_type,
+        }
       : null,
     interests: interests.map((i) => ({ id: i.id, name: i.name, icon: i.icon })),
     participants: participants.map((p) => ({ id: p.id, name: p.name, username: p.username })),
@@ -93,7 +113,10 @@ async function loadRelations(ids, userId = null) {
   const hostIds = [...new Set(acts.map((a) => a.user_id))];
   const [hostRows] = hostIds.length
     ? await pool.query(
-        `SELECT id, name, username, account_type FROM users WHERE id IN (${hostIds.map(() => '?').join(',')})`,
+        // `avatar` kommt mit, weil die Karten daraus ihr Banner bauen, wenn das
+        // Event keines hat: das Bild des Hauses – klein und scharf als Zeichen,
+        // gross und weichgezeichnet als Hintergrund (siehe activity-card.tsx).
+        `SELECT id, name, username, avatar, account_type FROM users WHERE id IN (${hostIds.map(() => '?').join(',')})`,
         hostIds,
       )
     : [[]];
@@ -101,11 +124,15 @@ async function loadRelations(ids, userId = null) {
   const hosts = new Map(acts.map((a) => [a.id, hostById.get(a.user_id) ?? null]));
 
   const [interestRows] = await pool.query(
+    // `rank` zuerst, dann der Name: Die erste Kategorie ist die FUEHRENDE, und
+    // nach ihr unterteilt die App ihre Listen (siehe src/domain/interest-group.ts).
+    // Vorher stand hier nur `ORDER BY i.name` – damit entschied das Alphabet,
+    // und ein Salsa-Abend landete unter "Party & Club", weil P vor T kommt.
     `SELECT ai.activity_id, i.id, i.name, i.slug, i.icon
        FROM activity_interest ai
        JOIN interests i ON i.id = ai.interest_id
       WHERE ai.activity_id IN (${ph})
-      ORDER BY i.name`,
+      ORDER BY ai.\`rank\`, i.name`,
     ids,
   );
   const [participantRows] = await pool.query(
@@ -233,7 +260,11 @@ export async function pruneHistory() {
 // GET /api/activities  (geschuetzt)
 router.get('/', requireAuth, async (req, res, next) => {
   try {
-    const [activities] = await pool.query('SELECT * FROM activities ORDER BY starts_at');
+    // Importierte Veranstaltungen sind gerade ausgeblendet (siehe features.js).
+    const hidden = hideImportedSql('activities');
+    const [activities] = await pool.query(
+      `SELECT * FROM activities ${hidden ? `WHERE ${hidden}` : ''} ORDER BY starts_at`,
+    );
     const ids = activities.map((a) => a.id);
     const rel = await loadRelations(ids, req.user.id);
     const data = activities.map((a) =>
@@ -275,7 +306,7 @@ router.get('/history', requireAuth, async (req, res, next) => {
       title: r.title,
       location: r.location,
       starts_at: toIso(r.starts_at),
-      banner_url: r.banner_path ? `${publicBase(req)}/storage/${r.banner_path}` : null,
+      banner_url: mediaUrl(req, r.banner_path),
       // aktiv = Event existiert noch und du bist dabei (removed_at IS NULL).
       is_active: r.removed_at === null,
       removed_at: toIso(r.removed_at),
@@ -294,9 +325,11 @@ router.get('/history', requireAuth, async (req, res, next) => {
 // man die Liste abarbeitet.
 router.get('/saved', requireAuth, async (req, res, next) => {
   try {
+    const hidden = hideImportedSql('a');
     const [activities] = await pool.query(
       `SELECT a.* FROM activities a
          JOIN activity_saves s ON s.activity_id = a.id AND s.user_id = ?
+        ${hidden ? `WHERE ${hidden}` : ''}
         ORDER BY s.created_at DESC, a.id DESC`,
       [req.user.id],
     );
@@ -327,7 +360,8 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     // Events erstellen gibt es erst ab Creator. Die App blendet den ＋-Knopf
     // bei Standard-Konten aus – hier steht der Riegel, der auch dann haelt,
     // wenn jemand die Schnittstelle direkt anspricht.
-    if (!abilitiesFor(req.user).canCreateActivities) {
+    // Ohne Kontostufen darf jedes Konto erstellen (siehe features.js).
+    if (accountTiersEnabled() && !abilitiesFor(req.user).canCreateActivities) {
       throw new HttpError(
         403,
         'Zum Erstellen von Events brauchst du ein Creator-Konto. Du kannst in der App upgraden.',
@@ -342,6 +376,13 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
       v.add('description', 'Die Beschreibung ist erforderlich (max. 2000 Zeichen).');
     }
     if (!b.location || b.location.length > 255) v.add('location', 'Der Ort ist erforderlich (max. 255 Zeichen).');
+
+    // Gesperrte Begriffe – die feste Liste VOR der KI-Moderation. Die KI ist ohne
+    // Schluessel aus und laesst bei einem Ausfall alles durch; diese Pruefung
+    // greift immer. Nur an Feldern ohne Laengenfehler: Eine Meldung je Feld.
+    for (const field of ['title', 'description', 'location']) {
+      if (!v.errors[field]) rejectBlockedTerms(v, field, b[field], 'text');
+    }
 
     const startsAt = b.starts_at ? new Date(b.starts_at) : null;
     if (!startsAt || Number.isNaN(startsAt.getTime())) v.add('starts_at', 'Ungueltiges Datum.');
@@ -431,9 +472,15 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     );
 
     if (interests.length > 0) {
-      const rows = interests.map(() => '(?, ?)').join(', ');
-      const params = interests.flatMap((id) => [result.insertId, id]);
-      await pool.query(`INSERT INTO activity_interest (activity_id, interest_id) VALUES ${rows}`, params);
+      // Der Index wird zum Rang: Die zuerst ausgewaehlte Kategorie ist die
+      // fuehrende, und nach ihr unterteilt die App ihre Listen (siehe
+      // src/domain/interest-group.ts).
+      const rows = interests.map(() => '(?, ?, ?)').join(', ');
+      const params = interests.flatMap((id, index) => [result.insertId, id, index]);
+      await pool.query(
+        `INSERT INTO activity_interest (activity_id, interest_id, \`rank\`) VALUES ${rows}`,
+        params,
+      );
     }
 
     // Der:die Ersteller:in ist automatisch dabei (zaehlt gegen das Teilnehmer-Limit).
@@ -458,6 +505,15 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     await awardActivityPoints(req.user.id, result.insertId).catch((err) =>
       console.error('[rewards] Punkte konnten nicht gebucht werden:', err),
     );
+
+    // Follower informieren. Aus demselben Grund wie die Punkte darueber nach dem
+    // Anlegen und mit geschluckten Fehlern (siehe notifications.js).
+    await notifyFollowers(req.user, {
+      type: 'activity',
+      refId: result.insertId,
+      title: `${req.user.name} hat ein Event erstellt`,
+      body: b.title,
+    });
 
     res.status(201);
     await respondSingle(req, res, result.insertId, req.user.id);

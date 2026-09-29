@@ -18,7 +18,21 @@ CREATE TABLE IF NOT EXISTS users (
   id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   name              VARCHAR(255)    NOT NULL,
   username          VARCHAR(255)    NULL,
-  account_type      VARCHAR(255)    NULL,               -- Kontostufe: standard|creator|business|business_plus (siehe src/accounts.js)
+  account_type      VARCHAR(255)    NULL,               -- Kontostufe, die GILT: standard|creator|business|business_plus (siehe src/accounts.js)
+  -- Die Stufe, die ein ADMIN von Hand vergeben hat (Testkonten, Partner,
+  -- Wiedergutmachungen). NULL = keine vergeben.
+  --
+  -- Warum das eine zweite Spalte braucht: Seit den Abos schreiben ZWEI Quellen
+  -- auf `account_type` – der Admin und der Store-Webhook. Ohne die Trennung
+  -- ueberschreibt die eine die andere. Konkret: Ein Partnerkonto hat dauerhaft
+  -- Business und probiert einen Monat Business Plus; laeuft der aus, meldet
+  -- RevenueCat "keine Entitlements", und `account_type` fiele auf 'standard' –
+  -- die dauerhafte Vergabe waere still verschwunden.
+  --
+  -- Deshalb gilt: `account_type` = das Bessere aus dieser Spalte und dem
+  -- laufenden Abo, ausgerechnet in src/subscriptions.js. Alles, was Rechte
+  -- prueft, liest weiter nur `account_type` und muss davon nichts wissen.
+  granted_account_type VARCHAR(255) NULL,
   google_id         VARCHAR(255)    NULL,
   avatar            VARCHAR(255)    NULL,               -- Profilbild: eigener Upload ('avatars/…') ODER fremde URL (Google), siehe src/media.js
   banner            VARCHAR(255)    NULL,               -- Bild hinter der Profil-Karte; wird in der App weichgezeichnet gezeigt
@@ -34,6 +48,21 @@ CREATE TABLE IF NOT EXISTS users (
   -- Stand zugestimmt hat. NULL = Bestandskonto von vor der Zustimmung.
   terms_version     VARCHAR(20)     NULL,
   terms_accepted_at DATETIME        NULL,
+  -- Zwei-Faktor-Anmeldung (bedient von Laravel, api/app/Support/TwoFactor.php).
+  -- `two_factor_method` ist der EINZIGE Schalter: NULL = aus, 'email' | 'totp' =
+  -- an. Ein gesetztes Secret bei NULL-Methode ist eine angefangene, noch nicht
+  -- bestaetigte Einrichtung und schaltet nichts ein.
+  -- Secret und Wiederherstellungscodes stehen VERSCHLUESSELT darin (Laravels
+  -- Crypt mit APP_KEY) – ein Datenbank-Abzug allein verraet sie nicht. Die Codes
+  -- sind zusaetzlich gehasht: Selbst entschluesselt steht dort kein
+  -- benutzbarer Code.
+  -- `two_factor_last_step` ist der Replay-Schutz fuer TOTP: das zuletzt
+  -- angenommene 30-Sekunden-Fenster. Ein Code gilt nur einmal.
+  two_factor_method         VARCHAR(10) NULL,
+  two_factor_secret         TEXT        NULL,
+  two_factor_recovery_codes TEXT        NULL,
+  two_factor_confirmed_at   DATETIME    NULL,
+  two_factor_last_step      BIGINT      NULL,
   remember_token    VARCHAR(100)    NULL,
   created_at        TIMESTAMP       NULL,
   updated_at        TIMESTAMP       NULL,
@@ -67,6 +96,44 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
   UNIQUE KEY personal_access_tokens_token_unique (token),
   KEY personal_access_tokens_tokenable_idx (tokenable_type, tokenable_id),
   KEY personal_access_tokens_expires_at_idx (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Offene Zwei-Faktor-Vorgaenge: ein Schritt, der auf einen Code wartet.
+--
+-- purpose:
+--   'login'   – Passwort stimmte, jetzt fehlt der zweite Faktor (POST /login).
+--   'setup'   – E-Mail-Code beim Einschalten der E-Mail-Methode.
+--   'confirm' – E-Mail-Code fuer eine heikle Aktion bei aktiver E-Mail-Methode
+--               (2FA ausschalten, neue Wiederherstellungscodes, Konto loeschen).
+--   'delete'  – Freigabe von Laravel an Node: „diese Person hat das Loeschen
+--               vollstaendig bestaetigt" (siehe server/src/routes/account.js).
+--               Kein Code, nur der Token; lebt zwei Minuten.
+--
+-- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App
+-- in der Hand haelt; `code_hash` = HMAC des Codes (Schluessel APP_KEY). Wer die
+-- Tabelle liest, kann damit weder einen Vorgang uebernehmen noch einen Code
+-- ablesen.
+--
+-- `attempts` zaehlt Fehlversuche; ab 5 ist der Vorgang verbraucht. Die Zeile
+-- bleibt bis zum Ablauf stehen, damit jeder weitere Versuch dieselbe klare
+-- Antwort bekommt („Zu viele Versuche") statt eines raetselhaften „abgelaufen".
+CREATE TABLE IF NOT EXISTS two_factor_challenges (
+  id           BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  user_id      BIGINT UNSIGNED  NOT NULL,
+  token_hash   CHAR(64)         NOT NULL,
+  method       VARCHAR(10)      NULL,
+  code_hash    CHAR(64)         NULL,
+  purpose      VARCHAR(10)      NOT NULL,
+  attempts     TINYINT UNSIGNED NOT NULL DEFAULT 0,
+  expires_at   DATETIME         NOT NULL,
+  created_at   TIMESTAMP        NULL,
+  last_sent_at DATETIME         NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY two_factor_challenges_token_uq (token_hash),
+  KEY two_factor_challenges_user_idx (user_id, purpose),
+  KEY two_factor_challenges_expires_idx (expires_at),
+  CONSTRAINT two_factor_challenges_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Interessen
@@ -108,6 +175,13 @@ CREATE TABLE IF NOT EXISTS activities (
   banner_path VARCHAR(255)    NULL,
   max_participants INT UNSIGNED NULL,               -- NULL = unbegrenzt
   boosted_until DATETIME      NULL,                 -- hervorgehoben bis (Business-Stufen); NULL = normal
+  -- 1 = Dauerangebot ohne festen Termin (Bowling, Trampolinhalle, Freibad).
+  --
+  -- Bei diesen Zeilen ist `starts_at` BEDEUTUNGSLOS: Es traegt nur den
+  -- Anlege-Zeitpunkt, weil die Spalte NOT NULL ist. Die App zeigt ihn nicht und
+  -- rechnet nicht mit ihm, sondern liest dieses Kennzeichen und behandelt den
+  -- Eintrag als „immer moeglich" (src/domain/activity-filter.ts).
+  is_permanent  TINYINT(1)    NOT NULL DEFAULT 0,
   created_at  TIMESTAMP       NULL,
   updated_at  TIMESTAMP       NULL,
   PRIMARY KEY (id),
@@ -120,6 +194,14 @@ CREATE TABLE IF NOT EXISTS activities (
 CREATE TABLE IF NOT EXISTS activity_interest (
   activity_id BIGINT UNSIGNED NOT NULL,
   interest_id BIGINT UNSIGNED NOT NULL,
+  -- Rangfolge der Kategorien EINES Events; 0 = die fuehrende.
+  --
+  -- Die App unterteilt ihre Listen nach der fuehrenden Kategorie (siehe
+  -- src/domain/interest-group.ts). Ohne diese Spalte entschied beim Auslesen das
+  -- Alphabet: Ein Salsa-Abend mit [Tanzen, Party & Club] landete unter
+  -- "Party & Club", weil P vor T kommt – und die Absicht des Importers
+  -- (spezifisch vor allgemein) war weg.
+  `rank`      TINYINT UNSIGNED NOT NULL DEFAULT 0,
   PRIMARY KEY (activity_id, interest_id),
   KEY activity_interest_interest_id_idx (interest_id),
   CONSTRAINT activity_interest_activity_id_fk
@@ -404,6 +486,12 @@ CREATE TABLE IF NOT EXISTS account_upgrade_requests (
   id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id        BIGINT UNSIGNED NOT NULL,
   requested_type VARCHAR(20)     NOT NULL,          -- creator|business|business_plus
+  -- Monats- oder Jahresabo, wie im Upgrade-Bildschirm gewaehlt. Kein ENUM,
+  -- sondern VARCHAR wie `requested_type`: Eingelesen wird der Wert ohnehin in
+  -- src/subscriptions.js (normalizeBillingPeriod), und ein dritter Rhythmus
+  -- braucht dann kein ALTER TABLE. Aendert an den Rechten NICHTS – die haengen
+  -- allein an der Stufe.
+  billing_period VARCHAR(10)     NOT NULL DEFAULT 'monthly',  -- monthly|yearly
   status         ENUM('pending','approved','rejected') NOT NULL DEFAULT 'pending',
   message        VARCHAR(500)    NULL,              -- Begruendung der Person (freiwillig)
   decided_by     BIGINT UNSIGNED NULL,              -- Admin, der entschieden hat
@@ -419,6 +507,45 @@ CREATE TABLE IF NOT EXISTS account_upgrade_requests (
   -- Der Admin darf geloescht werden, die Entscheidung bleibt bestehen.
   CONSTRAINT account_upgrade_requests_admin_fk
     FOREIGN KEY (decided_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Laufende Abos (In-App-Kauf ueber App Store / Play Store, gemeldet von
+-- RevenueCat). Eine Zeile pro Konto UND Entitlement, im Stand von JETZT – kein
+-- Verlauf. Der Verlauf steht im Store und bei RevenueCat; hier interessiert nur
+-- die Frage, die der Server bei jeder Anfrage beantworten muss: Was ist bezahlt?
+--
+-- WARUM `entitlement` UND NICHT DIE PRODUKT-ID
+-- Dasselbe Abo heisst in beiden Laeden anders (`goenn.creator.monthly` bei
+-- Apple, `goenn_creator_monthly` bei Google), und ein spaeteres Jahresabo waere
+-- eine dritte ID fuer dieselbe Stufe. Das Entitlement ist der gemeinsame Name –
+-- wortgleich mit der Kontostufe (siehe src/domain/subscription.ts in der App).
+-- Die `product_id` steht nur zum Nachsehen mit in der Zeile.
+--
+-- WARUM `event_at`
+-- Webhooks kommen nicht zwangslaeufig in der Reihenfolge an, in der sie
+-- entstanden sind. Ein verspaetetes "abgelaufen" nach einem schon verarbeiteten
+-- "verlaengert" wuerde ein bezahltes Konto abschalten. Deshalb wird ein Ereignis
+-- verworfen, das aelter ist als das zuletzt verarbeitete (src/subscriptions.js).
+--   status: 'active' (bezahlt) | 'grace' (Zahlung haengt, Zugang bleibt) | 'expired' (vorbei)
+CREATE TABLE IF NOT EXISTS subscriptions (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  entitlement VARCHAR(20)     NOT NULL,          -- creator|business|business_plus
+  provider    VARCHAR(20)     NOT NULL,          -- app_store|play_store|stripe|promotional
+  product_id  VARCHAR(191)    NULL,              -- ID im jeweiligen Store, nur zur Nachschau
+  status      ENUM('active','grace','expired') NOT NULL DEFAULT 'active',
+  expires_at  DATETIME        NULL,              -- NULL = laeuft ohne Ende (Vergabe/Promo)
+  event_at    DATETIME        NULL,              -- Zeitstempel des Webhook-Ereignisses
+  created_at  TIMESTAMP       NULL,
+  updated_at  TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  -- Eine Zeile pro Konto und Stufe: Ein zweiter Kauf derselben Stufe (neues
+  -- Geraet, Wechsel des Stores) aktualisiert die bestehende Zeile, statt eine
+  -- zweite anzulegen, die ihr widersprechen koennte.
+  UNIQUE KEY subscriptions_user_entitlement_uq (user_id, entitlement),
+  KEY subscriptions_active_idx (user_id, status, expires_at),
+  CONSTRAINT subscriptions_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Chat-Raeume. EIN Raum-Begriff fuer beide Anlaesse, an denen geredet wird:
@@ -574,4 +701,102 @@ CREATE TABLE IF NOT EXISTS user_links (
   UNIQUE KEY user_links_user_platform_uq (user_id, platform),
   CONSTRAINT user_links_user_id_fk
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Folgen: EINSEITIG und damit etwas anderes als eine Freundschaft. Freundschaft
+-- ist ein Vertrag zu zweit (anfragen, annehmen) und schaltet Gruppen und Chats
+-- frei; Folgen ist eine Abo-Entscheidung, die nur die folgende Person trifft.
+-- Deshalb eine Zeile je Richtung und keine Anfrage.
+CREATE TABLE IF NOT EXISTS follows (
+  follower_id  BIGINT UNSIGNED NOT NULL,
+  following_id BIGINT UNSIGNED NOT NULL,
+  created_at   TIMESTAMP       NULL,
+  PRIMARY KEY (follower_id, following_id),
+  KEY follows_following_idx (following_id),
+  CONSTRAINT follows_follower_fk
+    FOREIGN KEY (follower_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT follows_following_fk
+    FOREIGN KEY (following_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Gefaellt-mir an einem Beitrag. Eine Zeile pro Person und Beitrag – damit ist
+-- die Zahl "wie vielen gefaellt das" und nicht "wie oft wurde geklickt".
+CREATE TABLE IF NOT EXISTS post_likes (
+  post_id    BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP       NULL,
+  PRIMARY KEY (post_id, user_id),
+  KEY post_likes_user_idx (user_id),
+  CONSTRAINT post_likes_post_fk
+    FOREIGN KEY (post_id) REFERENCES posts (id) ON DELETE CASCADE,
+  CONSTRAINT post_likes_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Kommentare an einem Beitrag.
+CREATE TABLE IF NOT EXISTS post_comments (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  post_id    BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  body       VARCHAR(500)    NOT NULL,
+  created_at TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  KEY post_comments_post_idx (post_id, id),
+  KEY post_comments_user_idx (user_id),
+  CONSTRAINT post_comments_post_fk
+    FOREIGN KEY (post_id) REFERENCES posts (id) ON DELETE CASCADE,
+  CONSTRAINT post_comments_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Benachrichtigungen. `ref_id` hat bewusst KEINEN Fremdschluessel: Die Nachricht
+-- "X hat eine Story veroeffentlicht" muss die Story ueberleben – sonst
+-- verschwaende der Verlauf nach 24 Stunden rueckwirkend. Deshalb tragen
+-- `title`/`body` den Text schon fertig; beim Antippen prueft die App, ob es das
+-- Ziel noch gibt.
+CREATE TABLE IF NOT EXISTS notifications (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  actor_id   BIGINT UNSIGNED NULL,
+  type       VARCHAR(20)     NOT NULL,
+  ref_id     BIGINT UNSIGNED NULL,
+  title      VARCHAR(160)    NOT NULL,
+  body       VARCHAR(300)    NULL,
+  read_at    DATETIME        NULL,
+  created_at TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  KEY notifications_user_idx (user_id, id),
+  KEY notifications_unread_idx (user_id, read_at),
+  CONSTRAINT notifications_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT notifications_actor_fk
+    FOREIGN KEY (actor_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Merkzettel des Event-Imports (src/import/): welches Event einer Location-Seite
+-- wurde zu welcher Aktivitaet.
+--
+-- Eigene Tabelle statt einer Spalte in `activities`: Die Zuordnung ist eine
+-- Aussage ueber die HERKUNFT, nicht ueber das Event. So bleibt `activities`
+-- genau die Tabelle, die die App kennt – nichts in der App muss vom Import wissen.
+--
+-- `activity_id` ist ON DELETE SET NULL und nicht CASCADE: Loescht ein Admin ein
+-- importiertes Event, bleibt die Zeile mit activity_id NULL zurueck. Das ist das
+-- Gedaechtnis dafuer, dass es weg soll – der naechste Import-Lauf legt es nicht
+-- wieder an.
+CREATE TABLE IF NOT EXISTS imported_events (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  source       VARCHAR(64)     NOT NULL,           -- slug aus src/import/sources.js
+  external_id  VARCHAR(255)    NOT NULL,           -- ID des Events in der Quelle
+  activity_id  BIGINT UNSIGNED NULL,               -- NULL = vom Admin entfernt, nicht neu anlegen
+  content_hash CHAR(8)         NOT NULL,           -- Fingerabdruck, entscheidet ueber UPDATE
+  source_url   VARCHAR(512)    NULL,
+  last_seen_at DATETIME        NULL,               -- zuletzt in der Quelle gesehen
+  created_at   TIMESTAMP       NULL,
+  updated_at   TIMESTAMP       NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY imported_events_source_external_uq (source, external_id),
+  KEY imported_events_activity_id_idx (activity_id),
+  CONSTRAINT imported_events_activity_id_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

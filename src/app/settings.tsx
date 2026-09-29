@@ -1,5 +1,5 @@
 import Constants from 'expo-constants';
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
 import {
@@ -14,15 +14,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HomeBackground } from '@/components/home-background';
 import { InterestPicker, type InterestPickerPalette } from '@/components/interest-picker';
-import { TabMascot } from '@/components/tab-mascot';
 import { ThemedText } from '@/components/themed-text';
+import { useHeaderBackFallback } from '@/components/ui/header-back';
 import { Icon } from '@/components/ui/icon';
-import { LockIcon } from '@/components/ui/icons';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { LinkRow, RowDivider, RowNote, SettingGroup, SwitchRow } from '@/components/ui/setting-row';
 import { TextField } from '@/components/ui/text-field';
+import { Features } from '@/constants/features';
 import { Links, supportMailto } from '@/constants/links';
-import { BottomTabInset, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { LEGAL_VERSION, type LegalDocId } from '@/domain/legal';
 import {
   ACCOUNT_TIERS,
@@ -33,9 +33,10 @@ import {
 } from '@/domain/account';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useBrandSurface, useTheme } from '@/hooks/use-theme';
-import { api, ApiError } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
+import { blockedTermMessage } from '@/lib/blocked-terms';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import { clearCredentials } from '@/lib/credential-store';
 import { previewSound } from '@/lib/feedback';
@@ -74,6 +75,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const colors = useTheme();
   const surface = useBrandSurface();
+  const backFallback = useHeaderBackFallback('/me');
 
   /** Ein Rechtstext in der App – nicht im Browser (siehe Gruppe „Rechtliches"). */
   function openLegal(doc: LegalDocId) {
@@ -84,7 +86,6 @@ export default function SettingsScreen() {
   const { preference, isDark, setDark, followSystem } = useThemePreference();
   const { settings, update } = useAppSettings();
 
-  const [sendingReset, setSendingReset] = useState(false);
 
   // Interessen-Bearbeitung (eigener Zustand, unabhängig von den Konto-Feldern).
   const [editingInterests, setEditingInterests] = useState(false);
@@ -183,6 +184,13 @@ export default function SettingsScreen() {
       return;
     }
 
+    // Gleiche Liste wie am Server – so steht die Meldung sofort da, ohne Umweg.
+    const blocked = field === 'username' ? blockedTermMessage(value, 'username') : null;
+    if (blocked) {
+      setFieldError(blocked);
+      return;
+    }
+
     setSaving(true);
     setFieldError(null);
     try {
@@ -197,25 +205,15 @@ export default function SettingsScreen() {
     }
   }
 
-  async function onChangePassword() {
-    if (!user?.email) return;
-    setSendingReset(true);
-    try {
-      await api.forgotPassword(user.email);
-      Alert.alert(
-        'E-Mail unterwegs',
-        `Wir haben dir einen Link zum Zurücksetzen deines Passworts an ${user.email} geschickt.`,
-      );
-    } catch (err) {
-      Alert.alert(
-        'Fehlgeschlagen',
-        err instanceof ApiError
-          ? err.firstError()
-          : 'Etwas ist schiefgelaufen. Bitte versuch es später erneut.',
-      );
-    } finally {
-      setSendingReset(false);
-    }
+  /**
+   * Passwort ändern – im eigenen Bildschirm mit altem Passwort und Stärke-Anzeige.
+   *
+   * Vorher schickte dieser Knopf einen Zurücksetzen-Link per Mail. Das war doppelt
+   * schlecht: Ohne eingerichteten Mail-Versand kam nie etwas an, und wer angemeldet
+   * ist, kennt sein Passwort ja – der Umweg über das Postfach ist dann nur Reibung.
+   */
+  function onChangePassword() {
+    router.push('/security/password');
   }
 
   /** Auf diesem Gerät gemerkte Zugangsdaten entfernen (Login füllt dann leer). */
@@ -232,24 +230,14 @@ export default function SettingsScreen() {
   }
 
   /**
-   * Konto löschen. Das Backend bietet dafür noch keinen Endpunkt, also führt
-   * der Weg über den Support – aber sichtbar und mit einer fertigen Mail,
-   * statt gar nicht.
+   * Konto löschen – direkt in der App, mit Passwort-Bestätigung.
+   *
+   * Vorher ging das nur per Mail an den Support. Apple und Google verlangen, dass
+   * man die Löschung IN der App auslösen kann; eine vorgefertigte Mail reicht
+   * nicht und ist ein häufiger Ablehnungsgrund in der Store-Prüfung.
    */
-  async function onDeleteAccount() {
-    const ok = await confirmAction(
-      'Konto löschen',
-      'Wir löschen dein Konto samt Events und Verlauf. Das lässt sich nicht rückgängig machen. Du schickst uns dafür eine kurze Mail – wir bestätigen die Löschung.',
-      'Mail schreiben',
-      true,
-    );
-    if (!ok) return;
-    await openLink(
-      supportMailto(
-        'Konto löschen',
-        `Bitte löscht mein Konto.\n\nKonto: ${user?.email ?? ''}${user?.username ? ` (@${user.username})` : ''}`,
-      ),
-    );
+  function onDeleteAccount() {
+    router.push('/security/delete-account');
   }
 
   function onLogout() {
@@ -264,24 +252,32 @@ export default function SettingsScreen() {
   return (
     // Gleiche helle Leinwand wie im Rest der App – die Karten sind Glas darauf.
     <HomeBackground style={styles.screen}>
+      {/* Eigene Stack-Route (hinter dem Menü im Profil, wie bei Instagram) – der
+          Kopf bringt den Zurück-Knopf mit. Ohne ihn wäre das eine Sackgasse über
+          der Tab-Leiste. */}
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: 'Einstellungen',
+          headerBackTitle: 'Zurück',
+          headerTintColor: colors.text,
+          headerStyle: { backgroundColor: colors.background },
+          headerTitleStyle: { color: colors.text },
+          headerShadowVisible: false,
+          headerLeft: backFallback,
+        }}
+      />
       {/* Tastatur-Freistellung macht `KeyboardForm` (siehe dort). */}
       <View style={styles.screen}>
         <KeyboardForm
           contentContainerStyle={[
             styles.content,
             {
-              paddingTop: insets.top + Spacing.four,
-              paddingBottom: insets.bottom + BottomTabInset + Spacing.four,
+              paddingTop: Spacing.three,
+              paddingBottom: insets.bottom + Spacing.five,
             },
           ]}
           showsVerticalScrollIndicator={false}>
-          <View style={styles.header}>
-            <ThemedText style={styles.title}>Einstellungen</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              Tippe einen Bereich an, um ihn aufzuklappen.
-            </ThemedText>
-            <TabMascot tab="settings" style={styles.mascot} />
-          </View>
 
           {/* Konto – die eine Gruppe, die offen startet: Von hier geht man
               weiter, hier fängt man nicht mit einem zusätzlichen Tipp an.
@@ -329,102 +325,112 @@ export default function SettingsScreen() {
               onSave={saveEdit}
             />
 
-            <RowDivider />
+            {/* Kontostufen sind gerade ausgeblendet (src/constants/features.ts):
+                Jedes Konto kann dasselbe, also gibt es hier nichts zu wählen. */}
+            {Features.accountTiers ? (
+              <>
+                <RowDivider />
+                {user?.is_admin ? (
+                  <View style={styles.accountTypeRow}>
+                    <View style={styles.blockHeader}>
+                      <View style={styles.rowLabel}>
+                        <Icon name="tag" size={18} color={colors.tint} />
+                        <ThemedText type="small" style={{ color: colors.textSecondary }}>
+                          Kontotyp
+                        </ThemedText>
+                      </View>
+                      {savingAccountType ? <ActivityIndicator size="small" color={colors.tint} /> : null}
+                    </View>
 
-            <View style={styles.row}>
-              <View style={styles.rowLabel}>
-                <LockIcon color={colors.tint} />
-                <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                  Passwort
-                </ThemedText>
-              </View>
-              <View style={styles.passwordRight}>
-                <ThemedText style={styles.value}>••••••••</ThemedText>
-                <Pressable
-                  onPress={onChangePassword}
-                  disabled={sendingReset || !user?.email}
-                  hitSlop={8}
-                  style={({ pressed }) => pressed && styles.pressed}>
-                  {sendingReset ? (
-                    <ActivityIndicator size="small" color={colors.tint} />
-                  ) : (
-                    <ThemedText type="smallBold" style={{ color: colors.tint }}>
-                      Ändern
-                    </ThemedText>
-                  )}
-                </Pressable>
-              </View>
-            </View>
+                    {/* Untereinander statt nebeneinander: Vier Stufen mit je einem
+                        erklärenden Satz passen in keine Zeile. */}
+                    <View style={styles.tierOptions}>
+                      {ACCOUNT_TIERS.map((tier) => (
+                        <TierOption
+                          key={tier.type}
+                          tier={tier}
+                          selected={accountType === tier.type}
+                          disabled={savingAccountType}
+                          onPress={() => onSelectAccountType(tier.type)}
+                          colors={colors}
+                        />
+                      ))}
+                    </View>
 
-            <RowDivider />
-
-            {user?.is_admin ? (
-              <View style={styles.accountTypeRow}>
-                <View style={styles.blockHeader}>
-                  <View style={styles.rowLabel}>
-                    <Icon name="tag" size={18} color={colors.tint} />
                     <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                      Kontotyp
+                      Die Stufe schaltet Rechte frei: Events erstellen ab Creator, der Business-Bereich
+                      mit Umsatz und Reichweite ab Business. Du kannst jederzeit wechseln.
+                    </ThemedText>
+
+                    {accountTypeError ? (
+                      <ThemedText type="small" style={styles.errorText}>
+                        {accountTypeError}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                ) : (
+                  /* Ohne Admin-Rechte ist die Stufe eine Anzeige: Umstellen darf nur
+                     der Server-seitig geprüfte Admin. Der Weg zum Upgrade läuft über
+                     das Feld oben links auf der Startseite – bewusst nur dort, damit
+                     es nicht zwei Wege gibt, die auseinanderlaufen können. */
+                  <View style={styles.accountTypeRow}>
+                    <View style={styles.blockHeader}>
+                      <View style={styles.rowLabel}>
+                        <Icon name="tag" size={18} color={colors.tint} />
+                        <ThemedText type="small" style={{ color: colors.textSecondary }}>
+                          Kontotyp
+                        </ThemedText>
+                      </View>
+                      <ThemedText style={styles.value}>{currentTier.label}</ThemedText>
+                    </View>
+
+                    <View style={styles.perkList}>
+                      {currentTier.perks.map((perk) => (
+                        <ThemedText key={perk} type="small" style={{ color: colors.textSecondary }}>
+                          · {perk}
+                        </ThemedText>
+                      ))}
+                    </View>
+
+                    <ThemedText type="small" style={{ color: colors.textSecondary }}>
+                      {'Deinen nächsten Schritt findest du über „Upgrade" oben links auf der Startseite.'}
                     </ThemedText>
                   </View>
-                  {savingAccountType ? <ActivityIndicator size="small" color={colors.tint} /> : null}
-                </View>
+                )}
+              </>
+            ) : null}
+          </SettingGroup>
 
-                {/* Untereinander statt nebeneinander: Vier Stufen mit je einem
-                    erklärenden Satz passen in keine Zeile. */}
-                <View style={styles.tierOptions}>
-                  {ACCOUNT_TIERS.map((tier) => (
-                    <TierOption
-                      key={tier.type}
-                      tier={tier}
-                      selected={accountType === tier.type}
-                      disabled={savingAccountType}
-                      onPress={() => onSelectAccountType(tier.type)}
-                      colors={colors}
-                    />
-                  ))}
-                </View>
 
-                <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                  Die Stufe schaltet Rechte frei: Events erstellen ab Creator, der Business-Bereich
-                  mit Umsatz und Reichweite ab Business. Du kannst jederzeit wechseln.
-                </ThemedText>
-
-                {accountTypeError ? (
-                  <ThemedText type="small" style={styles.errorText}>
-                    {accountTypeError}
-                  </ThemedText>
-                ) : null}
-              </View>
-            ) : (
-              /* Ohne Admin-Rechte ist die Stufe eine Anzeige: Umstellen darf nur
-                 der Server-seitig geprüfte Admin. Der Weg zum Upgrade läuft über
-                 das Feld oben links auf der Startseite – bewusst nur dort, damit
-                 es nicht zwei Wege gibt, die auseinanderlaufen können. */
-              <View style={styles.accountTypeRow}>
-                <View style={styles.blockHeader}>
-                  <View style={styles.rowLabel}>
-                    <Icon name="tag" size={18} color={colors.tint} />
-                    <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                      Kontotyp
-                    </ThemedText>
-                  </View>
-                  <ThemedText style={styles.value}>{currentTier.label}</ThemedText>
-                </View>
-
-                <View style={styles.perkList}>
-                  {currentTier.perks.map((perk) => (
-                    <ThemedText key={perk} type="small" style={{ color: colors.textSecondary }}>
-                      · {perk}
-                    </ThemedText>
-                  ))}
-                </View>
-
-                <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                  {'Deinen nächsten Schritt findest du über „Upgrade" oben links auf der Startseite.'}
-                </ThemedText>
-              </View>
-            )}
+          {/* Sicherheit – eigene Gruppe, weil sie das eine schützt, das man nicht
+              zurückholen kann: den Zugang zum Konto. */}
+          <SettingGroup label="Sicherheit" hint="Passwort und Zwei-Faktor-Anmeldung.">
+            <LinkRow
+              icon="lock"
+              title="Passwort ändern"
+              hint="Mit altem Passwort bestätigen"
+              onPress={onChangePassword}
+            />
+            <RowDivider />
+            <LinkRow
+              icon={user?.two_factor_method ? 'shield-check' : 'shield'}
+              title="Zwei-Faktor-Anmeldung"
+              hint={
+                user?.two_factor_method === 'totp'
+                  ? 'An – Code aus der Authenticator-App'
+                  : user?.two_factor_method === 'email'
+                    ? 'An – Code per E-Mail'
+                    : 'Aus – zusätzlicher Code beim Anmelden'
+              }
+              onPress={() => router.push('/security/two-factor')}
+            />
+            <RowDivider />
+            <LinkRow
+              icon="key"
+              title="Gespeicherte Zugangsdaten löschen"
+              hint="Entfernt E-Mail und Passwort von diesem Gerät"
+              onPress={onForgetDevice}
+            />
           </SettingGroup>
 
           {/* Interessen */}
@@ -614,13 +620,6 @@ export default function SettingsScreen() {
             />
             <RowDivider />
             <LinkRow
-              icon="key"
-              title="Gespeicherte Zugangsdaten löschen"
-              hint="Entfernt E-Mail und Passwort von diesem Gerät"
-              onPress={onForgetDevice}
-            />
-            <RowDivider />
-            <LinkRow
               icon="lock"
               title="Datenschutz"
               hint="Was wir speichern und warum"
@@ -654,6 +653,19 @@ export default function SettingsScreen() {
               disabled={followsSystem}
             />
           </SettingGroup>
+
+          {/* Admin-Bereich – vorher hing er im Konto-Blatt auf der Startseite. Das Blatt
+              gibt es nicht mehr; hier suchen Admins ohnehin zuerst. */}
+          {user?.is_admin ? (
+            <SettingGroup label="Admin" hint="Nutzer, Meldungen und Moderation verwalten.">
+              <LinkRow
+                icon="shield"
+                title="Admin-Bereich öffnen"
+                hint="Dashboard, Nutzer, Meldungen, KI-Prüfung"
+                onPress={() => router.push('/admin-dashboard')}
+              />
+            </SettingGroup>
+          ) : null}
 
           {/* Hilfe */}
           <SettingGroup
@@ -739,6 +751,7 @@ export default function SettingsScreen() {
               { borderColor: surface.chipBorder },
               pressed && styles.pressed,
             ]}>
+            <Icon name="logout" size={18} color="#ef4444" />
             <ThemedText type="smallBold" style={{ color: '#ef4444' }}>
               Abmelden
             </ThemedText>

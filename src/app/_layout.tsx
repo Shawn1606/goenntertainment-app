@@ -5,7 +5,7 @@ import {
   InstrumentSans_700Bold,
 } from '@expo-google-fonts/instrument-sans';
 import { Pacifico_400Regular, useFonts } from '@expo-google-fonts/pacifico';
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-navigation';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
@@ -58,6 +58,19 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
             wohnen, und im Event-Popup für den Event-Chat. */}
         <Stack.Screen name="chats" />
         <Stack.Screen name="chat" />
+        {/* Die Glocke: was Leute gemacht haben, denen man folgt – und was auf
+            den eigenen Beiträgen passiert ist. Wie die Chats eine Stack-Route,
+            weil die untere Leiste ihre fünf Plätze voll hat; der Einstieg liegt
+            oben rechts auf der Startseite. */}
+        <Stack.Screen name="notifications" />
+        {/* Einstellungen: seit dem Instagram-Umbau kein Tab mehr, sondern hinter dem
+            Menü oben rechts im Profil. Mit Zurück-Knopf (setzt der Screen selbst). */}
+        <Stack.Screen name="settings" />
+        {/* Sicherheit: Passwort ändern, Zwei-Faktor, Konto löschen – aus den
+            Einstellungen erreichbar. */}
+        <Stack.Screen name="security/password" />
+        <Stack.Screen name="security/two-factor" />
+        <Stack.Screen name="security/delete-account" />
         {/* Blockierte Konten. Braucht einen eigenen Screen, weil eine blockierte
             Person überall sonst aus der App verschwindet – es gäbe kein Profil
             mehr, auf dem ein „Freigeben" stehen könnte. */}
