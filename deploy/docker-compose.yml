@@ -1,11 +1,18 @@
-# Komplettes Backend fuer den Server: Datenbank + API + HTTPS.
+# GÖ4Fun auf einem Server – alle Teile als Container.
 #
-# Start:  docker compose up -d      (im Ordner deploy/, .env muss daneben liegen)
+#   Internet ─► caddy (HTTPS, Port 80/443)
+#                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
+#                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
+#                 db  (MySQL)  ◄── beide Backends
 #
-# Warum die Dateien hier und nicht in server/ liegen: `docker compose` liest die
-# `.env` NEBEN der Compose-Datei. Laege sie in server/, wuerde deine lokale
-# Entwicklungs-.env (DB_HOST=127.0.0.1, leeres Passwort) die Server-Werte
-# ueberschreiben – ein Fehler, den man erst merkt, wenn nichts geht.
+# Genau die Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node dahinter), nur
+# dass niemand außer Caddy von außen erreichbar ist.
+#
+# Starten (im Ordner deploy/, nach dem Ausfüllen von .env):
+#
+#   docker compose up -d --build
+#
+# Anleitung Schritt für Schritt: deploy/README.md
 
 services:
   db:
@@ -14,39 +21,46 @@ services:
     environment:
       MYSQL_DATABASE: goenntertainment
       MYSQL_USER: goenn
-      # `:?` heisst: fehlt der Wert in .env, bricht Compose SOFORT ab. Besser als
-      # ein Server, der mit leerem Passwort hochkommt.
       MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt in deploy/.env}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD fehlt in deploy/.env}
     volumes:
       - db-data:/var/lib/mysql
-      # MySQL fuehrt alles aus diesem Ordner beim ERSTEN Start automatisch aus.
-      # Damit baut sich das Schema von allein auf – kein manuelles Einspielen.
-      # Bei jedem spaeteren Start wird der Ordner ignoriert (die DB existiert ja
-      # schon), Datenverlust durch Neustart gibt es also nicht.
+      # Legt beim ALLERERSTEN Start (leeres Volume) alle Tabellen an. Spätere
+      # Ergänzungen macht das Node-Backend beim Start selbst (ensureSchema).
       - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      # Die API startet erst, wenn die DB wirklich antwortet. Ohne das rennt Node
-      # in einen Verbindungsfehler, weil MySQL beim ersten Start ~20 s braucht.
       test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-p${DB_ROOT_PASSWORD}']
       interval: 5s
       timeout: 5s
       retries: 20
       start_period: 30s
 
-  api:
+  # Bereitet den Upload-Ordner vor und beendet sich dann wieder.
+  #
+  # Docker legt einen fehlenden Ordner für ein Bind-Mount als root an. Das
+  # Node-Backend läuft aber absichtlich NICHT als root (Benutzer `node`, UID 1000)
+  # und könnte dort nichts speichern – jeder Upload scheiterte mit „Serverfehler".
+  # Dieser Einmal-Container gibt den Ordner dem Benutzer `node`.
+  storage-init:
+    image: busybox:1.37
+    command: >
+      sh -c "mkdir -p /storage/avatars /storage/banners /storage/evidence
+             /storage/posts /storage/stories /storage/user-banners
+             && chown -R 1000:1000 /storage"
+    volumes:
+      - ./storage:/storage
+
+  node:
     build:
       context: ../server
-      # shared/ liegt neben server/ (App, Laravel und Node lesen dieselben Listen)
-      # und damit ausserhalb des Baukontexts. Als benannter Zusatz-Kontext kommt
-      # er trotzdem ins Abbild (COPY --from=shared im Dockerfile), ohne dass der
-      # Kontext das ganze Repo umfassen muss - server/.dockerignore gilt weiter.
       additional_contexts:
         shared: ../shared
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
     environment:
       DB_HOST: db
       DB_PORT: '3306'
@@ -54,8 +68,6 @@ services:
       DB_USERNAME: goenn
       DB_PASSWORD: ${DB_PASSWORD:?}
       PORT: '8000'
-      # Feste oeffentliche Basis fuer Bild-Adressen. Muss https sein, sonst zeigt
-      # die App keine Bilder (iOS/Android verbieten Klartext-HTTP im Release).
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
@@ -66,16 +78,87 @@ services:
       MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-true}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
+      FEATURE_IMPORTED_EVENTS: ${FEATURE_IMPORTED_EVENTS:-}
+      FEATURE_ACCOUNT_TIERS: ${FEATURE_ACCOUNT_TIERS:-}
     volumes:
-      # Uploads liegen auf der Festplatte des Servers, nicht im Container. Sonst
-      # sind alle Profilbilder und Storys beim naechsten Deploy weg.
       - ./storage:/app/storage
-    # Kein `ports:` – die API ist NICHT direkt aus dem Internet erreichbar,
-    # nur ueber Caddy. So kann niemand Port 8000 unverschluesselt ansprechen.
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/api/health | grep -q "\"ok\":true"']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build:
+      context: ../api
+      additional_contexts:
+        shared: ../shared
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      node:
+        condition: service_healthy
+    environment:
+      APP_NAME: GÖ4Fun
+      APP_ENV: production
+      # Niemals true auf dem Server: Laravel zeigte dann bei jedem Fehler
+      # Quelltext, Pfade und Umgebungsvariablen – auch Passwörter.
+      APP_DEBUG: 'false'
+      APP_KEY: ${APP_KEY:?APP_KEY fehlt in deploy/.env (siehe README, Schritt 4)}
+      APP_URL: https://${DOMAIN:?}
+      PUBLIC_URL: https://${DOMAIN:?}
+      # UTC – und zwar überall (MySQL und Node laufen im Container ohnehin in UTC).
+      # Beide Backends hängen an Zeiten aus der Datenbank ein „Z" an, behandeln sie
+      # also als UTC. Am Entwicklungs-PC läuft MySQL dagegen in deutscher Ortszeit;
+      # dort steht APP_TIMEZONE deshalb auf Europe/Berlin, damit Laravel zu den
+      # vorhandenen Daten passt. Auf einem frischen Server gibt es diese Altlast
+      # nicht, und alle drei sprechen dieselbe Zeit.
+      APP_TIMEZONE: UTC
+      APP_LOCALE: de
+      APP_FALLBACK_LOCALE: de
+      # Fehler landen in `docker compose logs api`, nicht in einer Datei im Container.
+      LOG_CHANNEL: stderr
+      LOG_LEVEL: ${LOG_LEVEL:-warning}
+      DB_CONNECTION: mysql
+      DB_HOST: db
+      DB_PORT: '3306'
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      # Alles, was Laravel noch nicht selbst kann, geht an das Node-Backend.
+      NODE_FALLBACK_URL: http://node:8000
+      # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
+      # Standard-Tabellen für Cache/Sitzungen/Warteschlange gibt es dort nicht.
+      # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche) im Container
+      # array = keine Sitzungen – die API arbeitet nur mit Tokens
+      # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
+      CACHE_STORE: file
+      SESSION_DRIVER: array
+      QUEUE_CONNECTION: sync
+      # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet
+      # die App „Wir konnten dir gerade keinen Code schicken".
+      MAIL_MAILER: ${MAIL_MAILER:-smtp}
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-587}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_SCHEME: ${MAIL_SCHEME:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-noreply@${DOMAIN}}
+      MAIL_FROM_NAME: GÖ4Fun
+    volumes:
+      # Dieselben Uploads, die Node speichert – Laravel liefert sie unter /storage
+      # aus (so wie lokal über die Verknüpfung api/public/storage). Nur lesend:
+      # Geschrieben wird ausschließlich von Node.
+      - ./storage:/var/www/api/public/storage:ro
 
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    depends_on:
+      - api
     ports:
       - '80:80'
       - '443:443'
@@ -84,7 +167,7 @@ services:
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
-      # bei jedem Neustart neue und laeuft irgendwann ins Rate-Limit.
+      # bei jedem Neustart neue und läuft irgendwann ins Rate-Limit.
       - caddy-data:/data
       - caddy-config:/config
 

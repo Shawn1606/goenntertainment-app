@@ -3,9 +3,13 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+// Die gemeinsame Basisklasse, nicht Illuminate\Http\Response: Diese Methode gibt
+// auch JSON zurück (JsonResponse), und das ist KEIN Illuminate\Http\Response. Mit
+// dem engeren Typ stürzten gerade die Fehlerwege ab („Node antwortet nicht" 502,
+// „Bild zu groß" 413) – mit einem PHP-TypeError statt der vorgesehenen Meldung.
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Reicht noch nicht portierte API-Pfade an das alte Node-Backend weiter.
@@ -85,6 +89,21 @@ class NodeFallbackController extends Controller
         $headers['X-Forwarded-Host'] = $request->getHttpHost();
         $headers['X-Forwarded-Proto'] = $request->getScheme();
 
+        /**
+         * Zu große Datei – laut ablehnen statt still weglassen.
+         *
+         * Überschreitet ein Bild `upload_max_filesize` von PHP, kommt es in $_FILES
+         * nur als Fehlereintrag an. Früher fiel es beim Neuaufbau des Formulars
+         * einfach weg: Node bekam die Aktivität OHNE Bild und legte sie an, als wäre
+         * nichts gewesen. Die Meldung nennt die Grenze, die Node selbst zieht (5 MB),
+         * damit sie mit der Meldung für andere zu große Bilder übereinstimmt.
+         */
+        if ($isMultipart && $this->hasOversizedUpload($request->allFiles())) {
+            return response()->json([
+                'message' => 'Das Bild ist zu groß – bitte nimm eines unter '.$this->uploadLimitMb().' MB.',
+            ], 413);
+        }
+
         try {
             // Kein ->throw(): Der HTTP-Client wirft von sich aus NICHT bei
             // 4xx/5xx, und genau das ist hier richtig. Weiterleiten heisst
@@ -152,6 +171,48 @@ class NodeFallbackController extends Controller
         // (die App liest ausschliesslich den Rumpf), aber Gold wert, wenn man
         // wissen will, ob eine Etappe wirklich greift.
         return $response->header('X-Goenn-Backend', 'node-fallback');
+    }
+
+    /**
+     * Welche Grenze gerade wirklich gilt, in MB: die kleinere aus PHPs
+     * `upload_max_filesize` und den 5 MB, die Node selbst zieht. Im Container ist
+     * PHP großzügiger (8 MB, api/docker/php.ini), dann sind es die 5 MB von Node;
+     * am PC mit PHPs Vorgabe von 2 MB wären „5 MB" in der Meldung gelogen.
+     */
+    private function uploadLimitMb(): int
+    {
+        $raw = trim((string) ini_get('upload_max_filesize'));
+        $bytes = (int) $raw;
+        $unit = strtoupper(substr($raw, -1));
+        $bytes *= match ($unit) {
+            'G' => 1024 ** 3,
+            'M' => 1024 ** 2,
+            'K' => 1024,
+            default => 1,
+        };
+        $nodeLimit = 5 * 1024 ** 2;
+
+        return max(1, intdiv(min($bytes > 0 ? $bytes : $nodeLimit, $nodeLimit), 1024 ** 2));
+    }
+
+    /** Steckt irgendwo eine Datei, die PHP wegen ihrer Größe abgewiesen hat? */
+    private function hasOversizedUpload(array $files): bool
+    {
+        foreach ($files as $file) {
+            if (is_array($file)) {
+                if ($this->hasOversizedUpload($file)) {
+                    return true;
+                }
+
+                continue;
+            }
+            if ($file instanceof \Illuminate\Http\UploadedFile
+                && in_array($file->getError(), [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

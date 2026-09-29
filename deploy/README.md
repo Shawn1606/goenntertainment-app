@@ -1,11 +1,35 @@
-# Backend dauerhaft ins Netz stellen
+# GÖ4Fun auf einen Server bringen (Docker)
 
 Ziel: eine feste `https://`-Adresse, die von überall erreichbar ist – ohne Tunnel,
 ohne dass dein PC läuft. Diese Adresse wird in den App-Build eingebacken.
 
-Das Ganze ist ein Server mit drei Containern: **MySQL** (Datenbank), **API**
-(dein `server/`) und **Caddy** (HTTPS + Weiterleitung). Caddy holt das
-Zertifikat allein, das ist der Grund für den Aufbau.
+## Was hier läuft
+
+Alles, was auf dem Server gebraucht wird, steckt in **Containern**: fertig
+gepackten Paketen, die ihre PHP- bzw. Node-Version und alle Bibliotheken selbst
+mitbringen. Auf dem Server muss dafür nur **Docker** installiert sein.
+
+```
+Internet ─► caddy   HTTPS-Zertifikat, Port 80/443
+              └─► api    Laravel (api/)   – Anmeldung, Konto, Zwei-Faktor …
+                    └─► node   Node (server/)  – alles, was noch nicht umgezogen ist
+            db     MySQL – von beiden Backends benutzt
+```
+
+Das ist dieselbe Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node
+dahinter). Von außen erreichbar ist nur Caddy; `api`, `node` und `db` sprechen
+nur untereinander.
+
+Die **Handy-App selbst** steckt nicht in einem Container – sie wird mit EAS als
+APK bzw. iOS-App gebaut und bekommt die Server-Adresse mit (siehe unten).
+
+| Datei | Wofür |
+|---|---|
+| `deploy/docker-compose.yml` | welche Container es gibt und wie sie zusammenhängen |
+| `api/Dockerfile` | Bauplan für den Laravel-Container (PHP 8.4 + Apache) |
+| `server/Dockerfile` | Bauplan für den Node-Container |
+| `deploy/Caddyfile` | HTTPS und Weiterleitung an Laravel |
+| `deploy/.env` | deine Zugangsdaten (aus `.env.example`, **nie ins Git**) |
 
 ---
 
@@ -15,13 +39,12 @@ Zertifikat allein, das ist der Grund für den Aufbau.
 |---|---|---|
 | 1 | Ein kleiner Linux-Server (VPS), z. B. **Hetzner CX22** – 2 Kerne, 4 GB RAM, Standort Nürnberg | ~4,50 €/Monat |
 | 2 | Eine Domain, z. B. `goenntertainment.de` | ~10 €/Jahr |
+| 3 | Optional: ein Mail-Zugang (SMTP) für die 2FA-Codes, z. B. Brevo | gratis bis 300 Mails/Tag |
 
-Warum Hetzner: deutsches Unternehmen, Server in Deutschland. Für eine App mit
-Chats, Meldungen und Jugendschutz-Prüfung ist das die unkomplizierte Antwort auf
-die DSGVO-Frage – bei US-Anbietern brauchst du einen Auftragsverarbeitungsvertrag
-und musst den Drittlandtransfer begründen.
+Warum Hetzner: deutsches Unternehmen, Server in Deutschland – die
+unkomplizierte Antwort auf die DSGVO-Frage.
 
-4 GB RAM sind für MySQL + Node reichlich; der 2-GB-Tarif (CX11) geht auch, wird
+4 GB RAM reichen für MySQL, Laravel und Node gut. Der 2-GB-Tarif geht auch, wird
 bei vielen gleichzeitigen Bild-Uploads aber knapp.
 
 ---
@@ -34,10 +57,8 @@ Beim Domain-Anbieter einen **A-Eintrag** anlegen:
 api    A    <IPv4 deines Servers>
 ```
 
-Ergebnis: `api.goenntertainment.de`. **Das muss vor Schritt 4 stehen** – Caddy
+Ergebnis: `api.goenntertainment.de`. **Das muss vor Schritt 5 stehen** – Caddy
 bekommt das Zertifikat nur, wenn Let's Encrypt die Domain schon auflösen kann.
-
-Prüfen (kann bis zu einer Stunde dauern, meist wenige Minuten):
 
 ```bash
 nslookup api.goenntertainment.de
@@ -51,68 +72,92 @@ Per SSH auf dem Server:
 curl -fsSL https://get.docker.com | sh
 ```
 
+Prüfen – gebraucht wird Docker Compose **ab 2.17**:
+
+```bash
+docker compose version
+```
+
 ## Schritt 3 – Projekt auf den Server holen
 
 ```bash
-git clone <deine-repo-url> goenntertainment && cd goenntertainment/deploy
+git clone https://github.com/Shawn1606/goenntertainment-app.git goenntertainment
+cd goenntertainment/deploy
 ```
 
-Kein Git-Remote? Dann vom PC aus hochladen (PowerShell, im Projektordner):
+Gebraucht werden die Ordner `api/`, `server/`, `shared/` und `deploy/`.
+`shared/` enthält die Listen, die App, Node und Laravel gemeinsam lesen (gesperrte
+Begriffe, häufige Passwörter). Fehlt der Ordner, bricht der Bau mit einem Fehler
+zu `shared` ab – gewollt: Ohne den Wortfilter startet die API nicht, statt still
+ohne ihn zu laufen.
 
-```bash
-scp -r server shared deploy root@<server-ip>:/root/goenntertainment/
-```
-
-`shared/` muss mit: Dort liegen die Listen, die App, Node und Laravel gemeinsam
-lesen (gesperrte Begriffe, häufige Passwörter). Compose reicht den Ordner beim
-Bauen als zweiten Kontext herein (`additional_contexts` in
-`docker-compose.yml`) – fehlt er, bricht `docker compose up --build` mit einem
-Fehler zu `shared` ab. Das ist gewollt: Ohne die Liste gesperrter Begriffe
-startet die API nicht, statt still ohne Filter zu laufen. Braucht Docker Compose
-ab 2.17 (`docker compose version`).
-
-## Schritt 4 – Zugangsdaten setzen und starten
+## Schritt 4 – Zugangsdaten eintragen
 
 ```bash
 cp .env.example .env
+nano .env
 ```
 
-`.env` ausfüllen – `DOMAIN`, `DB_PASSWORD`, `DB_ROOT_PASSWORD` sind Pflicht.
+Pflicht sind `DOMAIN`, `DB_PASSWORD`, `DB_ROOT_PASSWORD` und `APP_KEY`.
+
 Passwörter erzeugen:
 
 ```bash
 openssl rand -base64 24
 ```
 
-Dann starten:
+Den `APP_KEY` erzeugen (ergibt eine Zeile, die mit `base64:` beginnt):
 
 ```bash
-docker compose up -d
+echo "base64:$(openssl rand -base64 32)"
 ```
 
-Beim ersten Mal dauert es 1–2 Minuten: Abbild bauen, MySQL initialisieren,
-`schema.sql` einspielen, Zertifikat holen. Das Schema wird **automatisch**
-angelegt, du musst nichts einspielen.
+> **Den `APP_KEY` einmal erzeugen und nie wieder ändern.** Laravel verschlüsselt
+> damit die Geheimnisse der Zwei-Faktor-Anmeldung. Mit einem neuen Schlüssel käme
+> niemand mit eingeschalteter 2FA mehr in sein Konto. Heb ihn zusätzlich
+> außerhalb des Servers auf (z. B. im Passwort-Manager).
 
-## Schritt 5 – Nachsehen, ob es läuft
+Für 2FA-Codes per E-Mail außerdem `MAIL_HOST`, `MAIL_USERNAME` und
+`MAIL_PASSWORD` eintragen. Ohne sie läuft alles, nur E-Mail-Codes kommen nicht an.
+
+## Schritt 5 – Starten
+
+```bash
+docker compose up -d --build
+```
+
+Beim ersten Mal dauert es einige Minuten: die zwei Abbilder bauen, MySQL
+einrichten, `server/schema.sql` einspielen, Zertifikat holen. Das Schema wird
+**automatisch** angelegt – nichts von Hand einspielen und **kein**
+`php artisan migrate` (das Schema gehört dem Node-Backend; Laravels
+Standard-Migrationen würden die Tabelle `users` doppelt anlegen wollen).
+
+Zusehen, bis alles „healthy" ist:
+
+```bash
+docker compose ps
+```
+
+## Schritt 6 – Nachsehen, ob es läuft
 
 ```bash
 curl https://api.goenntertainment.de/api/health
 ```
 
-Erwartet: `{"ok":true}`. Kommt stattdessen ein Zertifikatsfehler, zeigt die
-Domain noch nicht auf den Server – Logs ansehen:
+Erwartet: `{"ok":true}`. Kommt ein Zertifikatsfehler, zeigt die Domain noch
+nicht auf den Server:
 
 ```bash
 docker compose logs caddy --tail 30
 ```
 
-## Schritt 6 – Admin-Konto anlegen (optional)
+## Schritt 7 – Kategorien und Admin-Konto anlegen
 
-`ADMIN_EMAIL` und `ADMIN_PASSWORD` in `.env` setzen, dann:
+Das legt die Kategorien (Sport, Musik …) an und – wenn `ADMIN_EMAIL` und
+`ADMIN_PASSWORD` in `.env` stehen – das Admin-Konto:
 
 ```bash
-docker compose exec api npm run seed
+docker compose exec node npm run seed
 ```
 
 > Achtung: `seed` legt auch Beispieldaten an. Auf einem Server, der schon echte
@@ -134,39 +179,48 @@ einen Timeout.
 
 ---
 
-## Laravel (`api/`) ausrollen
-
-Dieses Compose startet nur das Node-Backend. Wer Laravel daneben betreibt, rollt
-das **ganze Repo** aus, nicht nur `api/`: `App\Support\BlockedTerms` liest
-`shared/blocked-terms.json` neben `api/` (`dirname(__DIR__, 3)`, also
-Repo-Stamm). Fehlt die Datei, antworten Registrierung und Profil-Änderung mit
-500 – absichtlich, damit ein Server ohne Filter sofort auffällt. Außerdem nötig:
-PHP-Erweiterung `intl` (für die Unicode-Normalisierung; ohne sie fallen
-exotische Schriften wie 𝐟𝐞𝐭𝐭𝐞 Buchstaben durch).
-
 ## Laufender Betrieb
 
-**Neue Version ausrollen** (nach `git push` vom PC):
+**Neue Version ausrollen** (nachdem sie auf GitHub in `main` ist):
 
 ```bash
-git pull && docker compose up -d --build api
+git pull && docker compose up -d --build
 ```
+
+Docker baut nur neu, was sich geändert hat, und tauscht die Container aus. Die
+Datenbank und die Uploads bleiben dabei erhalten (sie liegen in `db-data` bzw.
+`deploy/storage/`).
 
 **Logs mitlesen:**
 
 ```bash
-docker compose logs -f api
+docker compose logs -f api node
 ```
 
 **Datenbank sichern** – bitte einrichten, das ist der einzige unersetzliche Teil:
 
 ```bash
-docker compose exec db mysqldump -uroot -p"$DB_ROOT_PASSWORD" goenntertainment > backup-$(date +%F).sql
+docker compose exec db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" goenntertainment' > backup-$(date +%F).sql
 ```
 
-Die Nutzer-Uploads liegen daneben in `deploy/storage/` und gehören ins selbe
-Backup. Am besten als täglichen Cronjob plus Hetzner-Snapshot (~1 €/Monat).
+Die Nutzer-Uploads liegen in `deploy/storage/` und gehören ins selbe Backup. Am
+besten als täglicher Cronjob plus Hetzner-Snapshot (~1 €/Monat).
 
-**Firewall:** Nur 22 (SSH), 80 und 443 müssen offen sein. Port 3306 (MySQL) und
-8000 (API) sind absichtlich **nicht** nach außen geöffnet – die API ist nur über
-Caddy erreichbar, die Datenbank nur containerintern.
+**Firewall:** Nur 22 (SSH), 80 und 443 müssen offen sein. MySQL, Laravel und
+Node haben absichtlich **keine** Ports nach außen – erreichbar ist nur Caddy.
+
+## Wenn etwas nicht startet
+
+| Meldung | Ursache |
+|---|---|
+| `APP_KEY fehlt in deploy/.env` | Schritt 4: `APP_KEY` erzeugen und eintragen |
+| `api` bleibt „unhealthy" | `docker compose logs api` – meist falsches `DB_PASSWORD` |
+| Uploads scheitern mit „Serverfehler" | `docker compose logs storage-init` – der Upload-Ordner gehört nicht UID 1000 |
+| „Das Bild ist zu groß" | Bild über 5 MB – die Grenze zieht das Node-Backend |
+
+## Geprüft wird automatisch
+
+Bei jedem Push baut GitHub beide Abbilder, startet alles (ohne Caddy) und
+spielt eine Registrierung samt Bild-Upload durch – siehe
+`.github/workflows/docker.yml`. Läuft das grün, bauen und starten die Container
+auch auf dem Server.

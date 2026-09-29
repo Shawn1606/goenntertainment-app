@@ -1,0 +1,101 @@
+# Baut die Container und prüft, dass sie zusammen funktionieren.
+#
+# Warum es das gibt: Die Container werden auf einem Linux-Server betrieben, und am
+# Entwicklungs-PC ist Docker nicht installiert. Ohne diese Prüfung merkte man einen
+# kaputten Bauplan erst beim Ausrollen. Hier läuft bei jedem Push dasselbe wie auf
+# dem Server – nur ohne Caddy/HTTPS – und dann ein echter Durchgang:
+# Gesundheit → Registrierung (Laravel) → Aktivität mit Bild (Laravel → Node) → Bild
+# abrufen (über das gemeinsame Upload-Verzeichnis).
+name: Container
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: deploy
+    env:
+      # Wegwerf-Werte nur für diese Prüfung – nichts davon ist echt.
+      DOMAIN: ci.example.invalid
+      DB_PASSWORD: ci-db-password
+      DB_ROOT_PASSWORD: ci-root-password
+      APP_KEY: base64:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      COMPOSE_FILES: -f docker-compose.yml -f docker-compose.ci.yml
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compose-Datei prüfen
+        run: docker compose $COMPOSE_FILES config --quiet
+
+      - name: Abbilder bauen und starten (ohne Caddy)
+        run: docker compose $COMPOSE_FILES up -d --build db node api
+
+      # Nicht `up --wait`: Das wertet den Einmal-Container storage-init, der sich
+      # planmäßig beendet, je nach Compose-Version als Fehler.
+      - name: Warten, bis Laravel antwortet
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/api/health 2>/dev/null | grep -q '"ok":true'; then
+              echo "bereit nach $((i * 5)) s"; exit 0
+            fi
+            sleep 5
+          done
+          echo "Laravel wurde nicht bereit"; docker compose $COMPOSE_FILES ps; exit 1
+
+      - name: Durchgang durch die API
+        run: |
+          set -euo pipefail
+          BASE=http://localhost:8080
+
+          echo "--- Gesundheit (Laravel fragt die Datenbank)"
+          curl -fsS "$BASE/api/health" | tee /dev/stderr | grep -q '"ok":true'
+
+          echo "--- Registrierung über Laravel"
+          STAMP=$(date +%s)
+          REG=$(curl -fsS -X POST "$BASE/api/register" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"ci-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"ci\"}")
+          TOKEN=$(echo "$REG" | jq -r .token)
+          test -n "$TOKEN" && test "$TOKEN" != null
+
+          echo "--- Aktivität mit Bild: Laravel baut das Formular neu und reicht es an Node weiter"
+          python3 -c "import zlib,struct;row=b'\x00'+b'\xfe\x2c\x55'*8;raw=row*8;c=lambda t,d:struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff);open('/tmp/ci.png','wb').write(b'\x89PNG\r\n\x1a\n'+c(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))+c(b'IDAT',zlib.compress(raw))+c(b'IEND',b''))"
+          STARTS=$(date -u -d '+1 day' +%Y-%m-%dT18:00:00Z)
+          ACT=$(curl -fsS -X POST "$BASE/api/activities" \
+            -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' \
+            -F 'title=Container-Test' -F 'description=Läuft im Container' \
+            -F 'location=Göttingen' -F "starts_at=$STARTS" \
+            -F 'banner=@/tmp/ci.png;type=image/png')
+          echo "$ACT" | jq '{id: .data.id, title: .data.title, banner: .data.banner_url}'
+          BANNER=$(echo "$ACT" | jq -r .data.banner_url)
+          case "$BANNER" in
+            https://ci.example.invalid/storage/banners/*) ;;
+            *) echo "Unerwartete Bild-Adresse: $BANNER"; exit 1 ;;
+          esac
+
+          echo "--- Bild abrufen: Node hat es gespeichert, Laravel liefert es aus"
+          curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' "$BASE${BANNER#https://ci.example.invalid}"
+
+          echo "--- Wortfilter greift auch im Container"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/register" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\"}")
+          test "$CODE" = 422
+
+          echo "Alles in Ordnung."
+
+      - name: Logs bei Fehlern
+        if: failure()
+        run: docker compose $COMPOSE_FILES logs --no-color --tail 200
+
+      - name: Aufräumen
+        if: always()
+        run: docker compose $COMPOSE_FILES down -v

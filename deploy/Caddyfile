@@ -1,18 +1,20 @@
 # Caddy holt und erneuert das HTTPS-Zertifikat von Let's Encrypt vollautomatisch,
 # sobald die Domain auf diesen Server zeigt. Kein certbot, kein Cronjob.
 {$DOMAIN} {
-	reverse_proxy api:8000 {
-		# Sagt dem Backend, dass aussen HTTPS anliegt. src/media.js baut daraus die
-		# Bild-Adressen (zusammen mit `trust proxy` in src/app.js).
+	# Alles geht an Laravel (Container `api`). Laravel beantwortet, was es kann,
+	# und reicht den Rest an das Node-Backend weiter – genau wie am PC.
+	reverse_proxy api:80 {
+		# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
+		# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
 		header_up X-Forwarded-Proto {scheme}
 	}
 
-	# Etwas ueber dem 5-MB-Limit von multer (alle Upload-Routen). Absichtlich
-	# hoeher: so lehnt das Backend zu grosse Bilder mit seiner eigenen, in der App
-	# lesbaren Fehlermeldung ab, statt dass Caddy die Verbindung vorher mit einem
-	# nackten 413 kappt.
+	# Etwas über dem 5-MB-Limit des Node-Backends und unter post_max_size von PHP
+	# (api/docker/php.ini). So lehnt das Backend zu große Bilder mit seiner eigenen,
+	# in der App lesbaren Fehlermeldung ab, statt dass Caddy die Verbindung vorher
+	# mit einem nackten 413 kappt.
 	request_body {
-		max_size 8MB
+		max_size 9MB
 	}
 
 	encode gzip
