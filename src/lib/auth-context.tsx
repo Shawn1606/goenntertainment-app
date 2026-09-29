@@ -1,6 +1,14 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { api, ApiError, type RegisterInput, type UpdateProfileInput, type User } from '@/lib/api';
+import {
+  api,
+  ApiError,
+  needsTwoFactor,
+  type RegisterInput,
+  type TwoFactorChallenge,
+  type UpdateProfileInput,
+  type User,
+} from '@/lib/api';
 import { clearToken, loadToken, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
@@ -8,9 +16,36 @@ type AuthContextValue = {
   isBootstrapping: boolean;
   token: string | null;
   user: User | null;
-  login: (email: string, password: string) => Promise<void>;
+  /**
+   * Anmelden. Ist die Zwei-Faktor-Anmeldung an, kommt statt einer Anmeldung der
+   * Beleg für den zweiten Schritt zurück – dann `completeTwoFactor` mit dem Code.
+   * `null` heißt: angemeldet.
+   */
+  login: (email: string, password: string) => Promise<TwoFactorChallenge | null>;
+  /** Zweiter Schritt der Anmeldung: Code (oder Wiederherstellungscode) eingeben. */
+  completeTwoFactor: (challenge: string, code: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
+  /**
+   * Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat.
+   *
+   * Für Endpunkte, die das Konto ändern, ohne `updateProfile` zu sein – etwa
+   * Profilbild und Banner (siehe `api.setProfileImage`). Ohne das zeigten
+   * Kopfzeile und Konto-Blatt weiter das alte Bild. Bewusst kein zweiter
+   * Netzaufruf wie bei `refreshUser`: Die Antwort IST schon der neue Stand.
+   */
+  applyUser: (user: User) => void;
+  /**
+   * Die eigenen Daten neu vom Server holen.
+   *
+   * Nötig, weil sich das Konto auch OHNE Zutun der Person ändern kann: Ein Admin
+   * bestätigt eine Anfrage auf Creator (siehe admin-requests.tsx), und die App
+   * wüsste bis zum nächsten Anmelden nichts davon – Events erstellen wäre
+   * freigeschaltet, der Knopf dafür aber weiter versteckt. Scheitert still: Ein
+   * fehlgeschlagener Abgleich darf den Bildschirm nicht mit einem Fehler
+   * überziehen, der mit dem zu tun hat, was man dort gerade macht.
+   */
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -64,6 +99,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       login: async (email, password) => {
         const result = await api.login(email, password);
+        if (needsTwoFactor(result)) return result.two_factor;
+        await applyAuth(result);
+        return null;
+      },
+      completeTwoFactor: async (challenge, code) => {
+        const result = await api.loginTwoFactor(challenge, code);
         await applyAuth(result);
       },
       register: async (input) => {
@@ -74,6 +115,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!token) throw new Error('Nicht angemeldet.');
         const { user: updated } = await api.updateProfile(token, input);
         setUser(updated);
+      },
+      applyUser: (updated) => setUser(updated),
+      refreshUser: async () => {
+        if (!token) return;
+        try {
+          const { user: me } = await api.me(token);
+          setUser(me);
+        } catch {
+          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. Ein
+          // ungültiger Token faellt ohnehin beim naechsten Start auf.
+        }
       },
       logout: async () => {
         if (token) {

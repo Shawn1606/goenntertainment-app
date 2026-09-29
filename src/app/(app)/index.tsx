@@ -1,389 +1,444 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ActivityCard } from '@/components/activity-card';
 import { ActivityDetailModal } from '@/components/activity-detail-modal';
+import { ActivityFilterBar } from '@/components/activity-filter-bar';
 import { BrandLogo } from '@/components/brand-logo';
+import { CategoryStrip } from '@/components/category-strip';
+import { ActivityPost } from '@/components/feed/activity-post';
+import { FeedEmpty } from '@/components/feed/feed-empty';
 import { HomeBackground } from '@/components/home-background';
-import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-import { useBrandSurface } from '@/hooks/use-theme';
-import { type Activity, api } from '@/lib/api';
+import { MascotError } from '@/components/mascot';
+import { ShareSheet } from '@/components/share-sheet';
+import { Icon } from '@/components/ui/icon';
+import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
+import { EMPTY_FILTER, filterActivities, isFilterActive, type ActivityFilter } from '@/domain/activity-filter';
+import { rankActivities } from '@/domain/recommendations';
+import { unreadBadge } from '@/domain/unread-badge';
+import { useTheme } from '@/hooks/use-theme';
+import { type Activity, type Interest, api, ApiError } from '@/lib/api';
+import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
-import { confirmAction } from '@/lib/confirm';
+import { confirmAction, notifyUser } from '@/lib/confirm';
+import * as feedback from '@/lib/feedback';
+import { takeWeakPasswordFlag } from '@/lib/security-nudge';
 import { useNearbyActivities } from '@/lib/use-nearby-activities';
 
-const ACCOUNT_TYPE_LABELS: Record<string, string> = {
-  personal: 'Persönlich',
-  business: 'Business',
-};
+/**
+ * Home – der Feed.
+ *
+ * ## Aufbau (Instagram + TikTok)
+ *
+ *   Kopf:    GÖ4Fun-Schriftzug · Suche · Chats        (Instagram)
+ *   Reiter:  Für dich | In der Nähe | Heute           (TikTok „Für dich / Folge ich")
+ *   Chips:   Kategorien zum Antippen
+ *   Feed:    eine Aktivität unter der anderen, jede wie ein Instagram-Post
+ *
+ * ## Was hier NICHT mehr steht – und warum
+ *
+ * Vorher stapelten sich hier Upgrade-Feld, Maskottchen-Kopf, Fortschritts-Karte,
+ * Punkte-Karte, Story-Leiste, Kategorie-Spalten und fünf Regale – die erste
+ * Aktivität lag unter dem sichtbaren Bereich. Ein Feed beantwortet genau EINE
+ * Frage: „Was kann ich machen?". Alles andere ist entweder ausgeblendet (siehe
+ * src/constants/features.ts) oder hat einen eigenen Ort bekommen: Erstellen ist
+ * der ＋-Tab, „Meine Aktivitäten" und Gemerktes liegen im Profil.
+ */
 
-/** Die drei Home-Tabs. */
-type Segment = 'recommended' | 'nearby' | 'other';
+type FeedTab = 'for-you' | 'nearby' | 'today';
 
-const SEGMENTS: { key: Segment; label: string }[] = [
-  { key: 'recommended', label: 'Für dich empfohlen' },
-  { key: 'nearby', label: 'In deiner Nähe' },
-  { key: 'other', label: 'Weitere' },
+const FEED_TABS: { key: FeedTab; label: string }[] = [
+  { key: 'for-you', label: 'Für dich' },
+  { key: 'nearby', label: 'In der Nähe' },
+  { key: 'today', label: 'Heute' },
 ];
-
-/** Passender Leer-Text je Tab. */
-function emptyMessage(segment: Segment, hasLocation: boolean): string {
-  if (segment === 'recommended') {
-    return 'Noch nichts, das zu deinen Interessen passt. Wähle Interessen im Profil oder erstelle mit ＋ die erste Activity!';
-  }
-  if (segment === 'nearby') {
-    return hasLocation
-      ? 'In deiner Nähe ist gerade nichts los. Schau später wieder vorbei!'
-      : 'Für „In deiner Nähe" brauchen wir Zugriff auf deinen Standort. Erlaube ihn in den Einstellungen.';
-  }
-  return 'Keine weiteren Aktivitäten. Erstelle mit ＋ die erste!';
-}
 
 export default function HomeScreen() {
   const router = useRouter();
-  const safeAreaInsets = useSafeAreaInsets();
-  const { user, logout, token } = useAuth();
-  const surface = useBrandSurface();
+  const insets = useSafeAreaInsets();
+  const colors = useTheme();
+  const { user, token } = useAuth();
+  const { settings } = useAppSettings();
 
   const [activities, setActivities] = useState<Activity[]>([]);
+  const [interests, setInterests] = useState<Interest[]>([]);
+  const [unreadChats, setUnreadChats] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Angetippte Activity → Detail-Popup. `null` = geschlossen.
+
+  const [tab, setTab] = useState<FeedTab>('for-you');
+  const [filter, setFilter] = useState<ActivityFilter>(EMPTY_FILTER);
+  const [searchOpen, setSearchOpen] = useState(false);
+
   const [selected, setSelected] = useState<Activity | null>(null);
-  // Aktiver Home-Tab.
-  const [segment, setSegment] = useState<Segment>('recommended');
+  const [sharing, setSharing] = useState<Activity | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
-  // „In deiner Nähe": Standort holen + Orte der Activities geocoden.
-  const { nearbyIds, resolving: nearbyResolving, hasLocation } = useNearbyActivities(activities);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    // Minütlich, damit „Heute, 18:00" und „Läuft gerade" nicht stehen bleiben,
+    // wenn die App offen liegt.
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
-  // IDs der Interessen des Accounts – für „Für dich empfohlen".
-  const myInterestIds = useMemo(
-    () => new Set((user?.interests ?? []).map((i) => i.id)),
-    [user?.interests],
-  );
-
-  // Passt die Activity zu meinen Interessen? (mind. eine Überschneidung)
-  const matchesInterests = useCallback(
-    (activity: Activity) => activity.interests.some((i) => myInterestIds.has(i.id)),
-    [myInterestIds],
-  );
-
-  // Die drei Listen. Überschneidet sich eine Activity mit Interesse UND Nähe,
-  // taucht sie bewusst in beiden Tabs auf. „Weitere" = weder noch.
-  const grouped = useMemo(() => {
-    const recommended: Activity[] = [];
-    const nearby: Activity[] = [];
-    const other: Activity[] = [];
-    for (const activity of activities) {
-      const isRecommended = matchesInterests(activity);
-      const isNearby = nearbyIds.has(activity.id);
-      if (isRecommended) recommended.push(activity);
-      if (isNearby) nearby.push(activity);
-      if (!isRecommended && !isNearby) other.push(activity);
-    }
-    return { recommended, nearby, other };
-  }, [activities, matchesInterests, nearbyIds]);
-
-  const visible =
-    segment === 'recommended'
-      ? grouped.recommended
-      : segment === 'nearby'
-        ? grouped.nearby
-        : grouped.other;
+  const { nearbyIds, distanceById, hasLocation } = useNearbyActivities(activities, settings.useLocation);
 
   const load = useCallback(async () => {
     if (!token) return;
     setError(null);
     try {
-      const res = await api.activities(token);
-      setActivities(res.data);
+      const [list, cats, chats] = await Promise.all([
+        api.activities(token),
+        api.interests().catch(() => null),
+        api.chats(token).catch(() => null),
+      ]);
+      setActivities(list.data);
+      if (cats) setInterests(cats.data);
+      if (chats) setUnreadChats(chats.data.reduce((sum, c) => sum + (c.unread ?? 0), 0));
+      setNow(new Date());
     } catch {
-      setError('Aktivitäten konnten nicht geladen werden.');
+      setError('Die Aktivitäten konnten nicht geladen werden. Läuft das Backend?');
     } finally {
       setLoading(false);
     }
   }, [token]);
 
-  // Bei jedem Fokus neu laden – so erscheint eine neu erstellte Activity sofort.
   useFocusEffect(
     useCallback(() => {
       load();
-    }, [load]),
+      // Einmal nach der Anmeldung: War das eingegebene Passwort schwach, sagen wir
+      // es – genau dann, wenn es noch frisch im Kopf ist (src/lib/security-nudge.ts).
+      if (takeWeakPasswordFlag()) {
+        confirmAction(
+          'Dein Passwort ist schwach',
+          'Es ist leicht zu erraten. Weil in GÖ4Fun dein Konto und deine Daten dranhängen, lohnt sich ein stärkeres – dauert eine Minute.',
+          'Jetzt ändern',
+        ).then((ok) => {
+          if (ok) router.push('/security/password');
+        });
+      }
+    }, [load, router]),
   );
 
-  // Nach Beitreten/Verlassen im Popup: Liste + offenes Popup mit den frischen
-  // Daten (Teilnehmerzahl, is_joined) aktualisieren.
-  const handleChanged = useCallback((updated: Activity) => {
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }, [load]);
+
+  const profile = useMemo(
+    () => ({
+      interestIds: (user?.interests ?? []).map((i) => i.id),
+      attendedInterestIds: activities.filter((a) => a.is_joined).flatMap((a) => a.interests.map((i) => i.id)),
+    }),
+    [user?.interests, activities],
+  );
+
+  /**
+   * Was der Feed zeigt. Vergangenes fliegt überall raus – außer es läuft gerade
+   * noch (dann steht „Läuft gerade" auf dem Bild). Drei Stunden nach Beginn gilt
+   * ein Event als vorbei; genau diese Grenze kennt auch `urgencyFor`.
+   */
+  const feed = useMemo(() => {
+    const cutoff = now.getTime() - 3 * 60 * 60 * 1000;
+    const upcoming = activities.filter((a) => {
+      if (a.is_permanent) return true;
+      const at = Date.parse(a.starts_at ?? '');
+      return !Number.isFinite(at) || at >= cutoff;
+    });
+
+    const windowed: ActivityFilter =
+      tab === 'today' ? { ...filter, when: 'today' } : filter;
+    const matching = filterActivities(upcoming, windowed, { now, distanceById });
+
+    if (tab === 'nearby') {
+      return matching
+        .filter((a) => nearbyIds.has(a.id))
+        .sort((a, b) => (distanceById.get(a.id) ?? Infinity) - (distanceById.get(b.id) ?? Infinity));
+    }
+    if (tab === 'today') {
+      return [...matching].sort((a, b) => Date.parse(a.starts_at ?? '') - Date.parse(b.starts_at ?? ''));
+    }
+    return rankActivities(matching, profile, { now, distanceById });
+  }, [activities, filter, tab, now, distanceById, nearbyIds, profile]);
+
+  const replaceActivity = useCallback((updated: Activity) => {
     setActivities((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
     setSelected((prev) => (prev && prev.id === updated.id ? updated : prev));
   }, []);
 
-  // Admin: Event löschen (mit Rückfrage). Nach Erfolg sofort aus der Liste entfernen.
-  const handleDelete = useCallback(
+  const toggleJoin = useCallback(
     async (activity: Activity) => {
       if (!token) return;
-      const ok = await confirmAction(
-        'Event löschen',
-        `„${activity.title}" wirklich unwiderruflich löschen?`,
-        'Löschen',
-        true,
-      );
-      if (!ok) return;
+      setBusyId(activity.id);
       try {
-        await api.deleteActivity(token, activity.id);
-        setActivities((prev) => prev.filter((a) => a.id !== activity.id));
-      } catch {
-        setError('Löschen fehlgeschlagen.');
+        const { data } = activity.is_joined
+          ? await api.leaveActivity(token, activity.id)
+          : await api.joinActivity(token, activity.id);
+        if (activity.is_joined) feedback.left();
+        else feedback.joined();
+        replaceActivity(data);
+      } catch (e) {
+        await notifyUser('Hat nicht geklappt', e instanceof ApiError ? e.firstError() : 'Bitte versuch es gleich noch mal.');
+      } finally {
+        setBusyId(null);
       }
     },
-    [token],
+    [token, replaceActivity],
+  );
+
+  const toggleSave = useCallback(
+    async (activity: Activity) => {
+      if (!token) return;
+      feedback.selected();
+      // Sofort umschalten, der Server bestätigt danach – ein Lesezeichen, das
+      // erst nach einer Sekunde reagiert, fühlt sich kaputt an.
+      replaceActivity({ ...activity, is_saved: !activity.is_saved });
+      try {
+        const { data } = activity.is_saved
+          ? await api.unsaveActivity(token, activity.id)
+          : await api.saveActivity(token, activity.id);
+        replaceActivity(data);
+      } catch {
+        replaceActivity(activity);
+      }
+    },
+    [token, replaceActivity],
+  );
+
+  const openChat = useCallback(
+    (activity: Activity) => {
+      const own = activity.host?.id === user?.id;
+      if (!activity.is_joined && !own) {
+        notifyUser('Erst mitmachen', 'Den Chat einer Aktivität sehen alle, die dabei sind. Tipp auf „Mitmachen".');
+        return;
+      }
+      router.push({ pathname: '/chat', params: { kind: 'activity', id: String(activity.id), title: activity.title } });
+    },
+    [router, user?.id],
+  );
+
+  const openHost = useCallback(
+    (activity: Activity) => {
+      const username = activity.host?.username;
+      if (!username) return;
+      if (activity.host?.id === user?.id) {
+        router.navigate('/me');
+      } else {
+        router.push({ pathname: '/profile/[username]', params: { username } });
+      }
+    },
+    [router, user?.id],
+  );
+
+  const toggleCategory = useCallback((id: number) => {
+    feedback.selected();
+    setFilter((prev) => ({
+      ...prev,
+      interestIds: prev.interestIds.includes(id) ? prev.interestIds.filter((x) => x !== id) : [...prev.interestIds, id],
+    }));
+  }, []);
+
+  const chatBadge = unreadBadge(unreadChats);
+
+  const header = (
+    <View>
+      <View style={[styles.topBar, { paddingTop: insets.top + Spacing.one }]}>
+        <BrandLogo size="small" />
+        <View style={styles.topIcons}>
+          <HeaderButton
+            icon={searchOpen ? 'close' : 'search'}
+            label={searchOpen ? 'Suche schließen' : 'Suchen und filtern'}
+            active={searchOpen || isFilterActive(filter)}
+            onPress={() => {
+              if (searchOpen) setFilter(EMPTY_FILTER);
+              setSearchOpen((v) => !v);
+            }}
+          />
+          <HeaderButton
+            icon="send"
+            label={chatBadge ? `Chats, ${chatBadge} ungelesen` : 'Chats'}
+            badge={chatBadge}
+            onPress={() => router.push('/chats')}
+          />
+        </View>
+      </View>
+
+      <View style={[styles.tabs, { borderBottomColor: colors.backgroundSelected }]} accessibilityRole="tablist">
+        {FEED_TABS.map((t) => {
+          const active = t.key === tab;
+          return (
+            <Pressable
+              key={t.key}
+              onPress={() => {
+                feedback.selected();
+                setTab(t.key);
+              }}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
+              style={styles.tab}>
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: active ? colors.text : colors.textSecondary, fontFamily: active ? FontFamily.bold : FontFamily.medium },
+                ]}>
+                {t.label}
+              </Text>
+              <View style={[styles.tabLine, { backgroundColor: active ? colors.text : 'transparent' }]} />
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {searchOpen ? (
+        <View style={styles.filter}>
+          <ActivityFilterBar
+            filter={filter}
+            onChange={setFilter}
+            interests={interests}
+            resultCount={feed.length}
+            distanceAvailable={hasLocation}
+          />
+        </View>
+      ) : interests.length > 0 ? (
+        <View style={styles.strip}>
+          <CategoryStrip interests={interests} selectedIds={filter.interestIds} onToggle={toggleCategory} />
+        </View>
+      ) : null}
+    </View>
   );
 
   return (
-    <HomeBackground style={styles.container}>
+    <HomeBackground>
       <FlatList
-        data={visible}
-        keyExtractor={(item) => String(item.id)}
-        style={styles.list}
-        contentContainerStyle={[
-          styles.content,
-          {
-            paddingTop: safeAreaInsets.top + Spacing.four,
-            paddingBottom: safeAreaInsets.bottom + BottomTabInset + Spacing.four,
-          },
-        ]}
-        ListHeaderComponent={
-          <View>
-            <View style={styles.topBar}>
-              <BrandLogo size="small" />
-              <Pressable onPress={logout} style={styles.logout} hitSlop={8}>
-                <ThemedText type="small" style={{ color: surface.textMuted }}>
-                  Abmelden
-                </ThemedText>
-              </Pressable>
-            </View>
-
-            <View
-              style={[
-                styles.nameWidget,
-                { backgroundColor: surface.card, borderColor: surface.cardBorder },
-              ]}>
-              <ThemedText style={[styles.greetingText, { color: surface.text }]}>
-                Hallo {user?.name ?? ''} 👋
-              </ThemedText>
-              <View style={styles.metaRow}>
-                {user?.username ? (
-                  <ThemedText type="small" style={{ color: surface.textMuted }}>
-                    @{user.username}
-                  </ThemedText>
-                ) : null}
-                {user?.username && user?.account_type ? (
-                  <ThemedText type="small" style={{ color: surface.textMuted }}>
-                    ·
-                  </ThemedText>
-                ) : null}
-                {user?.account_type ? (
-                  <ThemedText type="small" style={{ color: surface.textMuted }}>
-                    {ACCOUNT_TYPE_LABELS[user.account_type] ?? user.account_type}
-                  </ThemedText>
-                ) : null}
-              </View>
-            </View>
-
-            {user?.interests && user.interests.length > 0 ? (
-              <View style={styles.chipRow}>
-                {user.interests.map((interest) => (
-                  <View
-                    key={interest.id}
-                    style={[
-                      styles.chip,
-                      { backgroundColor: surface.card, borderColor: surface.cardBorder },
-                    ]}>
-                    <ThemedText type="small" style={{ color: surface.chipText }}>
-                      {interest.name}
-                    </ThemedText>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-
-            {/* Segment-Leiste: Für dich empfohlen · In deiner Nähe · Weitere */}
-            <View
-              style={[
-                styles.segmentBar,
-                { backgroundColor: surface.card, borderColor: surface.cardBorder },
-              ]}>
-              {SEGMENTS.map((seg) => {
-                const active = seg.key === segment;
-                return (
-                  <Pressable
-                    key={seg.key}
-                    onPress={() => setSegment(seg.key)}
-                    style={[styles.segment, active && { backgroundColor: surface.accent }]}>
-                    <ThemedText
-                      type="small"
-                      numberOfLines={1}
-                      style={[
-                        styles.segmentText,
-                        { color: active ? surface.accentText : surface.textMuted },
-                      ]}>
-                      {seg.label}
-                    </ThemedText>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-        }
+        data={feed}
+        keyExtractor={(a) => String(a.id)}
+        ListHeaderComponent={header}
+        contentContainerStyle={styles.list}
+        style={styles.flex}
         renderItem={({ item }) => (
-          <ActivityCard
-            activity={item}
-            onPress={() => setSelected(item)}
-            onDelete={user?.is_admin ? () => handleDelete(item) : undefined}
-          />
+          <View style={styles.column}>
+            <ActivityPost
+              activity={item}
+              now={now}
+              distanceKm={distanceById.get(item.id) ?? null}
+              isOwn={item.host?.id === user?.id}
+              busy={busyId === item.id}
+              onOpen={setSelected}
+              onToggleJoin={toggleJoin}
+              onToggleSave={toggleSave}
+              onShare={setSharing}
+              onChat={openChat}
+              onOpenHost={item.host?.username ? openHost : undefined}
+            />
+          </View>
         )}
-        ItemSeparatorComponent={() => <View style={{ height: Spacing.three }} />}
         ListEmptyComponent={
-          loading || (segment === 'nearby' && hasLocation && nearbyResolving) ? (
-            <View style={styles.empty}>
-              <ActivityIndicator color={surface.accent} />
+          loading ? null : error ? (
+            <View style={styles.column}>
+              <MascotError detail={error} onRetry={load} />
             </View>
           ) : (
-            <View style={styles.empty}>
-              <ThemedText style={[styles.emptyText, { color: surface.textMuted }]}>
-                {error ?? emptyMessage(segment, hasLocation)}
-              </ThemedText>
-            </View>
+            <FeedEmpty
+              tab={tab}
+              filtered={isFilterActive(filter)}
+              hasLocation={hasLocation}
+              onCreate={() => router.navigate('/create')}
+              onReset={() => {
+                setFilter(EMPTY_FILTER);
+                setTab('for-you');
+              }}
+            />
           )
         }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.tint} />}
+        initialNumToRender={3}
+        windowSize={7}
+        showsVerticalScrollIndicator={false}
       />
-
-      <Pressable
-        onPress={() => router.push('/create-activity')}
-        style={[
-          styles.fab,
-          {
-            backgroundColor: surface.accent,
-            bottom: safeAreaInsets.bottom + BottomTabInset + Spacing.three,
-          },
-        ]}>
-        <ThemedText style={styles.fabText}>＋</ThemedText>
-      </Pressable>
 
       <ActivityDetailModal
         activity={selected}
         onClose={() => setSelected(null)}
-        onChanged={handleChanged}
+        onChanged={replaceActivity}
+        distanceKm={selected ? distanceById.get(selected.id) ?? null : null}
       />
+      <ShareSheet activity={sharing} onClose={() => setSharing(null)} />
     </HomeBackground>
   );
 }
 
+function HeaderButton({
+  icon,
+  label,
+  badge,
+  active,
+  onPress,
+}: {
+  icon: 'search' | 'close' | 'send';
+  label: string;
+  badge?: string | null;
+  active?: boolean;
+  onPress: () => void;
+}) {
+  const colors = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={({ pressed }) => [styles.headerButton, pressed && { opacity: 0.6 }]}>
+      <Icon name={icon} size={26} color={active ? colors.tint : colors.text} />
+      {badge ? (
+        <View style={[styles.badge, { backgroundColor: colors.tint, borderColor: colors.background }]}>
+          <Text style={styles.badgeText}>{badge}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  list: {
-    flex: 1,
-  },
-  content: {
-    paddingHorizontal: Spacing.four,
-    maxWidth: MaxContentWidth,
-    width: '100%',
-    alignSelf: 'center',
-  },
+  flex: { flex: 1 },
+  list: { paddingBottom: Spacing.six },
+  column: { width: '100%', maxWidth: 620, alignSelf: 'center' },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: Spacing.three,
+    paddingHorizontal: Spacing.two,
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    alignSelf: 'center',
   },
-  logout: {
-    paddingVertical: Spacing.one,
-  },
-  nameWidget: {
-    alignSelf: 'stretch',
-    borderWidth: 1,
-    borderRadius: 18,
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.half,
-    marginBottom: Spacing.three,
-  },
-  greetingText: {
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: '600',
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-    marginBottom: Spacing.four,
-  },
-  chip: {
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.half,
-  },
-  segmentBar: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: Spacing.half,
-    gap: Spacing.half,
-    marginBottom: Spacing.three,
-  },
-  segment: {
-    flex: 1,
-    borderRadius: 10,
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.one,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  segmentText: {
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  empty: {
-    paddingVertical: Spacing.six,
-    alignItems: 'center',
-  },
-  emptyText: {
-    textAlign: 'center',
-  },
-  fab: {
+  topIcons: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingRight: Spacing.two },
+  headerButton: { padding: 2 },
+  badge: {
     position: 'absolute',
-    right: Spacing.four,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    top: -6,
+    right: -8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    paddingHorizontal: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    ...Platform.select({
-      android: { elevation: 4 },
-      default: {
-        shadowColor: '#000',
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        shadowOffset: { width: 0, height: 2 },
-      },
-    }),
   },
-  fabText: {
-    fontSize: 28,
-    lineHeight: 32,
-    fontWeight: '600',
-    color: '#ffffff',
+  badgeText: { color: '#ffffff', fontSize: 10, fontFamily: FontFamily.bold },
+  tabs: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: Spacing.four,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
+  tab: { alignItems: 'center', paddingTop: Spacing.two, gap: Spacing.two },
+  tabLabel: { fontSize: 15 },
+  tabLine: { height: 2, width: 28, borderRadius: 1 },
+  strip: { paddingVertical: Spacing.two },
+  filter: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, maxWidth: 620, width: '100%', alignSelf: 'center' },
 });

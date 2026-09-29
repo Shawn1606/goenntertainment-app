@@ -1,27 +1,23 @@
 import * as Location from 'expo-location';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
+import { distanceKm } from '@/domain/distance';
+import { RADIUS_STEPS_KM, chooseRadius } from '@/domain/nearby';
 import { type Activity } from '@/lib/api';
 import { type Coords, geocode } from '@/lib/geocode';
 
-/** Umkreis, der als „in deiner Nähe" zählt (Luftlinie in km). */
-export const NEARBY_RADIUS_KM = 30;
-
-/** Haversine-Distanz zweier Punkte in Kilometern. */
-function distanceKm(a: Coords, b: Coords): number {
-  const R = 6371; // Erdradius in km
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180;
-  const dLng = ((b.lng - a.lng) * Math.PI) / 180;
-  const lat1 = (a.lat * Math.PI) / 180;
-  const lat2 = (b.lat * Math.PI) / 180;
-  const h =
-    Math.sin(dLat / 2) ** 2 + Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
-  return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
-}
+/** Grundumkreis, der als „in deiner Nähe" zählt (Luftlinie in km). */
+export const NEARBY_RADIUS_KM = RADIUS_STEPS_KM[0];
 
 export type NearbyState = {
-  /** IDs der Activities, die im Umkreis liegen. */
+  /** IDs der Activities im aktuell gewählten Umkreis. */
   nearbyIds: Set<number>;
+  /** Entfernung je Activity-ID in km – auch außerhalb des Umkreises. */
+  distanceById: Map<number, number>;
+  /** Umkreis, der tatsächlich benutzt wurde (kann automatisch erweitert sein). */
+  radiusKm: number;
+  /** true, wenn über den Grundumkreis hinaus gesucht werden musste. */
+  expanded: boolean;
   /** true, solange Standort/Geocoding noch laufen. */
   resolving: boolean;
   /** false, wenn die Standort-Berechtigung fehlt (Nähe nicht berechenbar). */
@@ -29,19 +25,37 @@ export type NearbyState = {
 };
 
 /**
- * Bestimmt, welche Activities „in deiner Nähe" liegen: holt den eigenen Standort
- * (expo-location) und wandelt die Orts-Texte der Activities in Koordinaten um
- * (geocode, mit geteiltem Cache). Ergebnisse tröpfeln ein, sobald ein Ort
- * aufgelöst ist – die Nähe-Liste füllt sich also nach und nach.
+ * Bestimmt die Entfernung zu jeder Activity: holt den eigenen Standort
+ * (expo-location) und wandelt die Orts-Texte in Koordinaten um (geocode, mit
+ * geteiltem Cache). Ergebnisse tröpfeln ein, sobald ein Ort aufgelöst ist.
+ *
+ * Ist im Grundumkreis nichts los, wird der Radius automatisch verdoppelt
+ * (Ticket #2) – welche Stufe genommen wird, entscheidet `chooseRadius`.
  */
-export function useNearbyActivities(activities: Activity[]): NearbyState {
+export function useNearbyActivities(
+  activities: Activity[],
+  /**
+   * false = gar nicht erst nach dem Standort fragen. Kommt aus den
+   * Einstellungen: Wer den Schalter ausmacht, soll auch keinen
+   * System-Dialog mehr sehen.
+   */
+  enabled = true,
+): NearbyState {
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
   const [hasLocation, setHasLocation] = useState(true);
-  const [nearbyIds, setNearbyIds] = useState<Set<number>>(new Set());
+  const [distanceById, setDistanceById] = useState<Map<number, number>>(new Map());
   const [resolving, setResolving] = useState(false);
 
   // Standort einmalig anfragen.
   useEffect(() => {
+    if (!enabled) {
+      // Abschalten heißt auch: alte Entfernungen verwerfen.
+      setUserCoords(null);
+      setDistanceById(new Map());
+      setHasLocation(false);
+      return;
+    }
+
     let active = true;
     (async () => {
       try {
@@ -65,7 +79,7 @@ export function useNearbyActivities(activities: Activity[]): NearbyState {
     return () => {
       active = false;
     };
-  }, []);
+  }, [enabled]);
 
   // Signatur der Liste (IDs+Orte), damit sich der Geocode-Lauf nur bei echten
   // Änderungen wiederholt – nicht bei jedem neuen Array mit gleichen Daten.
@@ -79,19 +93,20 @@ export function useNearbyActivities(activities: Activity[]): NearbyState {
     setResolving(true);
 
     (async () => {
-      const found = new Set<number>();
+      const found = new Map<number, number>();
+      const me = { latitude: userCoords.lat, longitude: userCoords.lng };
       for (const activity of activities) {
         if (!activity.location) continue;
         const coords = await geocode(activity.location);
         if (cancelled) return;
-        if (coords && distanceKm(userCoords, coords) <= NEARBY_RADIUS_KM) {
-          found.add(activity.id);
-          // Zwischenstand: Nähe-Liste füllt sich nach und nach.
-          setNearbyIds(new Set(found));
+        if (coords) {
+          found.set(activity.id, distanceKm(me, { latitude: coords.lat, longitude: coords.lng }));
+          // Zwischenstand: die Liste füllt sich nach und nach.
+          setDistanceById(new Map(found));
         }
       }
       if (!cancelled) {
-        setNearbyIds(found);
+        setDistanceById(found);
         setResolving(false);
       }
     })();
@@ -103,5 +118,14 @@ export function useNearbyActivities(activities: Activity[]): NearbyState {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userCoords, signature]);
 
-  return { nearbyIds, resolving, hasLocation };
+  const choice = useMemo(() => chooseRadius(distanceById), [distanceById]);
+
+  return {
+    nearbyIds: choice.ids,
+    distanceById,
+    radiusKm: choice.radiusKm,
+    expanded: choice.expanded,
+    resolving,
+    hasLocation,
+  };
 }

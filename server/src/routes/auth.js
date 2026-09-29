@@ -4,19 +4,36 @@ import {
   createToken,
   checkPassword,
   hashPassword,
-  serializeUser,
+  userPayload,
   profileComplete,
   requireAuth,
+  isBanned,
+  banInfo,
 } from '../auth.js';
 import { Validator, HttpError, isEmail, isAlphaDash, missingIds } from '../validate.js';
+import { ACCOUNT_TYPES, SELF_SERVICE_ACCOUNT_TYPES, normalizeAccountType } from '../accounts.js';
+import { passwordProblem } from '../password-policy.js';
+import { rejectBlockedTerms } from '../blocked-terms.js';
 
 const router = Router();
-const ACCOUNT_TYPES = ['personal', 'business'];
 
-async function tokenResponse(res, userRow, deviceName, status = 200) {
+/**
+ * 'personal' ist der Wert, den die App vor den vier Kontostufen geschickt hat.
+ * Wir nehmen ihn weiter an (installierte Builds sollen nicht bei der
+ * Registrierung scheitern) und speichern ihn als 'standard'.
+ */
+const LEGACY_ACCOUNT_TYPE = 'personal';
+
+/** Was man sich selbst geben darf – hoehere Stufen nur per Anfrage (siehe accounts.js). */
+const REGISTRABLE_TYPES = [...SELF_SERVICE_ACCOUNT_TYPES, LEGACY_ACCOUNT_TYPE];
+
+/** Was ein Admin per PATCH setzen darf. */
+const ASSIGNABLE_TYPES = [...ACCOUNT_TYPES, LEGACY_ACCOUNT_TYPE];
+
+async function tokenResponse(req, res, userRow, deviceName, status = 200) {
   const token = await createToken(userRow.id, deviceName || 'mobile');
   res.status(status).json({
-    user: serializeUser(userRow),
+    user: await userPayload(userRow, req),
     token,
     profile_complete: await profileComplete(userRow),
   });
@@ -29,16 +46,34 @@ router.post('/register', async (req, res, next) => {
     const v = new Validator(b);
 
     if (!b.name || typeof b.name !== 'string') v.add('name', 'Der Name ist erforderlich.');
+    // Gesperrte Begriffe nach dem Format – wie in Laravel (NoBlockedTerms), damit
+    // derselbe Wert auf beiden Wegen dieselbe Meldung bekommt.
+    else rejectBlockedTerms(v, 'name', b.name, 'name');
     if (!b.username || typeof b.username !== 'string') {
       v.add('username', 'Der Benutzername ist erforderlich.');
     } else if (b.username.length < 3 || b.username.length > 30 || !isAlphaDash(b.username)) {
       v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+    } else {
+      rejectBlockedTerms(v, 'username', b.username, 'username');
     }
     if (!isEmail(b.email)) v.add('email', 'Bitte eine gueltige E-Mail-Adresse angeben.');
-    if (!b.password || String(b.password).length < 8 || !/[a-zA-Z]/.test(b.password) || !/\d/.test(b.password)) {
-      v.add('password', 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.');
+    // Grundregel, haeufige Passwoerter, Name/E-Mail im Passwort – siehe
+    // src/password-policy.js (dieselbe Regel wie in Laravel).
+    const passwordError = passwordProblem(b.password, {
+      username: typeof b.username === 'string' ? b.username : null,
+      email: typeof b.email === 'string' ? b.email : null,
+    });
+    if (passwordError) v.add('password', passwordError);
+    // Unbekannte Werte werden abgewiesen statt stillschweigend auf Standard
+    // gedreht: Ein Tippfehler im Client soll auffallen, nicht durchrutschen.
+    if (!REGISTRABLE_TYPES.includes(b.account_type)) {
+      v.add(
+        'account_type',
+        ACCOUNT_TYPES.includes(b.account_type)
+          ? 'Diese Stufe gibt es erst nach Freischaltung – frag sie in der App an.'
+          : 'Ungueltiger Kontotyp.',
+      );
     }
-    if (!ACCOUNT_TYPES.includes(b.account_type)) v.add('account_type', 'Ungueltiger Kontotyp.');
 
     // Eindeutigkeit
     if (!v.errors.username && b.username) {
@@ -60,10 +95,34 @@ router.post('/register', async (req, res, next) => {
     v.throwIfFails();
 
     const passwordHash = await hashPassword(String(b.password));
+
+    /**
+     * Stand der Nutzungsbedingungen, dem zugestimmt wurde.
+     *
+     * Kommt aus der App (`LEGAL_VERSION` in src/domain/legal.ts) und wird hier
+     * NICHT geprueft: Der Server kennt den Text nicht und soll ihn nicht kennen –
+     * er haelt fest, WAS bestaetigt wurde, damit sich nach einer Aenderung
+     * erkennen laesst, wer noch dem alten Stand zugestimmt hat. Fehlt die Angabe
+     * (aeltere App-Fassung), bleibt die Spalte NULL, und die App fragt beim
+     * naechsten Start nach.
+     */
+    const termsVersion =
+      typeof b.terms_version === 'string' && b.terms_version.trim()
+        ? b.terms_version.trim().slice(0, 20)
+        : null;
+
     const [result] = await pool.query(
-      `INSERT INTO users (name, username, email, password, account_type, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-      [b.name, b.username, b.email, passwordHash, b.account_type],
+      `INSERT INTO users
+         (name, username, email, password, account_type, terms_version, terms_accepted_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ${termsVersion ? 'NOW()' : 'NULL'}, NOW(), NOW())`,
+      [
+        b.name,
+        b.username,
+        b.email,
+        passwordHash,
+        normalizeAccountType(b.account_type),
+        termsVersion,
+      ],
     );
 
     if (interests.length > 0) {
@@ -76,7 +135,7 @@ router.post('/register', async (req, res, next) => {
     }
 
     const user = await first('SELECT * FROM users WHERE id = ?', [result.insertId]);
-    await tokenResponse(res, user, b.device_name, 201);
+    await tokenResponse(req, res, user, b.device_name, 201);
   } catch (err) {
     next(err);
   }
@@ -98,7 +157,28 @@ router.post('/login', async (req, res, next) => {
       });
     }
 
-    await tokenResponse(res, user, b.device_name);
+    // Gesperrte Konten kommen nicht rein – mit Details (Grund/Dauer) fuer das Popup.
+    if (isBanned(user)) {
+      return res.status(403).json({ message: 'Dein Konto ist gesperrt.', ban: banInfo(user) });
+    }
+
+    /**
+     * Zwei-Faktor-Konten bekommen HIER keinen Token.
+     *
+     * Den zweiten Schritt (Code pruefen) kann nur Laravel: Das TOTP-Secret ist
+     * mit Laravels APP_KEY verschluesselt, und die Code-Hashes haengen am selben
+     * Schluessel. Gaebe dieser Endpunkt nach dem Passwort einen Token heraus,
+     * waere die ganze Zwei-Faktor-Anmeldung mit einem Aufruf direkt an Port 8001
+     * umgangen – ein Passwort genuegte wieder.
+     *
+     * Die Pruefung steht bewusst NACH dem Passwort: Davor verriete die Antwort
+     * jedem, der nur eine E-Mail-Adresse kennt, ob das Konto 2FA nutzt.
+     */
+    if (user.two_factor_method) {
+      return res.status(403).json({ message: 'Bitte melde dich über die App an.' });
+    }
+
+    await tokenResponse(req, res, user, b.device_name);
   } catch (err) {
     next(err);
   }
@@ -118,7 +198,7 @@ router.post('/logout', requireAuth, async (req, res, next) => {
 router.get('/user', requireAuth, async (req, res, next) => {
   try {
     res.json({
-      user: serializeUser(req.user),
+      user: await userPayload(req.user, req),
       profile_complete: await profileComplete(req.user),
     });
   } catch (err) {
@@ -126,7 +206,8 @@ router.get('/user', requireAuth, async (req, res, next) => {
   }
 });
 
-// PATCH /api/user  (geschuetzt) – Profil bearbeiten (Name, Benutzername, E-Mail).
+// PATCH /api/user  (geschuetzt) – Profil bearbeiten (Name, Benutzername, E-Mail,
+// Interessen; Kontotyp nur fuer Admins).
 // Teil-Update: nur mitgeschickte Felder werden geaendert.
 router.patch('/user', requireAuth, async (req, res, next) => {
   try {
@@ -137,7 +218,10 @@ router.patch('/user', requireAuth, async (req, res, next) => {
     if (b.name !== undefined) {
       if (!b.name || typeof b.name !== 'string') {
         v.add('name', 'Der Name ist erforderlich.');
-      } else {
+      } else if (b.name === req.user.name || !rejectBlockedTerms(v, 'name', b.name, 'name')) {
+        // Gesperrte Begriffe nur bei einem NEUEN Wert – wie in Laravel: Ein
+        // Altname, den die Liste heute traefe, soll nicht jede andere Aenderung
+        // am Profil blockieren.
         updates.name = b.name.trim();
       }
     }
@@ -147,7 +231,7 @@ router.patch('/user', requireAuth, async (req, res, next) => {
         v.add('username', 'Der Benutzername ist erforderlich.');
       } else if (b.username.length < 3 || b.username.length > 30 || !isAlphaDash(b.username)) {
         v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
-      } else {
+      } else if (b.username === req.user.username || !rejectBlockedTerms(v, 'username', b.username, 'username')) {
         updates.username = b.username;
       }
     }
@@ -157,6 +241,35 @@ router.patch('/user', requireAuth, async (req, res, next) => {
         v.add('email', 'Bitte eine gueltige E-Mail-Adresse angeben.');
       } else {
         updates.email = b.email;
+      }
+    }
+
+    // Kontostufe umstellen (Standard/Creator/Business/Business Plus). Bewusst
+    // Admins vorbehalten: Die Stufe schaltet Rechte frei (Events erstellen,
+    // Business-Bereich), die sich niemand im Selbstbedienungsverfahren geben
+    // soll. Die Pruefung sitzt am Feld statt am ganzen Endpunkt –
+    // Name/E-Mail/Interessen bleiben fuer alle offen.
+    if (b.account_type !== undefined) {
+      if (!req.user.is_admin) {
+        throw new HttpError(403, 'Nur Admins duerfen den Kontotyp aendern.');
+      }
+      if (!ASSIGNABLE_TYPES.includes(b.account_type)) {
+        v.add('account_type', 'Ungueltiger Kontotyp.');
+      } else {
+        updates.account_type = normalizeAccountType(b.account_type);
+      }
+    }
+
+    // Interessen (optional): wenn mitgeschickt, wird die komplette Liste ersetzt.
+    let interests = null;
+    if (b.interests !== undefined) {
+      if (!Array.isArray(b.interests)) {
+        v.add('interests', 'Interessen muessen als Liste uebergeben werden.');
+      } else {
+        interests = [...new Set(b.interests.map(Number).filter(Number.isInteger))];
+        if (interests.length > 0 && (await missingIds('interests', interests)).length > 0) {
+          v.add('interests', 'Mindestens ein Interesse existiert nicht.');
+        }
       }
     }
 
@@ -184,9 +297,22 @@ router.patch('/user', requireAuth, async (req, res, next) => {
       ]);
     }
 
+    // Interessen komplett neu setzen (alte weg, mitgeschickte rein).
+    if (interests !== null) {
+      await pool.query('DELETE FROM interest_user WHERE user_id = ?', [req.user.id]);
+      if (interests.length > 0) {
+        const rows = interests.map(() => '(?, ?, NOW(), NOW())').join(', ');
+        const params = interests.flatMap((id) => [req.user.id, id]);
+        await pool.query(
+          `INSERT INTO interest_user (user_id, interest_id, created_at, updated_at) VALUES ${rows}`,
+          params,
+        );
+      }
+    }
+
     const user = await first('SELECT * FROM users WHERE id = ?', [req.user.id]);
     res.json({
-      user: serializeUser(user),
+      user: await userPayload(user, req),
       profile_complete: await profileComplete(user),
     });
   } catch (err) {

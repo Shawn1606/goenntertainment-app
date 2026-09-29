@@ -1,0 +1,94 @@
+# Komplettes Backend fuer den Server: Datenbank + API + HTTPS.
+#
+# Start:  docker compose up -d      (im Ordner deploy/, .env muss daneben liegen)
+#
+# Warum die Dateien hier und nicht in server/ liegen: `docker compose` liest die
+# `.env` NEBEN der Compose-Datei. Laege sie in server/, wuerde deine lokale
+# Entwicklungs-.env (DB_HOST=127.0.0.1, leeres Passwort) die Server-Werte
+# ueberschreiben – ein Fehler, den man erst merkt, wenn nichts geht.
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: goenntertainment
+      MYSQL_USER: goenn
+      # `:?` heisst: fehlt der Wert in .env, bricht Compose SOFORT ab. Besser als
+      # ein Server, der mit leerem Passwort hochkommt.
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt in deploy/.env}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD fehlt in deploy/.env}
+    volumes:
+      - db-data:/var/lib/mysql
+      # MySQL fuehrt alles aus diesem Ordner beim ERSTEN Start automatisch aus.
+      # Damit baut sich das Schema von allein auf – kein manuelles Einspielen.
+      # Bei jedem spaeteren Start wird der Ordner ignoriert (die DB existiert ja
+      # schon), Datenverlust durch Neustart gibt es also nicht.
+      - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      # Die API startet erst, wenn die DB wirklich antwortet. Ohne das rennt Node
+      # in einen Verbindungsfehler, weil MySQL beim ersten Start ~20 s braucht.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-p${DB_ROOT_PASSWORD}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  api:
+    build:
+      context: ../server
+      # shared/ liegt neben server/ (App, Laravel und Node lesen dieselben Listen)
+      # und damit ausserhalb des Baukontexts. Als benannter Zusatz-Kontext kommt
+      # er trotzdem ins Abbild (COPY --from=shared im Dockerfile), ohne dass der
+      # Kontext das ganze Repo umfassen muss - server/.dockerignore gilt weiter.
+      additional_contexts:
+        shared: ../shared
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?}
+      PORT: '8000'
+      # Feste oeffentliche Basis fuer Bild-Adressen. Muss https sein, sonst zeigt
+      # die App keine Bilder (iOS/Android verbieten Klartext-HTTP im Release).
+      PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
+      MODERATION_MODEL: ${MODERATION_MODEL:-claude-opus-5}
+      MODERATION_BLOCK_SEVERITY: ${MODERATION_BLOCK_SEVERITY:-2}
+      MODERATION_TIMEOUT_SEVERITY: ${MODERATION_TIMEOUT_SEVERITY:-2}
+      MODERATION_TIMEOUT_DAYS: ${MODERATION_TIMEOUT_DAYS:-7}
+      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-true}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      # Uploads liegen auf der Festplatte des Servers, nicht im Container. Sonst
+      # sind alle Profilbilder und Storys beim naechsten Deploy weg.
+      - ./storage:/app/storage
+    # Kein `ports:` – die API ist NICHT direkt aus dem Internet erreichbar,
+    # nur ueber Caddy. So kann niemand Port 8000 unverschluesselt ansprechen.
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:?}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
+      # bei jedem Neustart neue und laeuft irgendwann ins Rate-Limit.
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

@@ -29,3 +29,21 @@ export function confirmAction(
     ]);
   });
 }
+
+/**
+ * Reine Info-Meldung (ein Knopf), die auf Handy UND Web funktioniert.
+ * Das Promise löst auf, wenn die Meldung weggeklickt wurde – so kann man
+ * danach zuverlässig weiterarbeiten (z. B. abmelden).
+ */
+export function notifyUser(title: string, message: string, buttonLabel = 'OK'): Promise<void> {
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.alert(`${title}\n\n${message}`);
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    Alert.alert(title, message, [{ text: buttonLabel, onPress: () => resolve() }], {
+      onDismiss: () => resolve(),
+    });
+  });
+}

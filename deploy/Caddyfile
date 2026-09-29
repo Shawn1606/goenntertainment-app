@@ -1,0 +1,26 @@
+# Caddy holt und erneuert das HTTPS-Zertifikat von Let's Encrypt vollautomatisch,
+# sobald die Domain auf diesen Server zeigt. Kein certbot, kein Cronjob.
+{$DOMAIN} {
+	reverse_proxy api:8000 {
+		# Sagt dem Backend, dass aussen HTTPS anliegt. src/media.js baut daraus die
+		# Bild-Adressen (zusammen mit `trust proxy` in src/app.js).
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Etwas ueber dem 5-MB-Limit von multer (alle Upload-Routen). Absichtlich
+	# hoeher: so lehnt das Backend zu grosse Bilder mit seiner eigenen, in der App
+	# lesbaren Fehlermeldung ab, statt dass Caddy die Verbindung vorher mit einem
+	# nackten 413 kappt.
+	request_body {
+		max_size 8MB
+	}
+
+	encode gzip
+
+	log {
+		output file /data/access.log {
+			roll_size 10MB
+			roll_keep 5
+		}
+	}
+}

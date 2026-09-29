@@ -4,7 +4,13 @@
  *
  * Nominatim-Regeln: höchstens ~1 Anfrage/Sekunde und ein aussagekräftiger
  * User-Agent. Deshalb cachen wir Ergebnisse und fragen der Reihe nach an.
+ *
+ * Ein Ort wird in mehreren Schreibweisen probiert, siehe `placeQueries` in
+ * src/domain/place-query.ts: „Nörgelbuff, Gronerstraße 23, Göttingen" findet
+ * Nominatim als Ganzes NICHT, „Gronerstraße 23, Göttingen" schon. Ohne diese
+ * Stufen bleibt die Karte für die übliche Schreibweise leer.
  */
+import { placeQueries } from '@/domain/place-query';
 
 export type Coords = { lat: number; lng: number };
 
@@ -46,6 +52,10 @@ async function fetchCoords(location: string): Promise<Coords | null> {
 /**
  * Liefert Koordinaten für einen Orts-Text – oder `null`, wenn nichts gefunden
  * wurde. Ergebnisse werden gecacht; Anfragen laufen nacheinander (Rate-Limit).
+ *
+ * Gecacht wird unter dem ORIGINAL-Text, nicht unter der Schreibweise, die
+ * geholfen hat: 143 Events im selben Haus tragen denselben Ortstext und sollen
+ * eine einzige Anfrage auslösen, nicht 143.
  */
 export async function geocode(location: string): Promise<Coords | null> {
   const key = normalize(location);
@@ -55,10 +65,17 @@ export async function geocode(location: string): Promise<Coords | null> {
   const run = queue.then(async () => {
     // Falls in der Zwischenzeit schon jemand anderes das Ergebnis geholt hat:
     if (cache.has(key)) return cache.get(key) ?? null;
-    const coords = await fetchCoords(location);
+
+    let coords: Coords | null = null;
+    // Stufenweise gröber, bis etwas trifft. Die Pause liegt bei JEDER Anfrage,
+    // auch der erfolglosen – das Rate-Limit zählt Anfragen, nicht Treffer.
+    for (const query of placeQueries(location)) {
+      coords = await fetchCoords(query);
+      await new Promise((r) => setTimeout(r, 1100));
+      if (coords) break;
+    }
+
     cache.set(key, coords);
-    // Kleine Pause, um das Rate-Limit einzuhalten.
-    await new Promise((r) => setTimeout(r, 1100));
     return coords;
   });
 

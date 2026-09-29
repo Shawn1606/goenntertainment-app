@@ -1,100 +1,113 @@
-import { Tabs, TabList, TabTrigger, TabSlot, TabTriggerSlotProps, TabListProps } from 'expo-router/ui';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Tabs, TabList, TabTrigger, TabSlot, type TabTriggerSlotProps, type TabListProps } from 'expo-router/ui';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ThemedText } from './themed-text';
-import { ThemedView } from './themed-view';
+import { Icon } from '@/components/ui/icon';
+import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
+import type { UiIconName } from '@/domain/ui-icon';
+import { useTheme } from '@/hooks/use-theme';
 
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { useAuth } from '@/lib/auth-context';
+/**
+ * Untere Leiste im Web – dieselben fünf Ziele wie am Handy (siehe app-tabs.tsx).
+ *
+ * Im Browser gibt es keine native Leiste, also bauen wir sie nach: Symbol über
+ * Beschriftung, aktiv = kräftige Farbe und fettere Schrift. Früher lag hier eine
+ * schwebende Pille OBEN über dem Inhalt; sie verdeckte bei breitem Fenster den
+ * Konto-Knopf, der dann nicht mehr anklickbar war. Jetzt steht die Leiste im
+ * normalen Fluss unter dem Inhalt und kann nichts mehr verdecken.
+ */
+const TABS: { name: string; href: '/' | '/map' | '/create' | '/friends' | '/me'; label: string; icon: UiIconName }[] = [
+  { name: 'index', href: '/', label: 'Home', icon: 'home' },
+  { name: 'map', href: '/map', label: 'Karte', icon: 'map' },
+  { name: 'create', href: '/create', label: 'Erstellen', icon: 'plus-square' },
+  { name: 'friends', href: '/friends', label: 'Freunde', icon: 'users' },
+  { name: 'me', href: '/me', label: 'Profil', icon: 'user' },
+];
 
 export default function AppTabs() {
-  const { user } = useAuth();
-
   return (
-    <Tabs>
-      <TabSlot style={{ height: '100%' }} />
+    <Tabs style={styles.root}>
+      <TabSlot style={styles.slot} />
       <TabList asChild>
-        <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>Home</TabButton>
-          </TabTrigger>
-          <TabTrigger name="map" href="/map" asChild>
-            <TabButton>Map</TabButton>
-          </TabTrigger>
-          <TabTrigger name="my-activities" href="/my-activities" asChild>
-            <TabButton>Aktivitäten</TabButton>
-          </TabTrigger>
-          <TabTrigger name="settings" href="/settings" asChild>
-            <TabButton>Einstellungen</TabButton>
-          </TabTrigger>
-          {/* Nur für Admins sichtbar. */}
-          {user?.is_admin ? (
-            <TabTrigger name="admin-panel" href="/admin-panel" asChild>
-              <TabButton>Admin</TabButton>
+        <BottomBar>
+          {TABS.map((tab) => (
+            <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
+              <TabButton icon={tab.icon} accent={tab.name === 'create'}>
+                {tab.label}
+              </TabButton>
             </TabTrigger>
-          ) : null}
-        </CustomTabList>
+          ))}
+        </BottomBar>
       </TabList>
     </Tabs>
   );
 }
 
-export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
+function TabButton({
+  children,
+  isFocused,
+  icon,
+  accent,
+  ...props
+}: TabTriggerSlotProps & { icon: UiIconName; accent?: boolean }) {
+  const colors = useTheme();
+  const color = accent ? colors.tint : isFocused ? colors.text : colors.textSecondary;
   return (
-    <Pressable {...props} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
-        style={styles.tabButtonView}>
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
-          {children}
-        </ThemedText>
-      </ThemedView>
+    <Pressable
+      {...props}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: !!isFocused }}
+      style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+      <Icon name={icon} size={26} color={color} />
+      <Text
+        style={[
+          styles.label,
+          { color, fontFamily: isFocused ? FontFamily.bold : FontFamily.medium },
+        ]}>
+        {children}
+      </Text>
     </Pressable>
   );
 }
 
-export function CustomTabList(props: TabListProps) {
+function BottomBar(props: TabListProps) {
+  const colors = useTheme();
+  const insets = useSafeAreaInsets();
   return (
-    <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
-        <ThemedText type="smallBold" style={styles.brandText}>
-          GÖ4Fun
-        </ThemedText>
-
-        {props.children}
-      </ThemedView>
+    <View
+      {...props}
+      style={[
+        styles.bar,
+        {
+          backgroundColor: colors.background,
+          borderTopColor: colors.backgroundSelected,
+          paddingBottom: Math.max(insets.bottom, Spacing.two),
+        },
+      ]}>
+      <View style={styles.inner}>{props.children}</View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tabListContainer: {
-    position: 'absolute',
-    width: '100%',
-    padding: Spacing.three,
-    justifyContent: 'center',
+  root: { flex: 1 },
+  slot: { flex: 1 },
+  bar: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.two,
     alignItems: 'center',
-    flexDirection: 'row',
   },
-  innerContainer: {
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.five,
-    borderRadius: Spacing.five,
+  inner: {
     flexDirection: 'row',
-    alignItems: 'center',
-    flexGrow: 1,
-    gap: Spacing.two,
+    width: '100%',
     maxWidth: MaxContentWidth,
   },
-  brandText: {
-    marginRight: 'auto',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
-  tabButtonView: {
+  button: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
     paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
   },
+  pressed: { opacity: 0.6 },
+  label: { fontSize: 11 },
 });

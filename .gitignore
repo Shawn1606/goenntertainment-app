@@ -33,6 +33,10 @@ yarn-error.*
 # local env files
 .env*.local
 
+# Server-Deployment: echte Zugangsdaten und Nutzer-Uploads
+deploy/.env
+deploy/storage/
+
 # typescript
 *.tsbuildinfo
 

@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { pool, first } from '../db.js';
 import { hashPassword, checkPassword } from '../auth.js';
 import { Validator, HttpError, isEmail } from '../validate.js';
+import { passwordProblem } from '../password-policy.js';
 
 const router = Router();
 
@@ -66,9 +67,13 @@ router.post('/reset-password', async (req, res, next) => {
 
     if (!b.token) v.add('token', 'Der Token fehlt.');
     if (!isEmail(b.email)) v.add('email', 'Bitte eine gueltige E-Mail-Adresse angeben.');
-    if (!b.password || String(b.password).length < 8 || !/[a-zA-Z]/.test(b.password) || !/\d/.test(b.password)) {
-      v.add('password', 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.');
-    }
+    // Dieselbe Regel wie bei der Registrierung (src/password-policy.js) – hier
+    // zunaechst OHNE Benutzernamen, der kommt erst nach der Token-Pruefung
+    // dazu (Begruendung dort).
+    const passwordError = passwordProblem(b.password, {
+      email: typeof b.email === 'string' ? b.email : null,
+    });
+    if (passwordError) v.add('password', passwordError);
     if (b.password_confirmation !== undefined && b.password !== b.password_confirmation) {
       v.add('password', 'Die Passwoerter stimmen nicht ueberein.');
     }
@@ -93,6 +98,20 @@ router.post('/reset-password', async (req, res, next) => {
     if (ageMs > EXPIRE_MINUTES * 60 * 1000) {
       await pool.query('DELETE FROM password_reset_tokens WHERE email = ?', [b.email]);
       throw invalid();
+    }
+
+    /**
+     * Benutzername im Passwort? Erst JETZT, mit gueltigem Token.
+     *
+     * Vorher waere die Meldung ein Orakel: Wer zu einer fremden Adresse
+     * Passwoerter durchprobiert, erfuehre aus „darf deinen Benutzernamen nicht
+     * enthalten", dass es das Konto gibt – und Stueck fuer Stueck, wie es heisst.
+     * Genau das soll die neutrale Antwort von /forgot-password verhindern.
+     */
+    const owner = await first('SELECT username FROM users WHERE email = ?', [b.email]);
+    const personalError = passwordProblem(b.password, { username: owner?.username ?? null, email: b.email });
+    if (personalError) {
+      throw new HttpError(422, personalError, { password: [personalError] });
     }
 
     // Neues Passwort setzen + alle bestehenden Tokens/Reset-Zeile entwerten.
