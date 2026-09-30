@@ -41,12 +41,17 @@ services:
   # Node-Backend läuft aber absichtlich NICHT als root (Benutzer `node`, UID 1000)
   # und könnte dort nichts speichern – jeder Upload scheiterte mit „Serverfehler".
   # Dieser Einmal-Container gibt den Ordner dem Benutzer `node`.
+  #
+  # Als Liste und in EINER Zeile: Als gefalteter Block (`>`) mit tiefer
+  # eingerückten Folgezeilen behält YAML die Zeilenumbrüche – die Shell las
+  # dann `/storage/posts` als eigenen Befehl und scheiterte am `&&` am
+  # Zeilenanfang (`syntax error: unexpected "&&"`), und der ganze Stapel startete nicht.
   storage-init:
     image: busybox:1.37
-    command: >
-      sh -c "mkdir -p /storage/avatars /storage/banners /storage/evidence
-             /storage/posts /storage/stories /storage/user-banners
-             && chown -R 1000:1000 /storage"
+    command:
+      - sh
+      - -c
+      - mkdir -p /storage/avatars /storage/banners /storage/evidence /storage/posts /storage/stories /storage/user-banners && chown -R 1000:1000 /storage
     volumes:
       - ./storage:/storage
 
