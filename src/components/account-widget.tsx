@@ -1,7 +1,7 @@
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, type Href } from 'expo-router';
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useState, type RefObject } from 'react';
 import {
   Animated,
   BackHandler,
@@ -161,8 +161,12 @@ export function AccountSheet({
    */
   const [mounted, setMounted] = useState(false);
 
-  /** 0 = ganz weg, 1 = ganz da. Trägt Auf- und Zublenden. */
-  const appear = useRef(new Animated.Value(0)).current;
+  /**
+   * 0 = ganz weg, 1 = ganz da. Trägt Auf- und Zublenden.
+   * On the web the sheet never fades (see NATIVE), so it starts at 1 there: the
+   * first frame after mounting is then fully visible, as before.
+   */
+  const [appear] = useState(() => new Animated.Value(NATIVE ? 0 : 1));
 
   /**
    * Nach unten wischen. Steckt seit dem Detail-Blatt in einem eigenen Baustein –
@@ -173,12 +177,17 @@ export function AccountSheet({
 
   const isAdmin = !!user?.is_admin;
 
+  // Mount/unmount follows `open` while rendering, not in an effect
+  // (react.dev: "Adjusting some state when a prop changes"). Opening mounts at
+  // once; on the web there is no fade-out, so closing unmounts at once too.
+  if (open && !mounted) setMounted(true);
+  if (!open && mounted && !NATIVE) setMounted(false);
+
   // Hängt bewusst NUR an `open` (die übrigen Werte sind beständig). Stünde
   // `mounted` mit in der Liste, liefe der Effekt direkt nach dem `setMounted`
   // ein zweites Mal – und setzte die gerade begonnene Einblendung zurück auf 0.
   useEffect(() => {
     if (open) {
-      setMounted(true);
       if (!NATIVE) {
         appear.setValue(1);
         return;
@@ -189,10 +198,7 @@ export function AccountSheet({
       return () => rise.stop();
     }
 
-    if (!NATIVE) {
-      setMounted(false);
-      return;
-    }
+    if (!NATIVE) return;
     // Erst ausblenden, dann aus dem Baum nehmen. Wird das Blatt mittendrin
     // wieder geöffnet, hält `stop()` die Ausblendung an und `finished` ist
     // false – das Abräumen unterbleibt dann richtigerweise.
