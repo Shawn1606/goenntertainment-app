@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { Animated, Easing, Platform, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
@@ -185,7 +185,7 @@ function OrbitBadge({
   left: number;
   top: number;
 }) {
-  const float = useRef(new Animated.Value(0)).current;
+  const [float] = useState(() => new Animated.Value(0));
 
   useEffect(() => {
     const anim = Animated.loop(

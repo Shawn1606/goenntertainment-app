@@ -43,7 +43,7 @@
  * vollkommen in Ordnung: Die Figur trägt keine Information, die nur in der
  * Bewegung steckt.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
@@ -343,7 +343,7 @@ export function Mascot({
    * nicht im Gleichschritt blinzeln – das sähe nach Bildschirmfehler aus, nicht
    * nach Leben. Einmal beim Einhängen gezogen und danach fest.
    */
-  const phase = useRef(Math.random()).current;
+  const [phase] = useState(() => Math.random());
 
   const eyesOpen = OPEN_EYE_MOODS.includes(mood);
 
