@@ -1,0 +1,65 @@
+{
+  "_doc": [
+    "Die Regeln des GÖ4Fun-Clubs an EINER Stelle: Stufen, Rabatte, Credits, Stempelkarte.",
+    "Gelesen von der App (src/domain/club.ts) und von Laravel (api/app/Support/Club.php).",
+    "Beide rechnen mit diesen Zahlen dieselben Preise aus; shared/club.fixtures.json hält fest, was herauskommen muss.",
+    "Der Server ist maßgeblich: Die App zeigt nur eine Vorschau, abgebucht wird, was Laravel rechnet.",
+    "Werte mit 'proposal' im Kommentar sind Vorschläge und noch nicht vom Betreiber bestätigt."
+  ],
+  "currency": "EUR",
+  "credits": {
+    "_doc": "10 Credits kosten 75 Cent. Pakete sind Credit-Mengen; der Preis ergibt sich daraus.",
+    "centsPerTenCredits": 75,
+    "packs": [50, 100, 200, 500, 1000]
+  },
+  "plans": [
+    {
+      "key": "free",
+      "name": "Free Plan",
+      "priceCents": 0,
+      "discountPercent": 0,
+      "groupBoost": 1,
+      "monthlyCredits": 0,
+      "perks": ["Stempelkarte: 10 Stempel = 100 Credits", "Mit Credits bei Partnern bezahlen", "Gruppenrabatt ab 2 Personen"]
+    },
+    {
+      "key": "gold",
+      "name": "Gold Plan",
+      "priceCents": 2499,
+      "discountPercent": 10,
+      "groupBoost": 1.5,
+      "monthlyCredits": 100,
+      "_proposal": "discountPercent, groupBoost und monthlyCredits sind Vorschläge",
+      "perks": ["10 % auf alle Partner-Angebote", "Gruppenrabatt × 1,5", "100 Credits jeden Monat", "Stempelkarte"]
+    },
+    {
+      "key": "platinum",
+      "name": "Platinum Plan",
+      "priceCents": 4999,
+      "discountPercent": 20,
+      "groupBoost": 2,
+      "monthlyCredits": 300,
+      "_proposal": "discountPercent, groupBoost und monthlyCredits sind Vorschläge",
+      "perks": ["20 % auf alle Partner-Angebote", "Gruppenrabatt × 2", "300 Credits jeden Monat", "Stempelkarte"]
+    }
+  ],
+  "groupDiscount": {
+    "_doc": "Grundrabatt nach Personenzahl der Buchung (proposal). Der Club-Faktor groupBoost multipliziert ihn.",
+    "tiers": [
+      { "minPeople": 2, "percent": 5 },
+      { "minPeople": 4, "percent": 10 },
+      { "minPeople": 6, "percent": 15 },
+      { "minPeople": 10, "percent": 20 }
+    ]
+  },
+  "discountCap": {
+    "_doc": "Höchstrabatt insgesamt, wenn das Angebot selbst keinen setzt. Partner können pro Angebot weniger erlauben.",
+    "defaultPercent": 35
+  },
+  "stampCard": {
+    "_doc": "Jeder Check-in beim Partner (NFC oder QR) = 1 Stempel, höchstens einer pro Partner und Tag.",
+    "fields": 10,
+    "rewardCredits": 100,
+    "perPartnerPerDay": 1
+  }
+}

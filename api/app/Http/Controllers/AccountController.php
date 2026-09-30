@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Support\AccountDeletion;
 use App\Support\PasswordPolicy;
 use App\Support\Passwords;
 use App\Support\TwoFactor;
@@ -107,23 +108,14 @@ class AccountController extends Controller
      *
      * ## Wer hier was tut
      *
-     * PRUEFEN tut Laravel: Passwort (oder das Bestaetigungswort), „letzter
-     * Admin" und - nur hier moeglich, weil das TOTP-Secret mit APP_KEY
-     * verschluesselt ist - den Zwei-Faktor-Code. LOESCHEN tut Node
-     * (server/src/account-deletion.js): Dort liegen die Datei-Pfade, und
-     * derselbe Ablauf dient dem Admin-Panel. Zwei Implementierungen davon liefen
-     * frueher oder spaeter auseinander - und eine vergessene Upload-Art hiesse
-     * Bilder, die nach der Loeschung oeffentlich weiterleben.
+     * Geprueft werden Passwort (oder das Bestaetigungswort), „letzter Admin" und
+     * der Zwei-Faktor-Code; geloescht wird mit App\Support\AccountDeletion -
+     * demselben Ablauf, den der Admin-Bereich nimmt, samt Dateien.
      *
      * Die Reihenfolge der Pruefungen ist Absicht: erst das Passwort, dann „letzter
      * Admin", zuletzt der Code. Ein Code wird beim Pruefen VERBRAUCHT (ein
      * Wiederherstellungscode fuer immer) - er soll nicht an einem Tippfehler im
      * Passwort oder an einer 409 verloren gehen.
-     *
-     * Danach eine Freigabe (TwoFactor::createDeletionGrant) und Weitergabe an
-     * Node ueber denselben Weg wie jede noch nicht portierte Route. Ist der
-     * Rueckfall abgeschaltet (NODE_FALLBACK_URL leer), muss das Loeschen vorher
-     * hierher umgezogen sein - sonst antwortet dieser Endpunkt mit 404.
      */
     public function destroy(Request $request): Response
     {
@@ -151,11 +143,11 @@ class AccountController extends Controller
             TwoFactor::assertCode($user, $request->input('code'));
         }
 
-        // Selbst gesetzt, nie aus der Anfrage uebernommen: Eine mitgeschickte
-        // Kopfzeile gleichen Namens wird hier ueberschrieben.
-        $request->headers->set('X-Account-Deletion-Grant', TwoFactor::createDeletionGrant($user));
+        if (AccountDeletion::delete($user, refuseLastAdmin: true) === 'last_admin') {
+            return response()->json(['message' => self::MSG_LAST_ADMIN], 409);
+        }
 
-        return app(NodeFallbackController::class)($request, 'me');
+        return response()->json(['message' => 'Dein Konto wurde gelöscht.']);
     }
 
     /** Stimmt das aktuelle Passwort? Als Regel, damit die Meldung am Feld steht. */

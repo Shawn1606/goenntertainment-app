@@ -61,9 +61,6 @@ final class TwoFactor
 
     public const PURPOSE_CONFIRM = 'confirm';
 
-    /** Freigabe an Node fuer DELETE /api/me - siehe server/src/routes/account.js. */
-    public const PURPOSE_DELETE = 'delete';
-
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
     public const CODE_TTL = 600;
 
@@ -79,9 +76,6 @@ final class TwoFactor
      * durch Nachfordern endlos am Leben halten.
      */
     public const MAX_AGE = 1800;
-
-    /** Lebensdauer einer Loesch-Freigabe an Node: Sekunden, nicht Minuten. */
-    public const DELETE_GRANT_TTL = 120;
 
     public const RECOVERY_CODE_COUNT = 8;
 
@@ -655,32 +649,6 @@ final class TwoFactor
         throw ValidationException::withMessages($hasPassword
             ? ['password' => [self::MSG_PASSWORD_OR_CODE]]
             : ['code' => [self::MSG_CODE_REQUIRED]]);
-    }
-
-    /* ------------------------------------------------------ Loesch-Freigabe */
-
-    /**
-     * Freigabe fuer Node: „Loeschen ist vollstaendig bestaetigt" - zwei Minuten,
-     * einmal, nur fuer dieses Konto (Einloesen in server/src/routes/account.js).
-     *
-     * Ablauf mit `NOW()` der DATENBANK, nicht mit der Uhr von PHP: Node
-     * vergleicht mit `NOW()`, und so reden beide ueber dieselbe Uhr.
-     */
-    public static function createDeletionGrant(User $user): string
-    {
-        $token = self::newToken();
-
-        DB::table('two_factor_challenges')->insert([
-            'user_id' => $user->getKey(),
-            'token_hash' => self::hashToken($token),
-            'method' => $user->two_factor_method,
-            'purpose' => self::PURPOSE_DELETE,
-            'attempts' => 0,
-            'expires_at' => DB::raw('NOW() + INTERVAL '.self::DELETE_GRANT_TTL.' SECOND'),
-            'created_at' => DB::raw('NOW()'),
-        ]);
-
-        return $token;
     }
 
     /* ------------------------------------------------------------- Kleinkram */

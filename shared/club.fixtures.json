@@ -1,0 +1,33 @@
+{
+  "_doc": "Gemeinsame Prüfbeispiele für shared/club.json. App (src/domain/club.test.ts) und Laravel (api/tests/Unit/ClubTest.php) müssen JEDEN Fall genau so ausrechnen. Wer eine Regel ändert, ändert zuerst hier.",
+  "quotes": [
+    { "name": "Free, allein", "plan": "free", "people": 1, "unitPriceCents": 2999, "expect": { "percent": 0, "subtotalCents": 2999, "discountCents": 0, "totalCents": 2999 } },
+    { "name": "Free, zu zweit: nur Gruppenrabatt", "plan": "free", "people": 2, "unitPriceCents": 2999, "expect": { "percent": 5, "subtotalCents": 5998, "discountCents": 300, "totalCents": 5698 } },
+    { "name": "Gold, allein", "plan": "gold", "people": 1, "unitPriceCents": 2999, "expect": { "percent": 10, "subtotalCents": 2999, "discountCents": 300, "totalCents": 2699 } },
+    { "name": "Gold, zu zweit: Gruppenrabatt × 1,5", "plan": "gold", "people": 2, "unitPriceCents": 2999, "expect": { "percent": 17.5, "subtotalCents": 5998, "discountCents": 1050, "totalCents": 4948 } },
+    { "name": "Platinum, sechs Leute: Deckel greift", "plan": "platinum", "people": 6, "unitPriceCents": 2999, "expect": { "percent": 35, "subtotalCents": 17994, "discountCents": 6298, "totalCents": 11696 } },
+    { "name": "Platinum, Angebot deckelt auf 20 %", "plan": "platinum", "people": 4, "unitPriceCents": 2999, "maxDiscountPercent": 20, "expect": { "percent": 20, "subtotalCents": 11996, "discountCents": 2399, "totalCents": 9597 } },
+    { "name": "Gold, sechs Leute", "plan": "gold", "people": 6, "unitPriceCents": 1500, "expect": { "percent": 32.5, "subtotalCents": 9000, "discountCents": 2925, "totalCents": 6075 } },
+    { "name": "Gold, zehn Leute: Deckel greift", "plan": "gold", "people": 10, "unitPriceCents": 1500, "expect": { "percent": 35, "subtotalCents": 15000, "discountCents": 5250, "totalCents": 9750 } },
+    { "name": "Unbekannte Stufe zählt als Free", "plan": "diamond", "people": 1, "unitPriceCents": 1000, "expect": { "percent": 0, "subtotalCents": 1000, "discountCents": 0, "totalCents": 1000 } },
+    { "name": "Angebot ohne Rabatt (Deckel 0)", "plan": "platinum", "people": 3, "unitPriceCents": 1000, "maxDiscountPercent": 0, "expect": { "percent": 0, "subtotalCents": 3000, "discountCents": 0, "totalCents": 3000 } }
+  ],
+  "creditQuotes": [
+    { "name": "Free, allein, 450 Credits", "plan": "free", "people": 1, "unitCredits": 450, "expect": { "percent": 0, "subtotalCredits": 450, "totalCredits": 450 } },
+    { "name": "Gold, zu zweit: aufgerundet", "plan": "gold", "people": 2, "unitCredits": 450, "expect": { "percent": 17.5, "subtotalCredits": 900, "totalCredits": 743 } },
+    { "name": "Platinum, vier Leute", "plan": "platinum", "people": 4, "unitCredits": 80, "expect": { "percent": 35, "subtotalCredits": 320, "totalCredits": 208 } }
+  ],
+  "packPrices": [
+    { "credits": 50, "priceCents": 375 },
+    { "credits": 100, "priceCents": 750 },
+    { "credits": 200, "priceCents": 1500 },
+    { "credits": 500, "priceCents": 3750 },
+    { "credits": 1000, "priceCents": 7500 }
+  ],
+  "stampProgress": [
+    { "total": 0, "expect": { "filled": 0, "completedCards": 0 } },
+    { "total": 7, "expect": { "filled": 7, "completedCards": 0 } },
+    { "total": 10, "expect": { "filled": 0, "completedCards": 1 } },
+    { "total": 23, "expect": { "filled": 3, "completedCards": 2 } }
+  ]
+}

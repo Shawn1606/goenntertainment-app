@@ -89,5 +89,33 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('account-sensitive', fn (Request $request) => [
             Limit::perMinute(10)->by('account:'.($request->user()?->getAuthIdentifier() ?? $request->ip()))->response($tooMany),
         ]);
+
+        $account = static fn (Request $request) => (string) ($request->user()?->getAuthIdentifier() ?? $request->ip());
+
+        // Gutscheincodes und Einladungscodes: Raten soll aussichtslos bleiben.
+        RateLimiter::for('voucher-redeem', fn (Request $request) => [
+            Limit::perMinute(10)->by('voucher:'.$account($request))->response($tooMany),
+            Limit::perMinute(30)->by('voucher-ip:'.$request->ip())->response($tooMany),
+        ]);
+
+        // Kaufen, Buchen, Abo: Ein Doppeltipp soll nicht zweimal abbuchen - dafuer
+        // sorgt die App; das hier faengt Skripte ab.
+        RateLimiter::for('payments', fn (Request $request) => [
+            Limit::perMinute(12)->by('payments:'.$account($request))->response($tooMany),
+        ]);
+
+        // Check-ins: Ein Stempel gibt es ohnehin nur einmal am Tag je Partner.
+        RateLimiter::for('checkin', fn (Request $request) => [
+            Limit::perMinute(20)->by('checkin:'.$account($request))->response($tooMany),
+        ]);
+
+        // Chat: zehn Nachrichten in zehn Sekunden - wie die Bremse im alten Backend.
+        RateLimiter::for('chat-send', fn (Request $request) => [
+            (new Limit('chat:'.$account($request), 10, 10))->response(static fn (Request $r, array $headers) => response()->json(
+                ['message' => 'Kurz durchatmen – das waren viele Nachrichten auf einmal.'],
+                429,
+                $headers,
+            )),
+        ]);
     }
 }

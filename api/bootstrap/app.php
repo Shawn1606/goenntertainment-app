@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\EnsureNotBanned;
 use App\Http\Middleware\UnescapedJsonResponses;
 use Illuminate\Foundation\Application;
@@ -33,6 +34,7 @@ return Application::configure(basePath: dirname(__DIR__))
 
         $middleware->alias([
             'banned' => EnsureNotBanned::class,
+            'admin' => EnsureAdmin::class,
         ]);
 
         // Gilt fuer JEDE Antwort der API, auch fuer die Fehler-Antworten des

@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Rules\NoBlockedTerms;
-use App\Support\AccountTypes;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
 use App\Support\TwoFactor;
@@ -64,14 +63,6 @@ class AuthController extends Controller
             'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, new NoBlockedTerms('username')],
             'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
             'password' => ['bail', 'required', $this->passwordRule()],
-            /**
-             * `required` steht hier nicht zur Zierde: Ohne es ueberspringt Laravel
-             * eine eigene Regel, wenn das Feld gar nicht mitgeschickt wurde - und
-             * eine Registrierung ohne Kontostufe waere stillschweigend in Ordnung.
-             * Bisher war ein fehlender Wert genau so falsch wie ein erfundener,
-             * und beide bekommen dieselbe Meldung.
-             */
-            'account_type' => ['bail', 'required', $this->registrableAccountTypeRule()],
         ], [
             'name.required' => 'Der Name ist erforderlich.',
             'name.string' => 'Der Name ist erforderlich.',
@@ -83,7 +74,6 @@ class AuthController extends Controller
             'email.required' => self::MSG_EMAIL,
             'email.regex' => self::MSG_EMAIL,
             'password.required' => self::MSG_PASSWORD,
-            'account_type.required' => 'Ungueltiger Kontotyp.',
         ]);
 
         /**
@@ -129,7 +119,6 @@ class AuthController extends Controller
          * dass die Passwortregel ihn je gesehen hat.
          */
         $user->password = Hash::make((string) $request->input('password'));
-        $user->account_type = AccountTypes::normalize($request->input('account_type'));
 
         /**
          * Stand der Nutzungsbedingungen, dem zugestimmt wurde.
@@ -266,31 +255,6 @@ class AuthController extends Controller
             $messages['email.regex'] = self::MSG_EMAIL;
         }
 
-        /**
-         * Kontostufe umstellen - Admins vorbehalten.
-         *
-         * Die Stufe schaltet Rechte frei (Events erstellen, Business-Bereich), die
-         * sich niemand im Selbstbedienungsverfahren geben soll. Die Pruefung sitzt
-         * am FELD statt am ganzen Endpunkt - Name/E-Mail/Interessen bleiben fuer
-         * alle offen.
-         *
-         * Und sie steht VOR der Auswertung der uebrigen Felder: Wer die Stufe ohne
-         * Recht aendern will, bekommt 403 - auch dann, wenn zugleich der Name leer
-         * waere. Ein 422 ueber den Namen wuerde verschweigen, dass der eigentliche
-         * Wunsch ohnehin abgelehnt ist. Genau diese Reihenfolge hatte das vorige
-         * Backend.
-         */
-        if ($request->has('account_type')) {
-            if (! $user->is_admin) {
-                return response()->json(['message' => 'Nur Admins duerfen den Kontotyp aendern.'], 403);
-            }
-
-            // `required` aus demselben Grund wie bei der Registrierung: sonst
-            // rutscht `account_type: null` ungepruefet durch.
-            $rules['account_type'] = ['bail', 'required', $this->assignableAccountTypeRule()];
-            $messages['account_type.required'] = 'Ungueltiger Kontotyp.';
-        }
-
         $interests = null;
         $rawInterests = $request->input('interests');
         $interestsGiven = $request->has('interests');
@@ -339,10 +303,6 @@ class AuthController extends Controller
         }
         if ($request->has('email')) {
             $user->email = $request->input('email');
-            $touched = true;
-        }
-        if ($request->has('account_type')) {
-            $user->account_type = AccountTypes::normalize($request->input('account_type'));
             $touched = true;
         }
 
@@ -413,37 +373,6 @@ class AuthController extends Controller
             is_string($username) ? $username : null,
             is_string($email) ? $email : null,
         );
-    }
-
-    /**
-     * Kontostufe bei der Registrierung.
-     *
-     * Unbekannte Werte werden abgewiesen statt stillschweigend auf Standard
-     * gedreht: Ein Tippfehler im Client soll auffallen, nicht durchrutschen. Und
-     * eine Stufe, die es GIBT, aber nicht zur Selbstbedienung, bekommt eine eigene
-     * Meldung - sonst suchte jemand den Fehler im Wort, obwohl das Wort richtig ist.
-     */
-    private function registrableAccountTypeRule(): Closure
-    {
-        return static function (string $attribute, mixed $value, Closure $fail): void {
-            if (in_array($value, AccountTypes::registrable(), true)) {
-                return;
-            }
-
-            $fail(in_array($value, AccountTypes::ALL, true)
-                ? 'Diese Stufe gibt es erst nach Freischaltung – frag sie in der App an.'
-                : 'Ungueltiger Kontotyp.');
-        };
-    }
-
-    /** Was ein Admin per PATCH setzen darf. */
-    private function assignableAccountTypeRule(): Closure
-    {
-        return static function (string $attribute, mixed $value, Closure $fail): void {
-            if (! in_array($value, AccountTypes::assignable(), true)) {
-                $fail('Ungueltiger Kontotyp.');
-            }
-        };
     }
 
     /** Kategorie-IDs aus der Anfrage - alles Unbrauchbare fliegt raus. */
