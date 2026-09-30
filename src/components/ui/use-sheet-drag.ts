@@ -28,7 +28,7 @@
  *    (`…Capture`) – aber nur, wenn sie schon ganz oben steht. Sonst könnte man
  *    nicht mehr nach oben scrollen, ohne das Blatt zuzuziehen.
  */
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   Animated,
   PanResponder,
@@ -81,94 +81,121 @@ export type SheetDragOptions = {
   open?: boolean;
 };
 
-export function useSheetDrag({ onDismiss, open }: SheetDragOptions): SheetDrag {
-  const dragY = useRef(new Animated.Value(0)).current;
+/**
+ * The gesture itself, outside React: plain closure variables instead of refs,
+ * so the React Compiler can check and memoise `useSheetDrag`. Created once per
+ * sheet (lazy `useState` initialiser) and kept for the component's lifetime -
+ * exactly like the previous `useRef` + null check.
+ */
+function createSheetGesture(dragY: Animated.Value) {
   /** Höhe des Blattes – so weit fährt es beim Wegwischen nach unten raus. */
-  const sheetHeight = useRef(0);
+  let sheetHeight = 0;
   /** Scrollstand der Liste: Wischen greift nur, wenn sie ganz oben steht. */
-  const scrollOffset = useRef(0);
+  let scrollOffset = 0;
   /**
    * `onDismiss` in einem Kasten. Die PanResponder werden einmal gebaut und
    * behalten; würden sie die Funktion direkt einfangen, hielten sie für immer die
    * erste Fassung fest – und schlössen später das falsche Blatt.
    */
-  const dismissRef = useRef(onDismiss);
-  dismissRef.current = onDismiss;
+  let onDismiss: () => void = () => {};
+
+  /** Der Zug war zu kurz: zurück in die Ruhelage. */
+  const settle = () => {
+    if (!NATIVE) {
+      dragY.setValue(0);
+      return;
+    }
+    Animated.spring(dragY, { toValue: 0, useNativeDriver: true, bounciness: 2, speed: 16 }).start();
+  };
+
+  /**
+   * Weggewischt: nach unten aus dem Bild fahren, während das Blatt ausblendet.
+   * Beides gleichzeitig – so wischt es wirklich weg, statt an Ort und Stelle zu
+   * verschwinden.
+   */
+  const dismiss = () => {
+    if (NATIVE) {
+      Animated.timing(dragY, {
+        toValue: sheetHeight || FALLBACK_HEIGHT,
+        duration: 200,
+        useNativeDriver: true,
+      }).start();
+    }
+    onDismiss();
+  };
+
+  /** Ein Zug nach unten – und nicht bloß ein Wackeln beim Tippen. */
+  const isDownwardDrag = (g: PanResponderGestureState) =>
+    g.dy > DRAG_SLOP && g.dy > Math.abs(g.dx) * 1.5;
+
+  /** Ende der Geste: weit oder schnell genug → weg, sonst zurück. */
+  const release = (g: PanResponderGestureState) => {
+    if (g.dy > DISMISS_DISTANCE || g.vy > DISMISS_VELOCITY) dismiss();
+    else settle();
+  };
+
+  return {
+    headPan: PanResponder.create({
+      onMoveShouldSetPanResponder: (_e, g) => isDownwardDrag(g),
+      onPanResponderMove: (_e, g) => dragY.setValue(g.dy),
+      onPanResponderRelease: (_e, g) => release(g),
+      onPanResponderTerminate: () => settle(),
+    }),
+    listPan: PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_e, g) => isDownwardDrag(g) && scrollOffset <= 0,
+      onPanResponderMove: (_e, g) => dragY.setValue(g.dy),
+      onPanResponderRelease: (_e, g) => release(g),
+      onPanResponderTerminate: () => settle(),
+    }),
+    setOnDismiss: (next: () => void) => {
+      onDismiss = next;
+    },
+    setSheetHeight: (height: number) => {
+      sheetHeight = height;
+    },
+    setScrollOffset: (offset: number) => {
+      scrollOffset = offset;
+    },
+  };
+}
+
+export function useSheetDrag({ onDismiss, open }: SheetDragOptions): SheetDrag {
+  const [dragY] = useState(() => new Animated.Value(0));
+  const [gesture] = useState(() => createSheetGesture(dragY));
+
+  // Latest `onDismiss`, handed over after each commit (not during render).
+  // Gestures only fire after commit, so they always call the current one.
+  useLayoutEffect(() => {
+    gesture.setOnDismiss(onDismiss);
+  }, [gesture, onDismiss]);
 
   const reset = useCallback(() => {
     // Die Liste startet oben. Ohne diese Zeile müsste der Merker das erst durch
     // ein Scrollen erfahren – und bis dahin ließe sich nicht wischen.
-    scrollOffset.current = 0;
+    gesture.setScrollOffset(0);
     dragY.setValue(0);
-  }, [dragY]);
+  }, [gesture, dragY]);
 
   useEffect(() => {
     if (open) reset();
   }, [open, reset]);
 
-  const responders = useRef<Pick<SheetDrag, 'headPan' | 'listPan'> | null>(null);
-  if (responders.current === null) {
-    /** Der Zug war zu kurz: zurück in die Ruhelage. */
-    const settle = () => {
-      if (!NATIVE) {
-        dragY.setValue(0);
-        return;
-      }
-      Animated.spring(dragY, { toValue: 0, useNativeDriver: true, bounciness: 2, speed: 16 }).start();
-    };
-
-    /**
-     * Weggewischt: nach unten aus dem Bild fahren, während das Blatt ausblendet.
-     * Beides gleichzeitig – so wischt es wirklich weg, statt an Ort und Stelle zu
-     * verschwinden.
-     */
-    const dismiss = () => {
-      if (NATIVE) {
-        Animated.timing(dragY, {
-          toValue: sheetHeight.current || FALLBACK_HEIGHT,
-          duration: 200,
-          useNativeDriver: true,
-        }).start();
-      }
-      dismissRef.current();
-    };
-
-    /** Ein Zug nach unten – und nicht bloß ein Wackeln beim Tippen. */
-    const isDownwardDrag = (g: PanResponderGestureState) =>
-      g.dy > DRAG_SLOP && g.dy > Math.abs(g.dx) * 1.5;
-
-    /** Ende der Geste: weit oder schnell genug → weg, sonst zurück. */
-    const release = (g: PanResponderGestureState) => {
-      if (g.dy > DISMISS_DISTANCE || g.vy > DISMISS_VELOCITY) dismiss();
-      else settle();
-    };
-
-    responders.current = {
-      headPan: PanResponder.create({
-        onMoveShouldSetPanResponder: (_e, g) => isDownwardDrag(g),
-        onPanResponderMove: (_e, g) => dragY.setValue(g.dy),
-        onPanResponderRelease: (_e, g) => release(g),
-        onPanResponderTerminate: () => settle(),
-      }),
-      listPan: PanResponder.create({
-        onMoveShouldSetPanResponderCapture: (_e, g) => isDownwardDrag(g) && scrollOffset.current <= 0,
-        onPanResponderMove: (_e, g) => dragY.setValue(g.dy),
-        onPanResponderRelease: (_e, g) => release(g),
-        onPanResponderTerminate: () => settle(),
-      }),
-    };
-  }
+  const onSheetLayout = useCallback(
+    (event: LayoutChangeEvent) => gesture.setSheetHeight(event.nativeEvent.layout.height),
+    [gesture],
+  );
+  const onScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) =>
+      gesture.setScrollOffset(event.nativeEvent.contentOffset.y),
+    [gesture],
+  );
 
   return {
     dragY,
-    headPan: responders.current.headPan,
-    listPan: responders.current.listPan,
-    onSheetLayout: (event) => {
-      sheetHeight.current = event.nativeEvent.layout.height;
-    },
-    onScroll: (event) => {
-      scrollOffset.current = event.nativeEvent.contentOffset.y;
-    },
+    headPan: gesture.headPan,
+    listPan: gesture.listPan,
+    onSheetLayout,
+    onScroll,
     reset,
   };
 }
