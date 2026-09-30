@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { ScrollView, StyleSheet, Text } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -9,6 +9,7 @@ import Animated, {
 
 import { CategoryIcon } from '@/components/ui/category-icon';
 import { Entrance } from '@/components/ui/entrance';
+import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
 import { useBrandSurface, useGlass } from '@/hooks/use-theme';
@@ -20,6 +21,14 @@ export type CategoryStripProps = {
   selectedIds: number[];
   /** Kategorie an-/abwählen – setzt denselben Filter wie die Filterleiste. */
   onToggle: (id: number) => void;
+  /**
+   * Erste Kachel „Filter": öffnet die Filterleiste (Zeit, Umkreis, Suche).
+   * Steht vorne in derselben Reihe, weil Kategorien und Filter dieselbe Frage
+   * beantworten – „was genau?" – und man sie dort sucht, wo man schon wischt.
+   */
+  onOpenFilter?: () => void;
+  /** Wie viele Filter gerade greifen – färbt die Kachel und zeigt die Zahl. */
+  filterCount?: number;
 };
 
 /**
@@ -39,7 +48,7 @@ export type CategoryStripProps = {
  *    kommt dann zurück. Vorher wechselte nur die Farbe; das übersieht man,
  *    wenn der Finger genau darauf liegt.
  */
-export function CategoryStrip({ interests, selectedIds, onToggle }: CategoryStripProps) {
+export function CategoryStrip({ interests, selectedIds, onToggle, onOpenFilter, filterCount = 0 }: CategoryStripProps) {
   const surface = useBrandSurface();
   const glass = useGlass();
 
@@ -51,6 +60,29 @@ export function CategoryStrip({ interests, selectedIds, onToggle }: CategoryStri
       showsHorizontalScrollIndicator={false}
       contentContainerStyle={styles.track}
       accessibilityRole="tablist">
+      {onOpenFilter ? (
+        <PressableScale
+          onPress={onOpenFilter}
+          haptic="tap"
+          scaleTo={0.94}
+          accessibilityRole="button"
+          accessibilityLabel={filterCount > 0 ? `Filter, ${filterCount} aktiv` : 'Filter'}
+          style={styles.tile}>
+          <View
+            style={[
+              styles.bubble,
+              {
+                backgroundColor: filterCount > 0 ? surface.accent : surface.card,
+                borderColor: filterCount > 0 ? surface.accent : glass.border,
+              },
+            ]}>
+            <Icon name="sliders" size={24} color={filterCount > 0 ? surface.accentText : surface.text} />
+          </View>
+          <Text style={[styles.label, { color: filterCount > 0 ? surface.accent : surface.textMuted }]}>
+            {filterCount > 0 ? `Filter · ${filterCount}` : 'Filter'}
+          </Text>
+        </PressableScale>
+      ) : null}
       {interests.map((interest, index) => (
         <Entrance key={interest.id} index={index}>
           <CategoryTile

@@ -297,7 +297,7 @@ function NavCard({
             {badge}
           </ThemedText>
         ) : null}
-        <ThemedText style={{ color: surface.accent, fontSize: 22 }}>›</ThemedText>
+        <Icon name="chevron-right" size={18} color={surface.accent} />
       </GlassSurface>
     </Pressable>
   );

@@ -8,14 +8,27 @@ import { ActivityFilterBar } from '@/components/activity-filter-bar';
 import { BrandLogo } from '@/components/brand-logo';
 import { CategoryStrip } from '@/components/category-strip';
 import { ActivityPost } from '@/components/feed/activity-post';
+import { EvergreenRail } from '@/components/feed/evergreen-rail';
 import { FeedEmpty } from '@/components/feed/feed-empty';
 import { HomeBackground } from '@/components/home-background';
 import { MascotError } from '@/components/mascot';
+import { ReportSheet } from '@/components/report-sheet';
 import { ShareSheet } from '@/components/share-sheet';
 import { Icon } from '@/components/ui/icon';
+import { IconButton } from '@/components/ui/icon-button';
+import { OptionsSheet, type SheetOption } from '@/components/ui/options-sheet';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
-import { EMPTY_FILTER, filterActivities, isFilterActive, type ActivityFilter } from '@/domain/activity-filter';
-import { rankActivities } from '@/domain/recommendations';
+import { toggledLike } from '@/domain/activity-social';
+import {
+  activeFilterCount,
+  EMPTY_FILTER,
+  filterActivities,
+  isFilterActive,
+  type ActivityFilter,
+} from '@/domain/activity-filter';
+import { mixFeed, type FeedItem } from '@/domain/feed-mix';
+import { firstName, greetingLine } from '@/domain/greeting';
+import { explainMatch, rankActivities } from '@/domain/recommendations';
 import { unreadBadge } from '@/domain/unread-badge';
 import { useTheme } from '@/hooks/use-theme';
 import { type Activity, type Interest, api, ApiError } from '@/lib/api';
@@ -31,19 +44,27 @@ import { useNearbyActivities } from '@/lib/use-nearby-activities';
  *
  * ## Aufbau (Instagram + TikTok)
  *
- *   Kopf:    GÖ4Fun-Schriftzug · Suche · Chats        (Instagram)
- *   Reiter:  Für dich | In der Nähe | Heute           (TikTok „Für dich / Folge ich")
- *   Chips:   Kategorien zum Antippen
- *   Feed:    eine Aktivität unter der anderen, jede wie ein Instagram-Post
+ *   Kopf:    GÖ4Fun-Schriftzug · Suche · Chats
+ *   Reiter:  Für dich | In der Nähe | Heute
+ *   Kacheln: Filter · Kategorien zum Antippen
+ *   Feed:    eine Aktivität unter der anderen, jede wie ein Instagram-Post –
+ *            im „Für dich"-Reiter mit dem Grund, warum sie vorgeschlagen wird,
+ *            und zwischendurch einer Leiste „Jederzeit möglich" (Dauerangebote,
+ *            siehe src/domain/feed-mix.ts)
  *
- * ## Was hier NICHT mehr steht – und warum
+ * ## „Für dich" ist eine Vorschlags-Seite
  *
- * Vorher stapelten sich hier Upgrade-Feld, Maskottchen-Kopf, Fortschritts-Karte,
- * Punkte-Karte, Story-Leiste, Kategorie-Spalten und fünf Regale – die erste
- * Aktivität lag unter dem sichtbaren Bereich. Ein Feed beantwortet genau EINE
- * Frage: „Was kann ich machen?". Alles andere ist entweder ausgeblendet (siehe
- * src/constants/features.ts) oder hat einen eigenen Ort bekommen: Erstellen ist
- * der ＋-Tab, „Meine Aktivitäten" und Gemerktes liegen im Profil.
+ * Die Reihenfolge kommt aus `rankActivities` (eigene Interessen, Nähe, bald,
+ * Verlauf). Neu ist, dass der Feed das auch SAGT: „Für dich · Passt zu Sport"
+ * steht über jedem Beitrag, der wegen eines Interesses oben steht. Ein
+ * Vorschlag, dessen Grund man nicht kennt, wirkt zufällig; einer mit Grund wirkt
+ * wie ein Tipp von jemandem, der einen kennt.
+ *
+ * ## Die Lupe öffnet die Suche
+ *
+ * Vorher klappte sie hier eine Filterleiste auf – und Leute fand man nur im
+ * Freunde-Tab. Jetzt öffnet sie `/search` (Personen UND Aktivitäten, mit
+ * Verlauf). Die Filter stehen als erste Kachel in der Kategorie-Reihe.
  */
 
 type FeedTab = 'for-you' | 'nearby' | 'today';
@@ -70,10 +91,13 @@ export default function HomeScreen() {
 
   const [tab, setTab] = useState<FeedTab>('for-you');
   const [filter, setFilter] = useState<ActivityFilter>(EMPTY_FILTER);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
 
   const [selected, setSelected] = useState<Activity | null>(null);
+  const [focusComments, setFocusComments] = useState(false);
   const [sharing, setSharing] = useState<Activity | null>(null);
+  const [menuFor, setMenuFor] = useState<Activity | null>(null);
+  const [reporting, setReporting] = useState<Activity | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
   const [now, setNow] = useState(() => new Date());
@@ -142,7 +166,7 @@ export default function HomeScreen() {
    * noch (dann steht „Läuft gerade" auf dem Bild). Drei Stunden nach Beginn gilt
    * ein Event als vorbei; genau diese Grenze kennt auch `urgencyFor`.
    */
-  const feed = useMemo(() => {
+  const feed = useMemo<FeedItem<Activity>[]>(() => {
     const cutoff = now.getTime() - 3 * 60 * 60 * 1000;
     const upcoming = activities.filter((a) => {
       if (a.is_permanent) return true;
@@ -150,29 +174,64 @@ export default function HomeScreen() {
       return !Number.isFinite(at) || at >= cutoff;
     });
 
-    const windowed: ActivityFilter =
-      tab === 'today' ? { ...filter, when: 'today' } : filter;
+    const windowed: ActivityFilter = tab === 'today' ? { ...filter, when: 'today' } : filter;
     const matching = filterActivities(upcoming, windowed, { now, distanceById });
+    const asPosts = (list: Activity[]): FeedItem<Activity>[] =>
+      list.map((activity) => ({ kind: 'post', key: `post-${activity.id}`, activity }));
 
     if (tab === 'nearby') {
-      return matching
-        .filter((a) => nearbyIds.has(a.id))
-        .sort((a, b) => (distanceById.get(a.id) ?? Infinity) - (distanceById.get(b.id) ?? Infinity));
+      return asPosts(
+        matching
+          .filter((a) => nearbyIds.has(a.id))
+          .sort((a, b) => (distanceById.get(a.id) ?? Infinity) - (distanceById.get(b.id) ?? Infinity)),
+      );
     }
     if (tab === 'today') {
-      return [...matching].sort((a, b) => Date.parse(a.starts_at ?? '') - Date.parse(b.starts_at ?? ''));
+      return asPosts(
+        matching
+          .filter((a) => !a.is_permanent)
+          .sort((a, b) => Date.parse(a.starts_at ?? '') - Date.parse(b.starts_at ?? '')),
+      );
     }
-    return rankActivities(matching, profile, { now, distanceById });
+    // Für dich: nach Relevanz, Dauerangebote eingestreut statt oben gestapelt.
+    return mixFeed(rankActivities(matching, profile, { now, distanceById }));
   }, [activities, filter, tab, now, distanceById, nearbyIds, profile]);
+
+  const postCount = useMemo(() => feed.filter((i) => i.kind === 'post').length, [feed]);
 
   const replaceActivity = useCallback((updated: Activity) => {
     setActivities((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
     setSelected((prev) => (prev && prev.id === updated.id ? updated : prev));
   }, []);
 
+  const removeFromFeed = useCallback((id: number) => {
+    setActivities((prev) => prev.filter((a) => a.id !== id));
+    setSelected((prev) => (prev && prev.id === id ? null : prev));
+  }, []);
+
+  const open = useCallback((activity: Activity) => {
+    setFocusComments(false);
+    setSelected(activity);
+  }, []);
+
+  const openComments = useCallback((activity: Activity) => {
+    feedback.tapped();
+    setFocusComments(true);
+    setSelected(activity);
+  }, []);
+
   const toggleJoin = useCallback(
     async (activity: Activity) => {
       if (!token) return;
+      if (activity.is_joined) {
+        const ok = await confirmAction(
+          'Nicht mehr dabei sein?',
+          'Dein Platz wird frei, und den Event-Chat siehst du danach nicht mehr.',
+          'Austreten',
+          true,
+        );
+        if (!ok) return;
+      }
       setBusyId(activity.id);
       try {
         const { data } = activity.is_joined
@@ -209,6 +268,48 @@ export default function HomeScreen() {
     [token, replaceActivity],
   );
 
+  const toggleLike = useCallback(
+    async (activity: Activity) => {
+      if (!token) return;
+      // Gleiches Prinzip wie beim Merken: sofort umspringen, dann bestätigen
+      // (siehe src/domain/activity-social.ts).
+      replaceActivity(toggledLike(activity));
+      try {
+        const { data } = activity.liked_by_me
+          ? await api.unlikeActivity(token, activity.id)
+          : await api.likeActivity(token, activity.id);
+        replaceActivity(data);
+      } catch {
+        replaceActivity(activity);
+      }
+    },
+    [token, replaceActivity],
+  );
+
+  const deleteActivity = useCallback(
+    async (activity: Activity) => {
+      if (!token) return;
+      const own = activity.host?.id === user?.id;
+      const ok = await confirmAction(
+        'Aktivität löschen',
+        own
+          ? `„${activity.title}" wirklich löschen? Alle, die dabei sind, verlieren ihren Platz.`
+          : `„${activity.title}" von ${activity.host?.name ?? 'dieser Person'} als Admin löschen? Das lässt sich nicht rückgängig machen.`,
+        'Löschen',
+        true,
+      );
+      if (!ok) return;
+      try {
+        await api.deleteActivity(token, activity.id);
+        feedback.left();
+        removeFromFeed(activity.id);
+      } catch (e) {
+        await notifyUser('Löschen fehlgeschlagen', e instanceof ApiError ? e.firstError() : 'Bitte versuch es noch mal.');
+      }
+    },
+    [token, user?.id, removeFromFeed],
+  );
+
   const openChat = useCallback(
     (activity: Activity) => {
       const own = activity.host?.id === user?.id;
@@ -242,23 +343,60 @@ export default function HomeScreen() {
     }));
   }, []);
 
+  /** Die Optionen hinter „…" am Beitrag. Löschen: eigene – und als Admin alle. */
+  const menuOptions = useMemo<SheetOption[]>(() => {
+    const a = menuFor;
+    if (!a) return [];
+    const own = a.host?.id === user?.id;
+    const options: SheetOption[] = [
+      { key: 'open', label: 'Details ansehen', icon: 'info', onPress: () => open(a) },
+      { key: 'share', label: 'Teilen', icon: 'share', onPress: () => setSharing(a) },
+      {
+        key: 'save',
+        label: a.is_saved ? 'Nicht mehr merken' : 'Merken',
+        icon: a.is_saved ? 'bookmark-filled' : 'bookmark',
+        onPress: () => toggleSave(a),
+      },
+    ];
+    if (a.host?.username && !own) {
+      options.push({ key: 'host', label: `Profil von ${a.host.name}`, icon: 'user', onPress: () => openHost(a) });
+    }
+    if (!own) options.push({ key: 'report', label: 'Melden', icon: 'flag', destructive: true, onPress: () => setReporting(a) });
+    if (own || user?.is_admin) {
+      options.push({
+        key: 'delete',
+        label: own ? 'Aktivität löschen' : 'Als Admin löschen',
+        icon: 'trash',
+        destructive: true,
+        onPress: () => deleteActivity(a),
+      });
+    }
+    return options;
+  }, [menuFor, user?.id, user?.is_admin, open, toggleSave, openHost, deleteActivity]);
+
+  const reasonFor = useCallback(
+    (activity: Activity) => (tab === 'for-you' && !activity.is_permanent ? explainMatch(activity, profile) : null),
+    [tab, profile],
+  );
+
   const chatBadge = unreadBadge(unreadChats);
+  const greeting = greetingLine(now, firstName(user?.name));
+  const filterCount = activeFilterCount(filter);
 
   const header = (
     <View>
       <View style={[styles.topBar, { paddingTop: insets.top + Spacing.one }]}>
         <BrandLogo size="small" />
         <View style={styles.topIcons}>
-          <HeaderButton
-            icon={searchOpen ? 'close' : 'search'}
-            label={searchOpen ? 'Suche schließen' : 'Suchen und filtern'}
-            active={searchOpen || isFilterActive(filter)}
+          <IconButton
+            icon="search"
+            label="Suchen: Leute und Aktivitäten"
             onPress={() => {
-              if (searchOpen) setFilter(EMPTY_FILTER);
-              setSearchOpen((v) => !v);
+              feedback.tapped();
+              router.push('/search');
             }}
           />
-          <HeaderButton
+          <IconButton
             icon="send"
             label={chatBadge ? `Chats, ${chatBadge} ungelesen` : 'Chats'}
             badge={chatBadge}
@@ -287,25 +425,57 @@ export default function HomeScreen() {
                 ]}>
                 {t.label}
               </Text>
-              <View style={[styles.tabLine, { backgroundColor: active ? colors.text : 'transparent' }]} />
+              <View style={[styles.tabLine, { backgroundColor: active ? colors.tint : 'transparent' }]} />
             </Pressable>
           );
         })}
       </View>
 
-      {searchOpen ? (
+      {tab === 'for-you' && !isFilterActive(filter) ? (
+        <View style={styles.greeting}>
+          <Icon name={greeting.icon} size={16} color={colors.tint} />
+          <Text style={[styles.greetingText, { color: colors.text }]} numberOfLines={1}>
+            {greeting.text} – das passt gerade zu dir
+          </Text>
+        </View>
+      ) : null}
+
+      {interests.length > 0 ? (
+        <View style={styles.strip}>
+          <CategoryStrip
+            interests={interests}
+            selectedIds={filter.interestIds}
+            onToggle={toggleCategory}
+            onOpenFilter={() => {
+              feedback.tapped();
+              setFilterOpen((v) => !v);
+            }}
+            filterCount={filterCount}
+          />
+        </View>
+      ) : null}
+
+      {filterOpen ? (
         <View style={styles.filter}>
           <ActivityFilterBar
             filter={filter}
             onChange={setFilter}
             interests={interests}
-            resultCount={feed.length}
+            resultCount={postCount}
             distanceAvailable={hasLocation}
           />
-        </View>
-      ) : interests.length > 0 ? (
-        <View style={styles.strip}>
-          <CategoryStrip interests={interests} selectedIds={filter.interestIds} onToggle={toggleCategory} />
+          <Pressable
+            onPress={() => {
+              setFilter(EMPTY_FILTER);
+              setFilterOpen(false);
+            }}
+            accessibilityRole="button"
+            hitSlop={6}
+            style={styles.filterClose}>
+            <Text style={[styles.filterCloseText, { color: colors.tint }]}>
+              {isFilterActive(filter) ? 'Filter zurücksetzen' : 'Filter schließen'}
+            </Text>
+          </Pressable>
         </View>
       ) : null}
     </View>
@@ -315,27 +485,37 @@ export default function HomeScreen() {
     <HomeBackground>
       <FlatList
         data={feed}
-        keyExtractor={(a) => String(a.id)}
+        keyExtractor={(item) => item.key}
         ListHeaderComponent={header}
         contentContainerStyle={styles.list}
         style={styles.flex}
-        renderItem={({ item }) => (
-          <View style={styles.column}>
-            <ActivityPost
-              activity={item}
-              now={now}
-              distanceKm={distanceById.get(item.id) ?? null}
-              isOwn={item.host?.id === user?.id}
-              busy={busyId === item.id}
-              onOpen={setSelected}
-              onToggleJoin={toggleJoin}
-              onToggleSave={toggleSave}
-              onShare={setSharing}
-              onChat={openChat}
-              onOpenHost={item.host?.username ? openHost : undefined}
-            />
-          </View>
-        )}
+        renderItem={({ item }) =>
+          item.kind === 'evergreen' ? (
+            <View style={styles.column}>
+              <EvergreenRail activities={item.activities} distanceById={distanceById} onOpen={open} />
+            </View>
+          ) : (
+            <View style={styles.column}>
+              <ActivityPost
+                activity={item.activity}
+                now={now}
+                distanceKm={distanceById.get(item.activity.id) ?? null}
+                isOwn={item.activity.host?.id === user?.id}
+                busy={busyId === item.activity.id}
+                reason={reasonFor(item.activity)}
+                onOpen={open}
+                onOpenComments={openComments}
+                onToggleJoin={toggleJoin}
+                onToggleSave={toggleSave}
+                onToggleLike={toggleLike}
+                onShare={setSharing}
+                onChat={openChat}
+                onMore={setMenuFor}
+                onOpenHost={item.activity.host?.username ? openHost : undefined}
+              />
+            </View>
+          )
+        }
         ListEmptyComponent={
           loading ? null : error ? (
             <View style={styles.column}>
@@ -364,41 +544,22 @@ export default function HomeScreen() {
         activity={selected}
         onClose={() => setSelected(null)}
         onChanged={replaceActivity}
+        onDeleted={removeFromFeed}
+        focusComments={focusComments}
         distanceKm={selected ? distanceById.get(selected.id) ?? null : null}
       />
+      <OptionsSheet
+        visible={menuFor !== null}
+        title={menuFor?.title}
+        options={menuOptions}
+        onClose={() => setMenuFor(null)}
+      />
       <ShareSheet activity={sharing} onClose={() => setSharing(null)} />
+      <ReportSheet
+        target={reporting ? { type: 'activity', id: reporting.id, label: reporting.title } : null}
+        onClose={() => setReporting(null)}
+      />
     </HomeBackground>
-  );
-}
-
-function HeaderButton({
-  icon,
-  label,
-  badge,
-  active,
-  onPress,
-}: {
-  icon: 'search' | 'close' | 'send';
-  label: string;
-  badge?: string | null;
-  active?: boolean;
-  onPress: () => void;
-}) {
-  const colors = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      style={({ pressed }) => [styles.headerButton, pressed && { opacity: 0.6 }]}>
-      <Icon name={icon} size={26} color={active ? colors.tint : colors.text} />
-      {badge ? (
-        <View style={[styles.badge, { backgroundColor: colors.tint, borderColor: colors.background }]}>
-          <Text style={styles.badgeText}>{badge}</Text>
-        </View>
-      ) : null}
-    </Pressable>
   );
 }
 
@@ -410,26 +571,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.one,
     width: '100%',
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
   },
-  topIcons: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingRight: Spacing.two },
-  headerButton: { padding: 2 },
-  badge: {
-    position: 'absolute',
-    top: -6,
-    right: -8,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2,
-    paddingHorizontal: 3,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badgeText: { color: '#ffffff', fontSize: 10, fontFamily: FontFamily.bold },
+  topIcons: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   tabs: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -438,7 +586,27 @@ const styles = StyleSheet.create({
   },
   tab: { alignItems: 'center', paddingTop: Spacing.two, gap: Spacing.two },
   tabLabel: { fontSize: 15 },
-  tabLine: { height: 2, width: 28, borderRadius: 1 },
-  strip: { paddingVertical: Spacing.two },
-  filter: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, maxWidth: 620, width: '100%', alignSelf: 'center' },
+  tabLine: { height: 3, width: 28, borderRadius: 2 },
+  greeting: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.three,
+    width: '100%',
+    maxWidth: 620,
+    alignSelf: 'center',
+  },
+  greetingText: { fontFamily: FontFamily.semibold, fontSize: 14, flexShrink: 1 },
+  strip: { paddingVertical: Spacing.three },
+  filter: {
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.three,
+    maxWidth: 620,
+    width: '100%',
+    alignSelf: 'center',
+    gap: Spacing.two,
+  },
+  filterClose: { alignSelf: 'center', paddingVertical: Spacing.one },
+  filterCloseText: { fontFamily: FontFamily.semibold, fontSize: 14 },
 });

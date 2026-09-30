@@ -73,11 +73,12 @@ export default function CreateActivityScreen() {
   /** Events erstellen gibt es ab dem Creator-Konto (siehe src/domain/account.ts). */
   const canCreate = canCreateActivities(user);
 
-  // Schnellstart aus dem ＋-Tab: Die gewählte Kategorie steht schon drin.
-  const params = useLocalSearchParams<{ interest?: string }>();
+  // Schnellstart aus dem ＋-Tab: Kategorie und (bei einer Schnell-Idee) Titel
+  // stehen schon drin – beides bleibt änderbar.
+  const params = useLocalSearchParams<{ interest?: string; title?: string }>();
   const presetInterest = Number(params.interest) || null;
 
-  const [title, setTitle] = useState('');
+  const [title, setTitle] = useState(typeof params.title === 'string' ? params.title : '');
   const [description, setDescription] = useState('');
   const [place, setPlace] = useState(''); // Ort/Stadt
   const [street, setStreet] = useState(''); // Straße & Hausnummer

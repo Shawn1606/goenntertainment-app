@@ -434,6 +434,40 @@ export async function ensureSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  // Gefaellt-mir an einem Event, siehe schema.sql. Gleicher Aufbau wie
+  // `post_likes`: eine Zeile pro Person und Event.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS activity_likes (
+      activity_id BIGINT UNSIGNED NOT NULL,
+      user_id     BIGINT UNSIGNED NOT NULL,
+      created_at  DATETIME        NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (activity_id, user_id),
+      KEY activity_likes_user_idx (user_id),
+      CONSTRAINT activity_likes_activity_fk
+        FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+      CONSTRAINT activity_likes_user_fk
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  // Kommentare an einem Event, siehe schema.sql. Gleicher Aufbau wie `post_comments`.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS activity_comments (
+      id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      activity_id BIGINT UNSIGNED NOT NULL,
+      user_id     BIGINT UNSIGNED NOT NULL,
+      body        VARCHAR(500)    NOT NULL,
+      created_at  DATETIME        NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY activity_comments_activity_idx (activity_id, id),
+      KEY activity_comments_user_idx (user_id),
+      CONSTRAINT activity_comments_activity_fk
+        FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+      CONSTRAINT activity_comments_user_fk
+        FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   // Folgen: EINSEITIG und damit etwas anderes als eine Freundschaft.
   //
   // Freundschaft ist ein Vertrag zu zweit (anfragen, annehmen) und schaltet

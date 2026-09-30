@@ -1,111 +1,238 @@
-import { NativeTabs } from 'expo-router/unstable-native-tabs';
+import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Tabs, TabList, TabSlot, TabTrigger, type TabListProps, type TabTriggerSlotProps } from 'expo-router/ui';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Colors } from '@/constants/theme';
-import { useResolvedScheme } from '@/lib/theme-preference';
+import { initialsOf } from '@/components/story-avatar';
+import { Icon } from '@/components/ui/icon';
+import { BrandGradient, FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
+import type { UiIconName } from '@/domain/ui-icon';
+import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/lib/auth-context';
+import * as feedback from '@/lib/feedback';
 
 /**
  * Untere Leiste im Instagram-/TikTok-Muster:
  *
- *   Home · Karte · ＋ Erstellen · Freunde · Profil
+ *   Home · Karte · ＋ Erstellen · Freunde · (dein Profilbild)
+ *
+ * ## Warum eine eigene Leiste statt der nativen
+ *
+ * Rechts außen steht das eigene Profilbild – rund, in Farbe, mit Ring, wenn der
+ * Tab aktiv ist. Genau das kann die native Leiste nicht: iOS färbt jedes Bild
+ * darin als Schablone einfarbig ein, Android ebenso, und rund zuschneiden kann
+ * keine von beiden. Ein Foto würde dort zum grauen Quadrat. Instagram und TikTok
+ * zeichnen ihre Leiste aus demselben Grund selbst.
+ *
+ * Nebeneffekt, der ohnehin richtig ist: iOS, Android und Web sehen jetzt gleich
+ * aus – vorher gab es für das Web eine zweite, nachgebaute Leiste.
  *
  * ## Warum genau diese fünf
  *
- * Das ist die Reihenfolge, die man aus Instagram und TikTok kennt – und genau
- * deshalb braucht sie keine Erklärung: Links das Stöbern, in der Mitte das
- * Erstellen, rechts außen das eigene Profil. Wer eine der beiden Apps benutzt,
- * findet sich ohne Nachdenken zurecht.
- *
- * - **Home** ist der Feed mit den Aktivitäten.
- * - **Karte** zeigt dieselben Aktivitäten nach Ort.
- * - **＋** steht in der Mitte, weil Erstellen der Kern ist: Ohne neue Aktivitäten
- *   ist die App leer. Vorher war der Knopf ein schwebender Kreis irgendwo auf der
- *   Startseite und nur für manche Kontostufen da.
- * - **Freunde** bündelt Leute, Gruppen und Chats.
- * - **Profil** ist das eigene Profil mit „Erstellt / Dabei / Gemerkt". Dort hängen
- *   auch die Einstellungen (Zahnrad oben rechts), wie bei Instagram. Die früheren
- *   Tabs „Aktivitäten" und „Einstellungen" sind darin aufgegangen.
- *
- * ## Symbole
- *
- * iOS bekommt SF Symbols – die Hausschrift dort, mit Umriss im Ruhezustand und
- * gefüllt, wenn der Tab aktiv ist (genau das Instagram-Verhalten). Android
- * bekommt eigene PNGs aus `scripts/make-tab-icons.mjs`; die Leiste färbt sie über
- * `iconColor`. Beschriftungen bleiben stehen: Sie kosten kaum Platz und nehmen
- * jedes Rätselraten, wofür ein Symbol steht.
- *
- * ## Warum `backBehavior="history"`
- *
- * Diese expo-router-Fassung übergibt dem Router kein `initialRouteName`; als
- * „erster" Tab gilt der zuerst deklarierte. Mit `history` geht die Zurück-Taste
- * auf Android dorthin, wo man herkam – unabhängig von der Reihenfolge.
+ * Links das Stöbern, in der Mitte das Erstellen, rechts außen das eigene Profil –
+ * die Reihenfolge, die man aus Instagram und TikTok kennt, und genau deshalb
+ * braucht sie keine Erklärung. Beschriftungen bleiben stehen: Sie kosten kaum
+ * Platz und nehmen jedes Rätselraten, wofür ein Symbol steht.
  *
  * ## Fünf ist die Grenze
  *
- * Androids untere Leiste fasst höchstens fünf Einträge; ab dem sechsten faltet
- * sie alles Weitere in einen „More"-Tab. Alles Weitere (Chats, Einstellungen,
- * Admin) liegt deshalb als Stack-Route hinter einem Symbol im jeweiligen Kopf.
+ * Mehr Ziele passen auf ein schmales Handy nicht, ohne dass die Treffer zu klein
+ * werden. Alles Weitere (Chats, Einstellungen, Admin) liegt als Stack-Route hinter
+ * einem Knopf im jeweiligen Kopf.
+ *
+ * ## `backBehavior: 'history'`
+ *
+ * Die Zurück-Taste auf Android geht dorthin, wo man herkam – unabhängig davon,
+ * welcher Tab zuerst deklariert ist.
  */
+type TabDef = {
+  name: string;
+  href: '/' | '/map' | '/create' | '/friends' | '/me';
+  label: string;
+  icon: UiIconName;
+};
+
+const TABS: TabDef[] = [
+  { name: 'index', href: '/', label: 'Home', icon: 'home' },
+  { name: 'map', href: '/map', label: 'Karte', icon: 'map' },
+  { name: 'create', href: '/create', label: 'Erstellen', icon: 'plus' },
+  { name: 'friends', href: '/friends', label: 'Freunde', icon: 'users' },
+  { name: 'me', href: '/me', label: 'Profil', icon: 'user' },
+];
+
 export default function AppTabs() {
-  const scheme = useResolvedScheme();
-  const colors = Colors[scheme];
-
   return (
-    <NativeTabs
-      backBehavior="history"
-      backgroundColor={colors.background}
-      tintColor={colors.text}
-      iconColor={{ default: colors.textSecondary, selected: colors.text }}
-      indicatorColor={colors.backgroundElement}
-      labelStyle={{
-        default: { color: colors.textSecondary },
-        selected: { color: colors.text },
-      }}>
-      <NativeTabs.Trigger name="index">
-        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'house', selected: 'house.fill' }}
-          src={require('@/assets/images/tabIcons/home.png')}
-          selectedColor={colors.text}
-        />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="map">
-        <NativeTabs.Trigger.Label>Karte</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'map', selected: 'map.fill' }}
-          src={require('@/assets/images/tabIcons/map.png')}
-          selectedColor={colors.text}
-        />
-      </NativeTabs.Trigger>
-
-      {/* Die Mitte: Erstellen. Das Symbol trägt den Akzent auch im Ruhezustand –
-          es ist die eine Handlung, zu der die Leiste einlädt. */}
-      <NativeTabs.Trigger name="create">
-        <NativeTabs.Trigger.Label>Erstellen</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'plus.app', selected: 'plus.app.fill' }}
-          src={require('@/assets/images/tabIcons/plus.png')}
-          selectedColor={colors.tint}
-        />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="friends">
-        <NativeTabs.Trigger.Label>Freunde</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'person.2', selected: 'person.2.fill' }}
-          src={require('@/assets/images/tabIcons/people.png')}
-          selectedColor={colors.text}
-        />
-      </NativeTabs.Trigger>
-
-      <NativeTabs.Trigger name="me">
-        <NativeTabs.Trigger.Label>Profil</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon
-          sf={{ default: 'person.crop.circle', selected: 'person.crop.circle.fill' }}
-          src={require('@/assets/images/tabIcons/person.png')}
-          selectedColor={colors.text}
-        />
-      </NativeTabs.Trigger>
-    </NativeTabs>
+    <Tabs style={styles.root} options={{ backBehavior: 'history' }}>
+      <TabSlot style={styles.slot} />
+      <TabList asChild>
+        <BottomBar>
+          {TABS.map((tab) => (
+            <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
+              <TabButton tab={tab} />
+            </TabTrigger>
+          ))}
+        </BottomBar>
+      </TabList>
+    </Tabs>
   );
 }
+
+function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & { tab: TabDef }) {
+  const colors = useTheme();
+  const color = isFocused ? colors.text : colors.textSecondary;
+
+  return (
+    <Pressable
+      {...props}
+      onPress={(event) => {
+        if (!isFocused) feedback.selected();
+        onPress?.(event);
+      }}
+      accessibilityRole="tab"
+      accessibilityLabel={tab.label}
+      accessibilityState={{ selected: !!isFocused }}
+      style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
+      <View style={styles.iconSlot}>
+        {tab.name === 'create' ? (
+          <CreateGlyph />
+        ) : tab.name === 'me' ? (
+          <ProfileGlyph focused={!!isFocused} />
+        ) : (
+          <Icon name={tab.icon} size={26} color={color} />
+        )}
+      </View>
+      <Text
+        style={[
+          styles.label,
+          { color, fontFamily: isFocused ? FontFamily.bold : FontFamily.medium },
+        ]}
+        numberOfLines={1}>
+        {tab.label}
+      </Text>
+    </Pressable>
+  );
+}
+
+/**
+ * Das ＋ in der Mitte – als kleine Verlaufs-Kachel.
+ *
+ * Es ist die eine Handlung, zu der die Leiste einlädt, also trägt sie als einzige
+ * Farbe, auch im Ruhezustand. Die Kachel statt eines Kreises ist das TikTok-Zitat:
+ * Man erkennt den Knopf sofort als „hier entsteht etwas".
+ */
+function CreateGlyph() {
+  return (
+    <LinearGradient
+      colors={[...BrandGradient]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.create}>
+      <Icon name="plus" size={20} color="#ffffff" />
+    </LinearGradient>
+  );
+}
+
+/**
+ * Das eigene Profilbild – oder die Initialen, solange es keins gibt.
+ *
+ * Aktiv bekommt es einen Ring in Schriftfarbe, mit etwas Luft dazwischen: So
+ * liest sich „hier bist du gerade", ohne dass das Foto selbst kleiner wird.
+ */
+function ProfileGlyph({ focused }: { focused: boolean }) {
+  const colors = useTheme();
+  const { user } = useAuth();
+  const name = user?.name ?? '';
+
+  return (
+    <View style={[styles.avatarRing, { borderColor: focused ? colors.text : 'transparent' }]}>
+      <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
+        {user?.avatar ? (
+          <Image
+            source={{ uri: user.avatar }}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            cachePolicy="memory-disk"
+            accessible={false}
+          />
+        ) : name ? (
+          <Text style={[styles.initials, { color: colors.text }]}>{initialsOf(name)}</Text>
+        ) : (
+          <Icon name="user" size={16} color={colors.textSecondary} />
+        )}
+      </View>
+    </View>
+  );
+}
+
+function BottomBar(props: TabListProps) {
+  const colors = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      {...props}
+      style={[
+        styles.bar,
+        {
+          backgroundColor: colors.background,
+          borderTopColor: colors.backgroundSelected,
+          paddingBottom: Math.max(insets.bottom, Spacing.two),
+        },
+      ]}>
+      <View style={styles.inner}>{props.children}</View>
+    </View>
+  );
+}
+
+const AVATAR = 26;
+const RING = 2;
+const RING_GAP = 1.5;
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+  slot: { flex: 1 },
+  bar: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.one + 2,
+    alignItems: 'center',
+  },
+  inner: {
+    flexDirection: 'row',
+    width: '100%',
+    maxWidth: MaxContentWidth,
+  },
+  button: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 3,
+    paddingVertical: Spacing.one,
+  },
+  /** Gleiche Höhe für alle Symbole – sonst tanzen die Beschriftungen. */
+  iconSlot: { height: 32, alignItems: 'center', justifyContent: 'center' },
+  pressed: { opacity: 0.6 },
+  label: { fontSize: 11 },
+  create: {
+    width: 42,
+    height: 30,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarRing: {
+    width: AVATAR + (RING + RING_GAP) * 2,
+    height: AVATAR + (RING + RING_GAP) * 2,
+    borderRadius: 999,
+    borderWidth: RING,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatar: {
+    width: AVATAR,
+    height: AVATAR,
+    borderRadius: AVATAR / 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  initials: { fontFamily: FontFamily.bold, fontSize: 11 },
+});

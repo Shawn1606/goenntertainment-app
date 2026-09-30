@@ -108,7 +108,7 @@ export function RewardsCard({ balance, redeemedCount, catalog, onPress }: Reward
                 {`${POINTS_PER_ACTIVITY} Punkte für jede Aktivität, die du erstellst.`}
               </ThemedText>
             </View>
-            <ThemedText style={{ color: surface.textMuted, fontSize: 20 }}>›</ThemedText>
+            <Icon name="chevron-right" size={18} color={surface.textMuted} />
           </View>
 
           {goal ? (

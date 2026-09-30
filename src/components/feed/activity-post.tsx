@@ -1,12 +1,15 @@
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { memo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { ActivityPoster } from '@/components/feed/activity-poster';
 import { StoryAvatar } from '@/components/story-avatar';
-import { CategoryIcon } from '@/components/ui/category-icon';
+import { AvatarStack } from '@/components/ui/avatar-stack';
 import { Icon } from '@/components/ui/icon';
-import { FontFamily, Radius, Spacing } from '@/constants/theme';
+import { IconButton } from '@/components/ui/icon-button';
+import { PressableScale } from '@/components/ui/pressable-scale';
+import { BrandGradient, FontFamily, Radius, Spacing } from '@/constants/theme';
+import { commentsLabel, formatCount, participantsSentence } from '@/domain/activity-social';
 import { formatDistance } from '@/domain/distance';
 import { formatEventWhen } from '@/domain/event-when';
 import { urgencyFor } from '@/domain/urgency';
@@ -14,23 +17,28 @@ import { useTheme } from '@/hooks/use-theme';
 import type { Activity } from '@/lib/api';
 
 /**
- * Eine Aktivität als Beitrag im Feed – gebaut wie ein Instagram-Post.
+ * Eine Aktivität als Beitrag im Feed.
  *
- *   ┌ Kopf:   Bild · Name der Veranstalter:in · wann
- *   ├ Bild:   quadratisch, darauf das Zeit- und Platz-Abzeichen
- *   ├ Aktion: [Mitmachen]  Chat  Teilen            Merken
- *   └ Text:   Titel, Ort mit Entfernung, #Kategorien
+ *   ┌ Kopf:    Bild · Name · „Für dich · Passt zu Sport"            …
+ *   ├ Bild:    4:5 mit abgerundeten Ecken; oben die Lage („in 40 Min"),
+ *   │          unten Datum und Entfernung auf einem Schatten
+ *   ├ Leiste:  Herz 12 · Sprechblase 4 · Teilen            Merken
+ *   ├ Text:    Titel · wann · wo · wer ist dabei · Kommentare
+ *   └ Knopf:   [        Mitmachen        ]  über die ganze Breite
  *
- * ## Warum dieses Muster
+ * ## Warum das Mitmachen jetzt unten über die ganze Breite geht
  *
- * Jede Handlung hat ein festes Symbol an einer festen Stelle – genau wie bei
- * Instagram (Herz, Sprechblase, Papierflieger, Lesezeichen). Man muss nichts
- * suchen und nichts lesen, um zu wissen, wo man tippt. Der eine Knopf mit Text
- * ist „Mitmachen": Er ist die wichtigste Handlung und bekommt als einziger die
- * Akzentfarbe, damit er im Feed sofort auffällt.
+ * Vorher stand es als kleine Pille in der Symbolleiste, zwischen Chat und Teilen –
+ * gleich groß wie ein Symbol, obwohl es die EINE Handlung ist, um die es hier
+ * geht. Jetzt steht es dort, wo der Daumen nach dem Lesen ohnehin landet, mit
+ * genug Fläche, um es nicht zu verfehlen. Die Symbolleiste gehört den Neben-
+ * handlungen, die man von Instagram kennt: Herz, Kommentar, Teilen, Merken.
  *
- * Ein Tipp auf Bild oder Text öffnet das Detail-Fenster mit allem Weiteren
- * (Teilnehmer:innen, Beschreibung, Route).
+ * ## Warum Datum und Ort doppelt stehen
+ *
+ * Auf dem Bild stehen sie als Abzeichen, damit man beim schnellen Scrollen die
+ * Frage „wann?" beantwortet bekommt, ohne anzuhalten. Unten im Text stehen sie
+ * vollständig (Straße, Uhrzeit) für den, der angehalten hat.
  */
 
 type Props = {
@@ -40,32 +48,18 @@ type Props = {
   /** Ist das die eigene Aktivität? Dann gibt es kein „Mitmachen". */
   isOwn: boolean;
   busy?: boolean;
+  /** Warum der Feed das vorschlägt („Passt zu Sport") – nur im „Für dich"-Reiter. */
+  reason?: string | null;
   onOpen: (activity: Activity) => void;
+  onOpenComments: (activity: Activity) => void;
   onToggleJoin: (activity: Activity) => void;
   onToggleSave: (activity: Activity) => void;
+  onToggleLike: (activity: Activity) => void;
   onShare: (activity: Activity) => void;
   onChat: (activity: Activity) => void;
+  onMore: (activity: Activity) => void;
   onOpenHost?: (activity: Activity) => void;
 };
-
-/**
- * Hintergründe für Aktivitäten ohne Foto. Aus der ersten Kategorie gewählt, damit
- * dieselbe Sorte Event immer gleich aussieht – ein Feed aus lauter identischen
- * Verläufen wäre eine Wand.
- */
-const POSTER_GRADIENTS = [
-  ['#fe2c55', '#dd2a7b', '#8134af'],
-  ['#25f4ee', '#3b82f6', '#8134af'],
-  ['#f58529', '#fe2c55', '#dd2a7b'],
-  ['#10b981', '#06b6d4', '#3b82f6'],
-  ['#8134af', '#515bd4', '#25f4ee'],
-  ['#f59e0b', '#f97316', '#fe2c55'],
-] as const;
-
-function posterGradient(activity: Activity) {
-  const seed = activity.interests[0]?.id ?? activity.id;
-  return POSTER_GRADIENTS[Math.abs(seed) % POSTER_GRADIENTS.length];
-}
 
 function ActivityPostImpl({
   activity,
@@ -73,11 +67,15 @@ function ActivityPostImpl({
   distanceKm,
   isOwn,
   busy,
+  reason,
   onOpen,
+  onOpenComments,
   onToggleJoin,
   onToggleSave,
+  onToggleLike,
   onShare,
   onChat,
+  onMore,
   onOpenHost,
 }: Props) {
   const colors = useTheme();
@@ -86,13 +84,32 @@ function ActivityPostImpl({
   const distance = formatDistance(distanceKm ?? null);
   const hostName = activity.host?.name ?? 'Unbekannt';
   const saved = !!activity.is_saved;
+  const liked = !!activity.liked_by_me;
   const joined = activity.is_joined;
   const full = urgency.full && !joined;
+  const likes = activity.likes_count ?? 0;
+  const comments = activity.comments_count ?? 0;
 
-  const badge = urgency.tone === 'live' ? 'Läuft gerade' : urgency.tone === 'past' ? 'Vorbei' : urgency.label;
+  // Oben links nur, was drängt (läuft, gleich, vorbei). „Heute, 18:00" oder
+  // „Morgen" stehen ohnehin unten im Datums-Abzeichen – doppelt wäre Lärm.
+  const timeBadge = activity.is_permanent
+    ? null
+    : urgency.tone === 'live'
+      ? 'Läuft gerade'
+      : urgency.tone === 'past'
+        ? 'Vorbei'
+        : urgency.tone === 'soon'
+          ? urgency.label
+          : null;
+
+  const people = activity.participants.map((p) => ({ id: p.id, name: p.name, avatar: p.avatar_url ?? null }));
+  const who = participantsSentence(
+    activity.participants.map((p) => p.name),
+    activity.participants_count,
+  );
 
   return (
-    <View style={[styles.post, { borderBottomColor: colors.backgroundSelected }]}>
+    <View style={styles.post}>
       {/* Kopf */}
       <View style={styles.head}>
         <Pressable
@@ -101,50 +118,45 @@ function ActivityPostImpl({
           style={styles.hostTap}
           accessibilityRole={onOpenHost ? 'link' : undefined}
           accessibilityLabel={onOpenHost ? `Profil von ${hostName}` : undefined}>
-          <StoryAvatar size={34} avatar={activity.host?.avatar_url} name={hostName} />
+          <StoryAvatar size={38} avatar={activity.host?.avatar_url} name={hostName} />
           <View style={styles.headText}>
             <Text style={[styles.hostName, { color: colors.text }]} numberOfLines={1}>
               {isOwn ? 'Du' : hostName}
             </Text>
-            <Text style={[styles.headSub, { color: colors.textSecondary }]} numberOfLines={1}>
-              {when}
-            </Text>
+            <View style={styles.headSubRow}>
+              {reason ? (
+                <>
+                  <Icon name="sparkles" size={12} color={colors.tint} />
+                  <Text style={[styles.headSub, { color: colors.tint }]} numberOfLines={1}>
+                    Für dich · {reason}
+                  </Text>
+                </>
+              ) : (
+                <Text style={[styles.headSub, { color: colors.textSecondary }]} numberOfLines={1}>
+                  {activity.is_permanent ? 'Dauerangebot · jederzeit' : when}
+                </Text>
+              )}
+            </View>
           </View>
         </Pressable>
+        <IconButton icon="more" label="Weitere Optionen" variant="plain" size={36} onPress={() => onMore(activity)} />
       </View>
 
       {/* Bild */}
       <Pressable
         onPress={() => onOpen(activity)}
         accessibilityRole="button"
-        accessibilityLabel={`${activity.title} öffnen`}>
+        accessibilityLabel={`${activity.title} öffnen`}
+        style={styles.mediaWrap}>
         <View style={[styles.media, { backgroundColor: colors.backgroundElement }]}>
-          {activity.banner_url ? (
-            <Image
-              source={{ uri: activity.banner_url }}
-              style={StyleSheet.absoluteFill}
-              contentFit="cover"
-              cachePolicy="memory-disk"
-              accessible={false}
-            />
-          ) : (
-            <LinearGradient
-              colors={posterGradient(activity)}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={[StyleSheet.absoluteFill, styles.poster]}>
-              <CategoryIcon interest={activity.interests[0]} size={56} color="rgba(255,255,255,0.95)" />
-              <Text style={styles.posterTitle} numberOfLines={3}>
-                {activity.title}
-              </Text>
-            </LinearGradient>
-          )}
+          <ActivityPoster activity={activity} />
 
-          {badge || urgency.seatsLabel ? (
+          {timeBadge || urgency.seatsLabel ? (
             <View style={styles.badges} pointerEvents="none">
-              {badge ? (
+              {timeBadge ? (
                 <View style={[styles.badge, urgency.glow && { backgroundColor: colors.tint }]}>
-                  <Text style={styles.badgeText}>{badge}</Text>
+                  {urgency.tone === 'live' ? <View style={styles.liveDot} /> : null}
+                  <Text style={styles.badgeText}>{timeBadge}</Text>
                 </View>
               ) : null}
               {urgency.seatsLabel ? (
@@ -154,65 +166,59 @@ function ActivityPostImpl({
               ) : null}
             </View>
           ) : null}
+
+          {/* Unten: wann und wie weit – auf einem Schatten, damit es auch über
+              einem hellen Foto lesbar bleibt. */}
+          <LinearGradient
+            colors={['transparent', 'rgba(0,0,0,0.55)']}
+            style={styles.mediaShade}
+            pointerEvents="none">
+            <View style={styles.mediaChip}>
+              <Icon name={activity.is_permanent ? 'sparkles' : 'calendar'} size={13} color="#ffffff" />
+              <Text style={styles.mediaChipText} numberOfLines={1}>
+                {when}
+              </Text>
+            </View>
+            {distance ? (
+              <View style={styles.mediaChip}>
+                <Icon name="map-pin" size={13} color="#ffffff" />
+                <Text style={styles.mediaChipText}>{distance}</Text>
+              </View>
+            ) : null}
+          </LinearGradient>
         </View>
       </Pressable>
 
-      {/* Aktionen */}
+      {/* Symbolleiste */}
       <View style={styles.actions}>
-        {!isOwn ? (
-          <Pressable
-            onPress={() => onToggleJoin(activity)}
-            disabled={busy || full}
-            accessibilityRole="button"
-            accessibilityState={{ selected: joined, disabled: busy || full }}
-            style={({ pressed }) => [
-              styles.joinButton,
-              joined
-                ? { backgroundColor: colors.backgroundElement }
-                : { backgroundColor: full ? colors.backgroundSelected : colors.tint },
-              pressed && styles.pressed,
-            ]}>
-            {joined ? <Icon name="check" size={16} color={colors.text} /> : null}
-            <Text
-              style={[
-                styles.joinLabel,
-                { color: joined ? colors.text : full ? colors.textSecondary : colors.tintText },
-              ]}>
-              {joined ? 'Dabei' : full ? 'Ausgebucht' : 'Mitmachen'}
-            </Text>
-          </Pressable>
-        ) : (
-          <View style={[styles.ownPill, { borderColor: colors.backgroundSelected }]}>
-            <Text style={[styles.ownLabel, { color: colors.textSecondary }]}>Deine Aktivität</Text>
-          </View>
-        )}
-
+        <ActionIcon
+          icon={liked ? 'heart-filled' : 'heart'}
+          color={liked ? colors.tint : colors.text}
+          count={likes}
+          label={liked ? 'Gefällt mir nicht mehr' : 'Gefällt mir'}
+          selected={liked}
+          onPress={() => onToggleLike(activity)}
+        />
         <ActionIcon
           icon="chat"
-          label={joined || isOwn ? 'Chat öffnen' : 'Chat – erst nach dem Mitmachen'}
-          color={joined || isOwn ? colors.text : colors.textSecondary}
-          onPress={() => onChat(activity)}
+          color={colors.text}
+          count={comments}
+          label="Kommentare"
+          onPress={() => onOpenComments(activity)}
         />
-        <ActionIcon icon="send" label="Teilen" color={colors.text} onPress={() => onShare(activity)} />
-
+        <ActionIcon icon="send" color={colors.text} label="Teilen" onPress={() => onShare(activity)} />
         <View style={styles.spacer} />
-
         <ActionIcon
           icon={saved ? 'bookmark-filled' : 'bookmark'}
-          label={saved ? 'Nicht mehr merken' : 'Merken'}
           color={colors.text}
+          label={saved ? 'Nicht mehr merken' : 'Merken'}
+          selected={saved}
           onPress={() => onToggleSave(activity)}
         />
       </View>
 
       {/* Text */}
-      <Pressable onPress={() => onOpen(activity)} style={styles.body}>
-        <Text style={[styles.count, { color: colors.text }]}>
-          {activity.participants_count === 1
-            ? '1 Person dabei'
-            : `${activity.participants_count} Personen dabei`}
-          {urgency.seatsFree != null && !urgency.full ? ` · ${urgency.seatsFree} frei` : ''}
-        </Text>
+      <Pressable onPress={() => onOpen(activity)} style={styles.body} accessibilityRole="button">
         <Text style={[styles.title, { color: colors.text }]} numberOfLines={2}>
           {activity.title}
         </Text>
@@ -223,12 +229,93 @@ function ActivityPostImpl({
             {distance ? ` · ${distance}` : ''}
           </Text>
         </View>
-        {activity.interests.length > 0 ? (
-          <Text style={[styles.tags, { color: colors.tint }]} numberOfLines={1}>
-            {activity.interests.map((i) => `#${i.name.replace(/\s+/g, '')}`).join(' ')}
+        {activity.description ? (
+          <Text style={[styles.description, { color: colors.text }]} numberOfLines={2}>
+            {activity.description}
           </Text>
         ) : null}
+
+        <View style={styles.peopleRow}>
+          <AvatarStack people={people} total={activity.participants_count} size={24} />
+          <Text style={[styles.people, { color: colors.textSecondary }]} numberOfLines={1}>
+            {who ?? 'Noch niemand dabei – sei die:der Erste'}
+            {urgency.seatsFree != null && !urgency.full ? ` · ${urgency.seatsFree} frei` : ''}
+          </Text>
+        </View>
       </Pressable>
+
+      {commentsLabel(comments) ? (
+        <Pressable onPress={() => onOpenComments(activity)} accessibilityRole="button" style={styles.commentsLink}>
+          <Text style={[styles.commentsText, { color: colors.textSecondary }]}>{commentsLabel(comments)}</Text>
+        </Pressable>
+      ) : null}
+
+      {/* Die eine Handlung */}
+      <View style={styles.cta}>
+        {isOwn ? (
+          <PressableScale
+            onPress={() => onChat(activity)}
+            haptic="tap"
+            scaleTo={0.98}
+            accessibilityRole="button"
+            accessibilityLabel="Event-Chat öffnen"
+            style={[styles.ctaButton, { backgroundColor: colors.backgroundElement, borderColor: colors.backgroundSelected }]}>
+            <Icon name="chat" size={18} color={colors.text} />
+            <Text style={[styles.ctaLabel, { color: colors.text }]}>Deine Aktivität · Chat öffnen</Text>
+          </PressableScale>
+        ) : joined ? (
+          <View style={styles.ctaRow}>
+            {/* Die Hülle trägt das `flex`: PressableScale legt `style` auf die
+                innere Fläche, der äußere Druckbereich würde sonst nicht wachsen. */}
+            <View style={styles.flex}>
+              <PressableScale
+                onPress={() => onToggleJoin(activity)}
+                disabled={busy}
+                haptic="tap"
+                scaleTo={0.98}
+                accessibilityRole="button"
+                accessibilityLabel="Du bist dabei – antippen zum Austreten"
+                accessibilityState={{ selected: true, busy: !!busy }}
+                style={[styles.ctaButton, { backgroundColor: colors.backgroundElement, borderColor: colors.backgroundSelected }]}>
+                <Icon name="check" size={18} color={colors.tint} />
+                <Text style={[styles.ctaLabel, { color: colors.text }]}>Du bist dabei</Text>
+              </PressableScale>
+            </View>
+            <PressableScale
+              onPress={() => onChat(activity)}
+              haptic="tap"
+              scaleTo={0.96}
+              accessibilityRole="button"
+              accessibilityLabel="Event-Chat öffnen"
+              style={[styles.ctaButton, styles.ctaSquare, { backgroundColor: colors.backgroundElement, borderColor: colors.backgroundSelected }]}>
+              <Icon name="chat" size={20} color={colors.text} />
+            </PressableScale>
+          </View>
+        ) : full ? (
+          <View style={[styles.ctaButton, { backgroundColor: colors.backgroundSelected, borderColor: 'transparent' }]}>
+            <Text style={[styles.ctaLabel, { color: colors.textSecondary }]}>Ausgebucht</Text>
+          </View>
+        ) : (
+          <PressableScale
+            onPress={() => onToggleJoin(activity)}
+            disabled={busy}
+            haptic="press"
+            scaleTo={0.98}
+            accessibilityRole="button"
+            accessibilityLabel={`Bei ${activity.title} mitmachen`}
+            accessibilityState={{ busy: !!busy }}
+            style={styles.ctaPrimaryWrap}>
+            <LinearGradient
+              colors={[...BrandGradient]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={[styles.ctaButton, styles.ctaPrimary]}>
+              <Icon name="plus" size={18} color="#ffffff" />
+              <Text style={[styles.ctaLabel, { color: '#ffffff' }]}>{busy ? 'Einen Moment …' : 'Mitmachen'}</Text>
+            </LinearGradient>
+          </PressableScale>
+        )}
+      </View>
     </View>
   );
 }
@@ -237,22 +324,31 @@ function ActionIcon({
   icon,
   label,
   color,
+  count,
+  selected,
   onPress,
 }: {
-  icon: 'chat' | 'send' | 'bookmark' | 'bookmark-filled';
+  icon: 'heart' | 'heart-filled' | 'chat' | 'send' | 'bookmark' | 'bookmark-filled';
   label: string;
   color: string;
+  count?: number;
+  selected?: boolean;
   onPress: () => void;
 }) {
+  const colors = useTheme();
   return (
-    <Pressable
+    <PressableScale
       onPress={onPress}
+      haptic="select"
+      scaleTo={0.86}
       hitSlop={8}
       accessibilityRole="button"
-      accessibilityLabel={label}
-      style={({ pressed }) => [styles.actionIcon, pressed && styles.pressed]}>
+      accessibilityLabel={count ? `${label}, ${count}` : label}
+      accessibilityState={{ selected: !!selected }}
+      style={styles.actionIcon}>
       <Icon name={icon} size={26} color={color} />
-    </Pressable>
+      {count ? <Text style={[styles.actionCount, { color: colors.text }]}>{formatCount(count)}</Text> : null}
+    </PressableScale>
   );
 }
 
@@ -260,36 +356,27 @@ export const ActivityPost = memo(ActivityPostImpl);
 
 const styles = StyleSheet.create({
   post: {
-    paddingBottom: Spacing.three,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingBottom: Spacing.four,
   },
   head: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.three,
+    paddingLeft: Spacing.three,
+    paddingRight: Spacing.two,
     paddingVertical: Spacing.two + 2,
   },
-  hostTap: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two + 2, flexShrink: 1 },
-  headText: { flexShrink: 1 },
+  hostTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.two + 2 },
+  headText: { flexShrink: 1, gap: 1 },
+  headSubRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   hostName: { fontFamily: FontFamily.bold, fontSize: 14 },
-  headSub: { fontFamily: FontFamily.regular, fontSize: 12 },
+  headSub: { fontFamily: FontFamily.medium, fontSize: 12, flexShrink: 1 },
+  mediaWrap: { paddingHorizontal: Spacing.two + 2 },
   media: {
     width: '100%',
-    aspectRatio: 1,
+    aspectRatio: 4 / 5,
+    maxHeight: 620,
     overflow: 'hidden',
-  },
-  poster: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: Spacing.five,
-    gap: Spacing.three,
-  },
-  posterTitle: {
-    color: '#ffffff',
-    fontFamily: FontFamily.bold,
-    fontSize: 26,
-    lineHeight: 32,
-    textAlign: 'center',
+    borderRadius: Radius.panel + 2,
   },
   badges: {
     position: 'absolute',
@@ -299,43 +386,74 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     backgroundColor: 'rgba(0,0,0,0.62)',
     borderRadius: Radius.chip,
     paddingHorizontal: Spacing.two + 2,
     paddingVertical: Spacing.one,
   },
+  liveDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#ffffff' },
   badgeText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 12 },
+  mediaShade: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.five,
+    paddingBottom: Spacing.three,
+  },
+  mediaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.28)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.chip,
+    paddingHorizontal: Spacing.two + 2,
+    paddingVertical: 5,
+  },
+  mediaChipText: { color: '#ffffff', fontFamily: FontFamily.semibold, fontSize: 12 },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.three,
+    gap: Spacing.three + 2,
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.two + 2,
   },
-  joinButton: {
+  actionIcon: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 },
+  actionCount: { fontFamily: FontFamily.semibold, fontSize: 14 },
+  spacer: { flex: 1 },
+  body: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two + 2, gap: 5 },
+  title: { fontFamily: FontFamily.bold, fontSize: 17, lineHeight: 22 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  meta: { fontFamily: FontFamily.medium, fontSize: 13, flexShrink: 1 },
+  description: { fontFamily: FontFamily.regular, fontSize: 14, lineHeight: 19 },
+  peopleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, marginTop: 2 },
+  people: { fontFamily: FontFamily.medium, fontSize: 13, flexShrink: 1 },
+  commentsLink: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two },
+  commentsText: { fontFamily: FontFamily.medium, fontSize: 13 },
+  cta: { paddingHorizontal: Spacing.three, paddingTop: Spacing.three },
+  ctaRow: { flexDirection: 'row', gap: Spacing.two },
+  flex: { flex: 1 },
+  ctaButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.one,
-    borderRadius: Radius.field,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    minHeight: 36,
-  },
-  joinLabel: { fontFamily: FontFamily.bold, fontSize: 14 },
-  ownPill: {
+    justifyContent: 'center',
+    gap: Spacing.two,
+    minHeight: 46,
+    borderRadius: Radius.card + 2,
     borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: Radius.field,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
   },
-  ownLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
-  actionIcon: { padding: 2 },
-  spacer: { flex: 1 },
-  pressed: { opacity: 0.6 },
-  body: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two + 2, gap: 3 },
-  count: { fontFamily: FontFamily.bold, fontSize: 13 },
-  title: { fontFamily: FontFamily.bold, fontSize: 16, lineHeight: 21 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  meta: { fontFamily: FontFamily.regular, fontSize: 13, flexShrink: 1 },
-  tags: { fontFamily: FontFamily.medium, fontSize: 13 },
+  ctaSquare: { width: 46, paddingHorizontal: 0 },
+  ctaPrimaryWrap: { borderRadius: Radius.card + 2, overflow: 'hidden' },
+  ctaPrimary: { borderWidth: 0 },
+  ctaLabel: { fontFamily: FontFamily.bold, fontSize: 15 },
 });

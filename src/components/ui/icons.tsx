@@ -1045,3 +1045,40 @@ export function ShieldCheckIcon({ size = 20, color = '#6366f1', ...rest }: IconP
     </Svg>
   );
 }
+
+/** Drei Regler – Filter. */
+export function SlidersIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+        <Circle cx={15} cy={7} r={2} />
+        <Circle cx={9} cy={17} r={2} />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Drei Punkte – weitere Optionen. Gefüllt, damit sie klein noch lesbar sind. */
+export function MoreIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Circle cx={5.5} cy={12} r={1.7} fill={color} />
+      <Circle cx={12} cy={12} r={1.7} fill={color} />
+      <Circle cx={18.5} cy={12} r={1.7} fill={color} />
+    </Svg>
+  );
+}
+
+/** Uhr mit Pfeil zurück – Suchverlauf. */
+export function HistoryIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" />
+        <Path d="M4.5 4.5v3.2h3.2" />
+        <Path d="M12 8v4.2l2.8 1.8" />
+      </Stroke>
+    </Svg>
+  );
+}

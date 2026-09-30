@@ -686,6 +686,39 @@ CREATE TABLE IF NOT EXISTS activity_saves (
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Gefaellt-mir an einem Event. Gleicher Aufbau wie `post_likes`: eine Zeile pro
+-- Person und Event, damit die Zahl „wie vielen gefaellt das" bedeutet und nicht
+-- „wie oft wurde geklickt". Unabhaengig von Teilnahme und Merkliste – man darf
+-- ein Event moegen, ohne hinzugehen.
+CREATE TABLE IF NOT EXISTS activity_likes (
+  activity_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  created_at  DATETIME        NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (activity_id, user_id),
+  KEY activity_likes_user_idx (user_id),
+  CONSTRAINT activity_likes_activity_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+  CONSTRAINT activity_likes_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Kommentare an einem Event. Gleicher Aufbau wie `post_comments`; der Index
+-- (activity_id, id) traegt die Liste „aelteste zuerst" unter einem Event.
+CREATE TABLE IF NOT EXISTS activity_comments (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  activity_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  body        VARCHAR(500)    NOT NULL,
+  created_at  DATETIME        NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY activity_comments_activity_idx (activity_id, id),
+  KEY activity_comments_user_idx (user_id),
+  CONSTRAINT activity_comments_activity_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+  CONSTRAINT activity_comments_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Social-Links auf der Profilseite (Instagram, TikTok, eigene Seite, ...).
 -- Pro Person und Plattform genau einer – daher der eindeutige Schluessel;
 -- zwei Instagram-Links waeren in der Anzeige nicht unterscheidbar. Gespeichert

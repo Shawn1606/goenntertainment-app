@@ -64,7 +64,7 @@ import {
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
-import { goBack } from '@/lib/go-back';
+import { BackButton } from '@/components/ui/icon-button';
 
 /** Abstand zwischen zwei Nachfragen nach neuen Nachrichten. */
 const POLL_MS = 4000;
@@ -255,14 +255,7 @@ export default function ChatScreen() {
       <View style={[styles.frame, { paddingTop: insets.top + Spacing.two }]}>
         {/* Kopfzeile */}
         <View style={styles.header}>
-          <Pressable
-            onPress={goBack}
-            accessibilityRole="button"
-            accessibilityLabel="Zurück"
-            hitSlop={10}
-            style={({ pressed }) => pressed && styles.pressed}>
-            <Icon name="close" size={22} color={surface.textMuted} />
-          </Pressable>
+          <BackButton />
           <View style={styles.headerText}>
             <ThemedText type="smallBold" style={{ color: surface.text }} numberOfLines={1}>
               {title}

@@ -346,5 +346,14 @@ export const Spacing = {
   six: 64,
 } as const;
 
-export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
+/**
+ * Wie weit Inhalt über der unteren Leiste enden muss.
+ *
+ * 0, seit die Leiste eine eigene ist (src/components/app-tabs.tsx): Sie steht im
+ * normalen Fluss UNTER dem Tab-Inhalt und überdeckt nichts mehr. Die native
+ * Leiste lag durchscheinend über dem Inhalt, dafür waren 50/80 px nötig. Der
+ * Wert bleibt als Name stehen, damit die Stellen, die ihn brauchten, auffindbar
+ * sind, falls die Leiste je wieder schwebt.
+ */
+export const BottomTabInset = 0;
 export const MaxContentWidth = 800;

@@ -117,6 +117,11 @@ export const UI_ICON_NAMES = [
   'phone',
   'copy',
   'shield-check',
+  // Suche, Filter, Optionen, Kommentare
+  'sliders',
+  'more',
+  'history',
+  'arrow-up',
 ] as const;
 
 export type UiIconName = (typeof UI_ICON_NAMES)[number];

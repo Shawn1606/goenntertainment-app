@@ -7,12 +7,13 @@ import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { Validator, HttpError, missingIds } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
-import { moderateActivity, fieldErrorsFor, interestNames } from '../moderation.js';
+import { moderateActivity, moderateContent, fieldErrorsFor, interestNames } from '../moderation.js';
 import { abilitiesFor } from '../accounts.js';
 import { accountTiersEnabled, hideImportedSql } from '../features.js';
 import { awardActivityPoints } from '../rewards.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { notifyFollowers } from '../notifications.js';
+import { blockExistsBetween, transformUser } from '../people.js';
 
 const router = Router();
 
@@ -23,6 +24,11 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB, wie Laravel (max:5120 KB)
 });
 
+/** Laenge eines Kommentars – dieselbe Zahl wie die Spalte in schema.sql. */
+const MAX_COMMENT = 500;
+/** So viele Kommentare liefert ein Event hoechstens aus. */
+const COMMENT_LIMIT = 200;
+
 /**
  * Baut die Activity-Antwort exakt wie der Laravel-ActivityController::transform.
  *
@@ -30,6 +36,10 @@ const upload = multer({
  * es keine Eigenschaft des Events ist, sondern eine Aussage ueber die:den
  * Aufrufende:n – wie `is_joined`. Voreinstellung `false`: Aufrufer, die die
  * Merkliste nicht mitgeladen haben, behaupten damit nichts Falsches.
+ *
+ * `social` traegt Gefaellt-mir und Kommentare ({ likesCount, commentsCount,
+ * likedByMe }). Fehlt es, stehen die Zahlen auf 0 bzw. false statt undefined –
+ * die App rechnet mit Zahlen, nicht mit „vielleicht".
  */
 function transform(
   req,
@@ -40,6 +50,7 @@ function transform(
   currentUserId,
   viewsCount = 0,
   saved = false,
+  social = {},
 ) {
   return {
     id: activity.id,
@@ -74,7 +85,14 @@ function transform(
         }
       : null,
     interests: interests.map((i) => ({ id: i.id, name: i.name, icon: i.icon })),
-    participants: participants.map((p) => ({ id: p.id, name: p.name, username: p.username })),
+    // `avatar_url` wie beim Host: fertige Adresse, damit die App die Gesichter
+    // der Teilnehmenden unveraendert in ein <Image> setzen kann.
+    participants: participants.map((p) => ({
+      id: p.id,
+      name: p.name,
+      username: p.username,
+      avatar_url: mediaUrl(req, p.avatar),
+    })),
     participants_count: participants.length,
     is_joined: participants.some((p) => p.id === currentUserId),
     // Beitritts-Zeitpunkt der:des aktuellen Nutzer:in (fuer den Verlauf in „Meine
@@ -87,15 +105,43 @@ function transform(
     // Merkliste: „ich schau mir das noch an". Bewusst getrennt von `is_joined` –
     // Merken ist keine Zusage und belegt keinen Platz (siehe schema.sql).
     is_saved: saved,
+    // Gefaellt-mir und Kommentare, wie bei Beitraegen (routes/profile.js).
+    likes_count: Number(social.likesCount ?? 0),
+    comments_count: Number(social.commentsCount ?? 0),
+    liked_by_me: Boolean(social.likedByMe),
   };
+}
+
+/**
+ * transform() mit allem, was loadRelations fuer dieses Event geladen hat – die
+ * Form, in der jede Route ein Event ausliefert. Einmal ausgeschrieben, damit
+ * ein neues Feld nicht an drei Aufrufstellen nachgetragen werden muss.
+ */
+function transformLoaded(req, activity, rel, currentUserId) {
+  return transform(
+    req,
+    activity,
+    rel.hosts.get(activity.id),
+    rel.interests.get(activity.id) ?? [],
+    rel.participants.get(activity.id) ?? [],
+    currentUserId,
+    rel.views.get(activity.id) ?? 0,
+    rel.saved.has(activity.id),
+    {
+      likesCount: rel.likes.get(activity.id) ?? 0,
+      commentsCount: rel.comments.get(activity.id) ?? 0,
+      likedByMe: rel.liked.has(activity.id),
+    },
+  );
 }
 
 /**
  * Laedt alle Zusatzdaten fuer eine Liste von Activity-IDs (kein N+1).
  *
- * `userId` ist optional und nur fuer die Merkliste da: Ohne ihn kommt ein leeres
- * `saved` zurueck, und `is_saved` ist dann fuer alle false. So bleiben Aufrufer
- * gueltig, die keine Nutzer:in im Blick haben.
+ * `userId` ist optional und fuer alles da, was aus Sicht der:des Aufrufenden
+ * gilt (Merkliste, eigenes Gefaellt-mir, ausgeblendete Kommentare): Ohne ihn
+ * kommen leere `saved`/`liked` zurueck, und `is_saved`/`liked_by_me` sind dann
+ * fuer alle false. So bleiben Aufrufer gueltig, die keine Nutzer:in im Blick haben.
  */
 async function loadRelations(ids, userId = null) {
   if (ids.length === 0) {
@@ -105,6 +151,9 @@ async function loadRelations(ids, userId = null) {
       participants: new Map(),
       views: new Map(),
       saved: new Set(),
+      likes: new Map(),
+      comments: new Map(),
+      liked: new Set(),
     };
   }
   const ph = ids.map(() => '?').join(',');
@@ -136,7 +185,7 @@ async function loadRelations(ids, userId = null) {
     ids,
   );
   const [participantRows] = await pool.query(
-    `SELECT au.activity_id, au.created_at AS joined_at, u.id, u.name, u.username
+    `SELECT au.activity_id, au.created_at AS joined_at, u.id, u.name, u.username, u.avatar
        FROM activity_user au
        JOIN users u ON u.id = au.user_id
       WHERE au.activity_id IN (${ph})`,
@@ -156,34 +205,60 @@ async function loadRelations(ids, userId = null) {
       )
     : [[]];
 
+  const [likeRows] = await pool.query(
+    `SELECT activity_id, COUNT(*) AS c FROM activity_likes
+      WHERE activity_id IN (${ph}) GROUP BY activity_id`,
+    ids,
+  );
+
+  // Kommentare blockierter Konten (in beiden Richtungen) zaehlen nicht mit –
+  // dieselbe Regel wie in GET /:id/comments. Sonst stuende unter dem Event
+  // „3 Kommentare", und die Liste darunter zeigte zwei. Ohne `userId` greift der
+  // NOT EXISTS nie (`= NULL` ist nie wahr), dann zaehlt alles.
+  const [commentRows] = await pool.query(
+    `SELECT c.activity_id, COUNT(*) AS c FROM activity_comments c
+      WHERE c.activity_id IN (${ph})
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks b
+           WHERE (b.blocker_id = c.user_id AND b.blocked_id = ?)
+              OR (b.blocker_id = ? AND b.blocked_id = c.user_id)
+        )
+      GROUP BY c.activity_id`,
+    [...ids, userId, userId],
+  );
+
+  const [likedRows] = userId
+    ? await pool.query(
+        `SELECT activity_id FROM activity_likes WHERE user_id = ? AND activity_id IN (${ph})`,
+        [userId, ...ids],
+      )
+    : [[]];
+
   const interests = new Map(ids.map((id) => [id, []]));
   interestRows.forEach((r) => interests.get(r.activity_id)?.push(r));
   const participants = new Map(ids.map((id) => [id, []]));
   participantRows.forEach((r) => participants.get(r.activity_id)?.push(r));
   const views = new Map(viewRows.map((r) => [r.activity_id, Number(r.c)]));
   const saved = new Set(savedRows.map((r) => r.activity_id));
+  const likes = new Map(likeRows.map((r) => [r.activity_id, Number(r.c)]));
+  const comments = new Map(commentRows.map((r) => [r.activity_id, Number(r.c)]));
+  const liked = new Set(likedRows.map((r) => r.activity_id));
 
-  return { hosts, interests, participants, views, saved };
+  return { hosts, interests, participants, views, saved, likes, comments, liked };
 }
 
-async function respondSingle(req, res, activityId, currentUserId) {
+/** Ein Event fertig in API-Form – oder ein 404. */
+async function loadSingle(req, activityId, currentUserId) {
   const activity = await first('SELECT * FROM activities WHERE id = ?', [activityId]);
   if (!activity) {
     throw new HttpError(404, 'Aktivitaet nicht gefunden.');
   }
   const rel = await loadRelations([activity.id], currentUserId);
-  res.json({
-    data: transform(
-      req,
-      activity,
-      rel.hosts.get(activity.id),
-      rel.interests.get(activity.id) ?? [],
-      rel.participants.get(activity.id) ?? [],
-      currentUserId,
-      rel.views.get(activity.id) ?? 0,
-      rel.saved.has(activity.id),
-    ),
-  });
+  return transformLoaded(req, activity, rel, currentUserId);
+}
+
+async function respondSingle(req, res, activityId, currentUserId) {
+  res.json({ data: await loadSingle(req, activityId, currentUserId) });
 }
 
 /**
@@ -267,18 +342,7 @@ router.get('/', requireAuth, async (req, res, next) => {
     );
     const ids = activities.map((a) => a.id);
     const rel = await loadRelations(ids, req.user.id);
-    const data = activities.map((a) =>
-      transform(
-        req,
-        a,
-        rel.hosts.get(a.id),
-        rel.interests.get(a.id) ?? [],
-        rel.participants.get(a.id) ?? [],
-        req.user.id,
-        rel.views.get(a.id) ?? 0,
-        rel.saved.has(a.id),
-      ),
-    );
+    const data = activities.map((a) => transformLoaded(req, a, rel, req.user.id));
     res.json({ data });
   } catch (err) {
     next(err);
@@ -334,21 +398,10 @@ router.get('/saved', requireAuth, async (req, res, next) => {
       [req.user.id],
     );
     const ids = activities.map((a) => a.id);
+    // `is_saved` ist hier fuer alle true: loadRelations liest die Merkliste
+    // derselben Person, ueber die die Abfrage oben schon verknuepft.
     const rel = await loadRelations(ids, req.user.id);
-    res.json({
-      data: activities.map((a) =>
-        transform(
-          req,
-          a,
-          rel.hosts.get(a.id),
-          rel.interests.get(a.id) ?? [],
-          rel.participants.get(a.id) ?? [],
-          req.user.id,
-          rel.views.get(a.id) ?? 0,
-          true,
-        ),
-      ),
-    });
+    res.json({ data: activities.map((a) => transformLoaded(req, a, rel, req.user.id)) });
   } catch (err) {
     next(err);
   }
@@ -690,6 +743,221 @@ router.delete('/:id/join', requireAuth, async (req, res, next) => {
     // Verlauf: 7-Tage-Frist starten (Eintrag bleibt bis dahin als „verlassen").
     await markHistoryRemoved('user_id = ? AND activity_id = ?', [req.user.id, activity.id]);
     await respondSingle(req, res, activity.id, req.user.id);
+  } catch (err) {
+    next(err);
+  }
+});
+
+/* ------------------------------------------------- Gefaellt mir und Kommentare */
+//
+// Dasselbe Muster wie bei Beitraegen (routes/profile.js). Alle Pfade haben zwei
+// Segmente (/:id/like, /:id/comments, …) und kommen '/history' und '/saved'
+// deshalb nicht in die Quere. Benachrichtigungen gibt es hier bewusst keine:
+// Die Glocke ist in der App gerade ausgeblendet.
+
+/** Das Event zu :id – oder ein 404. Traegt den Host fuer Block- und Rechtepruefung. */
+async function loadActivityOr404(id) {
+  const activity = await first('SELECT id, user_id FROM activities WHERE id = ?', [Number(id) || 0]);
+  if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
+  return activity;
+}
+
+/**
+ * Die Nutzerspalten eines Kommentars.
+ *
+ * Bewusst ausgeschrieben statt `USER_COLUMNS` (people.js): Dort steht `u.id`
+ * vorn, und in einem JOIN mit `activity_comments` traegt `id` schon die
+ * Kommentar-ID – mysql2 behielte still die letzte gleichnamige Spalte.
+ */
+const COMMENT_USER_COLUMNS = 'u.id AS user_id, u.name, u.username, u.avatar, u.account_type';
+
+/**
+ * Ein Kommentar in die API-Form – dieselbe wie unter Beitraegen.
+ *
+ * Loeschen darf: wer ihn geschrieben hat, wer das Event veranstaltet, und ein
+ * Admin. Der Host gehoert dazu, weil der Kommentarbereich unter SEINEM Event
+ * steht – sonst braeuchte es fuer jeden unerwuenschten Kommentar einen Admin.
+ */
+function transformComment(req, row, viewer, hostId) {
+  return {
+    id: row.id,
+    body: row.body,
+    created_at: toIso(row.created_at),
+    can_delete:
+      Boolean(viewer.is_admin) ||
+      Number(row.user_id) === Number(viewer.id) ||
+      Number(hostId) === Number(viewer.id),
+    user: transformUser(req, {
+      id: row.user_id,
+      name: row.name,
+      username: row.username,
+      avatar: row.avatar,
+      account_type: row.account_type,
+    }),
+  };
+}
+
+// POST /api/activities/:id/like  (geschuetzt, idempotent)
+//
+// Der Host darf sein eigenes Event moegen – anders als bei den Aufrufen verfaelscht
+// das keine Statistik, es ist eine sichtbare Geste wie jede andere.
+router.post('/:id/like', requireAuth, async (req, res, next) => {
+  try {
+    const activity = await loadActivityOr404(req.params.id);
+    if (await blockExistsBetween(req.user.id, activity.user_id)) {
+      throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+    }
+
+    await pool.query(
+      `INSERT INTO activity_likes (activity_id, user_id, created_at) VALUES (?, ?, NOW())
+       ON DUPLICATE KEY UPDATE created_at = created_at`,
+      [activity.id, req.user.id],
+    );
+    await respondSingle(req, res, activity.id, req.user.id);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/activities/:id/like  (geschuetzt) – Gefaellt mir zuruecknehmen.
+//
+// Ohne Block-Pruefung, wie bei Beitraegen: Das eigene Gefaellt-mir zurueckzuziehen
+// muss auch dann gehen, wenn man inzwischen blockiert (wurde).
+router.delete('/:id/like', requireAuth, async (req, res, next) => {
+  try {
+    const activity = await loadActivityOr404(req.params.id);
+    await pool.query('DELETE FROM activity_likes WHERE activity_id = ? AND user_id = ?', [
+      activity.id,
+      req.user.id,
+    ]);
+    await respondSingle(req, res, activity.id, req.user.id);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/activities/:id/comments  (geschuetzt) – aelteste zuerst.
+//
+// Kommentare von Konten, die ich blockiert habe oder die mich blockiert haben,
+// fallen raus – dieselbe Regel wie unter Beitraegen.
+router.get('/:id/comments', requireAuth, async (req, res, next) => {
+  try {
+    const activity = await loadActivityOr404(req.params.id);
+    const [rows] = await pool.query(
+      `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
+         FROM activity_comments c
+         JOIN users u ON u.id = c.user_id
+        WHERE c.activity_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM user_blocks b
+             WHERE (b.blocker_id = u.id AND b.blocked_id = ?)
+                OR (b.blocker_id = ? AND b.blocked_id = u.id)
+          )
+        ORDER BY c.id ASC
+        LIMIT ${COMMENT_LIMIT}`,
+      [activity.id, req.user.id, req.user.id],
+    );
+
+    res.json({
+      data: rows.map((row) => transformComment(req, row, req.user, activity.user_id)),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/activities/:id/comments  (geschuetzt)
+//
+// Kommentieren darf jedes Konto, unabhaengig von Stufe und Teilnahme – wie
+// unter Beitraegen. Pruefung in derselben Reihenfolge: Laenge, feste
+// Begriffsliste, dann die KI-Verifizierung.
+router.post('/:id/comments', requireAuth, async (req, res, next) => {
+  try {
+    const activity = await loadActivityOr404(req.params.id);
+    if (await blockExistsBetween(req.user.id, activity.user_id)) {
+      throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+    }
+
+    const body = String(req.body?.body ?? '').trim();
+    const v = new Validator(req.body ?? {});
+    if (!body) v.add('body', 'Schreib etwas, bevor du kommentierst.');
+    else if (body.length > MAX_COMMENT) {
+      v.add('body', `Ein Kommentar fasst hoechstens ${MAX_COMMENT} Zeichen.`);
+    } else rejectBlockedTerms(v, 'body', body, 'text');
+    v.throwIfFails();
+
+    // Gleicher Kontext wie Kommentare unter Beitraegen ('post' = kurzer Text
+    // ohne Titel): Die Regeln sind dieselben, nur der Ort ist ein anderer.
+    const check = await moderateContent({
+      user: req.user,
+      context: 'post',
+      description: body,
+      image: null,
+    });
+    if (!check.allowed) {
+      if (check.timedOut) {
+        return res.status(403).json({
+          message: 'Dein Konto wurde automatisch gesperrt: Der Inhalt war nicht jugendfrei.',
+          ban: { reason: check.banReason, permanent: false, banned_until: check.bannedUntil },
+          moderation: {
+            severity: check.severity,
+            categories: check.categories,
+            fields: check.fields,
+            reason: check.reason,
+          },
+        });
+      }
+      throw new HttpError(
+        422,
+        check.reason ?? 'Dieser Inhalt ist nicht jugendfrei.',
+        fieldErrorsFor(check, { beschreibung: 'body', titel: 'body', bild: 'body' }),
+      );
+    }
+
+    const [result] = await pool.query(
+      'INSERT INTO activity_comments (activity_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())',
+      [activity.id, req.user.id, body],
+    );
+
+    const row = await first(
+      `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
+         FROM activity_comments c JOIN users u ON u.id = c.user_id WHERE c.id = ?`,
+      [result.insertId],
+    );
+
+    res.status(201).json({
+      data: transformComment(req, row, req.user, activity.user_id),
+      activity: await loadSingle(req, activity.id, req.user.id),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /api/activities/:id/comments/:commentId  (geschuetzt)
+// Erlaubt fuer die:den Verfasser:in, den Host des Events und Admins.
+router.delete('/:id/comments/:commentId', requireAuth, async (req, res, next) => {
+  try {
+    const activity = await loadActivityOr404(req.params.id);
+    // Nur Kommentare DIESES Events: Eine fremde Kommentar-ID unter der eigenen
+    // Event-ID darf den Host-Status nicht auf ein anderes Event uebertragen.
+    const comment = await first(
+      'SELECT id, user_id FROM activity_comments WHERE id = ? AND activity_id = ?',
+      [Number(req.params.commentId) || 0, activity.id],
+    );
+    if (!comment) throw new HttpError(404, 'Diesen Kommentar gibt es nicht.');
+
+    const mayDelete =
+      Boolean(req.user.is_admin) ||
+      Number(comment.user_id) === Number(req.user.id) ||
+      Number(activity.user_id) === Number(req.user.id);
+    if (!mayDelete) throw new HttpError(403, 'Das darfst du nicht.');
+
+    await pool.query('DELETE FROM activity_comments WHERE id = ?', [comment.id]);
+    res.json({
+      message: 'Kommentar geloescht.',
+      activity: await loadSingle(req, activity.id, req.user.id),
+    });
   } catch (err) {
     next(err);
   }

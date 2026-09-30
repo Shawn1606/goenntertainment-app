@@ -1384,7 +1384,7 @@ function EditorRow({
             {hint}
           </ThemedText>
         </View>
-        <ThemedText style={{ color: surface.textMuted, fontSize: 20 }}>›</ThemedText>
+        <Icon name="chevron-right" size={18} color={surface.textMuted} />
       </Pressable>
 
       {onRemove ? (

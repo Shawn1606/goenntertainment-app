@@ -33,7 +33,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
 import { GlassCard } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
-import { ChevronLeftIcon } from '@/components/ui/icons';
+import { BackButton } from '@/components/ui/icon-button';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { formatRelativeShort } from '@/domain/date-format';
 import { notificationIcon, notificationTarget } from '@/domain/notification';
@@ -42,7 +42,6 @@ import { useBrandSurface } from '@/hooks/use-theme';
 import { api, type AppNotification } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import * as feedback from '@/lib/feedback';
-import { goBack } from '@/lib/go-back';
 
 export default function NotificationsScreen() {
   const router = useRouter();
@@ -140,18 +139,7 @@ export default function NotificationsScreen() {
         }>
         <View style={styles.header}>
           <View style={styles.headerTop}>
-            <Pressable
-              onPress={goBack}
-              accessibilityRole="button"
-              accessibilityLabel="Zurück"
-              hitSlop={10}
-              style={({ pressed }) => [
-                styles.backButton,
-                { backgroundColor: surface.chipBg, borderColor: surface.chipBorder },
-                pressed && styles.pressed,
-              ]}>
-              <ChevronLeftIcon size={20} color={surface.text} />
-            </Pressable>
+            <BackButton />
             <ThemedText style={styles.title}>Benachrichtigungen</ThemedText>
           </View>
           <ThemedText type="small" style={{ color: surface.textMuted }}>
@@ -253,14 +241,6 @@ const styles = StyleSheet.create({
   },
   header: { gap: Spacing.half, marginBottom: Spacing.two },
   headerTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
-  backButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   title: { flex: 1, fontSize: 26, lineHeight: 33, fontWeight: '800', letterSpacing: -0.5 },
   centered: { textAlign: 'center' },
   row: {

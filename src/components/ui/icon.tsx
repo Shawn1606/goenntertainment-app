@@ -76,6 +76,10 @@ import {
   SendIcon,
   ShareIcon,
   ShieldCheckIcon,
+  SlidersIcon,
+  MoreIcon,
+  HistoryIcon,
+  ArrowUpIcon,
   ShieldIcon,
   SparklesIcon,
   SpeakerIcon,
@@ -192,6 +196,10 @@ const REGISTRY: Record<UiIconName, IconComponent> = {
   phone: PhoneIcon,
   copy: CopyIcon,
   'shield-check': ShieldCheckIcon,
+  sliders: SlidersIcon,
+  more: MoreIcon,
+  history: HistoryIcon,
+  'arrow-up': ArrowUpIcon,
 };
 
 /**

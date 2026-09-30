@@ -45,7 +45,11 @@ export default function MapScreen() {
   const surface = useBrandSurface();
   const insets = useSafeAreaInsets();
   const { token } = useAuth();
-  const { items, loading, error } = useMapActivities(token);
+  const { items: loaded, loading, error } = useMapActivities(token);
+  // Im Detail-Blatt gelöscht (eigene Aktivität oder als Admin): Der Pin
+  // verschwindet sofort – neu geladen wird ohnehin erst beim nächsten Fokus.
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<number>>(() => new Set());
+  const items = useMemo(() => loaded.filter((a) => !removedIds.has(a.id)), [loaded, removedIds]);
 
   // Hinweis-Pillen tragen dasselbe Blau wie die Kategorie-Kacheln – hier in der
   // deckenden Variante, weil sie über den Kartenkacheln liegen.
@@ -305,6 +309,7 @@ export default function MapScreen() {
         activity={selected}
         onClose={() => setSelected(null)}
         onChanged={handleChanged}
+        onDeleted={(id) => setRemovedIds((prev) => new Set(prev).add(id))}
         onRoute={handleRoute}
       />
     </ThemedView>

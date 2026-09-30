@@ -10,6 +10,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 
+import { renderAppHeader } from '@/components/ui/app-header';
 import { AppSettingsProvider } from '@/lib/app-settings';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ThemePreferenceProvider, useResolvedScheme } from '@/lib/theme-preference';
@@ -36,11 +37,14 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
     // vorherigen Screens ein – bei expo-router ist das der Routenname, also stand
     // auf dem Zurück-Knopf „(app)" oder „index". `displayMode: 'default'` hält das
     // Wort sichtbar, statt es bei langen Titeln auf den bloßen Pfeil einzukürzen.
+    // `header`: Jeder Screen, der seinen Kopf einschaltet, bekommt den der App –
+    // runder Zurück-Knopf statt System-Pfeil, überall gleich (app-header.tsx).
     <Stack
       screenOptions={{
         headerShown: false,
         headerBackTitle: 'Zurück',
         headerBackButtonDisplayMode: 'default',
+        header: renderAppHeader,
       }}>
       <Stack.Protected guard={!!token}>
         <Stack.Screen name="(app)" />
@@ -56,6 +60,10 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
             Tabs: Die untere Leiste fasst fünf Ziele und ist voll (siehe
             app-tabs.tsx). Der Einstieg liegt im Freunde-Bereich, wo die Gruppen
             wohnen, und im Event-Popup für den Event-Chat. */}
+        {/* Suche: Personen und Aktivitäten mit Verlauf – hinter der Lupe auf der
+            Startseite und dem Suchfeld im Freunde-Tab. Blendet nur auf, statt
+            hereinzuschieben: Sie legt sich über den Ort, von dem man kam. */}
+        <Stack.Screen name="search" options={{ animation: 'fade' }} />
         <Stack.Screen name="chats" />
         <Stack.Screen name="chat" />
         {/* Die Glocke: was Leute gemacht haben, denen man folgt – und was auf

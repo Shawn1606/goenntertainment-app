@@ -541,7 +541,7 @@ function Row({ entry, surface }: { entry: Entry; surface: Surface }) {
           </ThemedText>
         ) : null}
       </View>
-      <ThemedText style={{ color: surface.textMuted, fontSize: 20 }}>›</ThemedText>
+      <Icon name="chevron-right" size={18} color={surface.textMuted} />
     </Pressable>
   );
 }

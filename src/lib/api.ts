@@ -40,6 +40,28 @@ export type ActivityParticipant = {
   id: number;
   name: string;
   username: string | null;
+  /** Profilbild als fertige Adresse. Ältere Server liefern das Feld nicht. */
+  avatar_url?: string | null;
+};
+
+/**
+ * Ein Kommentar unter einer Aktivität.
+ *
+ * Gleiche Form wie {@link PostComment}: `can_delete` entscheidet der Server
+ * (eigener Kommentar, eigene Aktivität oder Admin) – die App rät nicht selbst.
+ */
+export type ActivityComment = {
+  id: number;
+  body: string;
+  created_at: string | null;
+  can_delete: boolean;
+  user: {
+    id: number;
+    name: string;
+    username: string | null;
+    avatar: string | null;
+    account_type?: AccountType | null;
+  };
 };
 
 export type Activity = {
@@ -83,6 +105,13 @@ export type Activity = {
    * das Feld nicht – dann gilt „nicht gemerkt".
    */
   is_saved?: boolean;
+  /**
+   * Gefällt-mir-Angaben und Kommentare. Optional, weil ältere Server sie nicht
+   * liefern – dann gilt „0" bzw. „nicht geliked".
+   */
+  likes_count?: number;
+  comments_count?: number;
+  liked_by_me?: boolean;
 };
 
 /**
@@ -1143,6 +1172,35 @@ export const api = {
   /** Verlässt ein Event wieder. Liefert die aktualisierte Activity. */
   leaveActivity: (token: string, id: number) =>
     request<{ data: Activity }>(`/activities/${id}/join`, { method: 'DELETE', token }),
+
+  /**
+   * Gefällt mir – setzen bzw. zurücknehmen. Beide Richtungen antworten mit der
+   * vollständigen Aktivität samt neuer Zahl, damit die App nicht selbst zählt.
+   */
+  likeActivity: (token: string, id: number) =>
+    request<{ data: Activity }>(`/activities/${id}/like`, { method: 'POST', token }),
+
+  unlikeActivity: (token: string, id: number) =>
+    request<{ data: Activity }>(`/activities/${id}/like`, { method: 'DELETE', token }),
+
+  /** Kommentare einer Aktivität – älteste zuerst. */
+  activityComments: (token: string, id: number) =>
+    request<{ data: ActivityComment[] }>(`/activities/${id}/comments`, { token }),
+
+  /** Kommentieren. Läuft durch Wortfilter und KI-Prüfung wie Beitrags-Kommentare. */
+  addActivityComment: (token: string, id: number, body: string) =>
+    request<{ data: ActivityComment; activity: Activity }>(`/activities/${id}/comments`, {
+      method: 'POST',
+      body: { body },
+      token,
+    }),
+
+  /** Kommentar löschen – eigener, jeder unter der eigenen Aktivität, oder als Admin. */
+  deleteActivityComment: (token: string, activityId: number, commentId: number) =>
+    request<{ message: string; activity: Activity }>(
+      `/activities/${activityId}/comments/${commentId}`,
+      { method: 'DELETE', token },
+    ),
 
   /**
    * Zählt einen Aufruf des Detail-Popups (pro Person nur einmal, eigene Events

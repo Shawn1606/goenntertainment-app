@@ -10,12 +10,13 @@ import { HomeBackground } from '@/components/home-background';
 import { StoryAvatar } from '@/components/story-avatar';
 import { CategoryIcon } from '@/components/ui/category-icon';
 import { Icon } from '@/components/ui/icon';
+import { IconButton } from '@/components/ui/icon-button';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
 import { type Activity, api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { confirmAction, notifyUser } from '@/lib/confirm';
+import { notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
 import { pickImage } from '@/lib/pick-image';
 
@@ -118,27 +119,12 @@ export default function MeScreen() {
     setSelected((prev) => (prev && prev.id === updated.id ? updated : prev));
   }, []);
 
-  const deleteActivity = useCallback(
-    async (activity: Activity) => {
-      if (!token) return;
-      const ok = await confirmAction(
-        'Aktivität löschen',
-        `„${activity.title}" wirklich löschen? Alle, die dabei sind, verlieren den Platz.`,
-        'Löschen',
-        true,
-      );
-      if (!ok) return;
-      try {
-        await api.deleteActivity(token, activity.id);
-        setSelected(null);
-        setActivities((prev) => prev.filter((a) => a.id !== activity.id));
-        setSaved((prev) => prev.filter((a) => a.id !== activity.id));
-      } catch (e) {
-        await notifyUser('Löschen fehlgeschlagen', e instanceof ApiError ? e.firstError() : 'Bitte versuch es noch mal.');
-      }
-    },
-    [token],
-  );
+  /** Nach dem Löschen im Detail-Blatt (das fragt selbst nach und prüft die Rechte). */
+  const removeActivity = useCallback((id: number) => {
+    setSelected(null);
+    setActivities((prev) => prev.filter((a) => a.id !== id));
+    setSaved((prev) => prev.filter((a) => a.id !== id));
+  }, []);
 
   const changeAvatar = useCallback(async () => {
     if (!token || avatarBusy) return;
@@ -167,8 +153,8 @@ export default function MeScreen() {
           {user.username ? `@${user.username}` : user.name}
         </Text>
         <View style={styles.topIcons}>
-          <TopIcon icon="plus-square" label="Neue Aktivität" onPress={() => router.push('/create-activity')} />
-          <TopIcon icon="menu" label="Einstellungen" onPress={() => router.push('/settings')} />
+          <IconButton icon="plus" label="Neue Aktivität" onPress={() => router.push('/create-activity')} />
+          <IconButton icon="menu" label="Einstellungen" onPress={() => router.push('/settings')} />
         </View>
       </View>
 
@@ -258,25 +244,9 @@ export default function MeScreen() {
         activity={selected}
         onClose={() => setSelected(null)}
         onChanged={replaceActivity}
-        onDelete={
-          selected && (selected.host?.id === user.id || user.is_admin) ? () => deleteActivity(selected) : undefined
-        }
+        onDeleted={removeActivity}
       />
     </HomeBackground>
-  );
-}
-
-function TopIcon({ icon, label, onPress }: { icon: UiIconName; label: string; onPress: () => void }) {
-  const colors = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      style={({ pressed }) => pressed && { opacity: 0.6 }}>
-      <Icon name={icon} size={27} color={colors.text} />
-    </Pressable>
   );
 }
 
@@ -383,7 +353,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   handle: { fontFamily: FontFamily.bold, fontSize: 22, flexShrink: 1 },
-  topIcons: { flexDirection: 'row', gap: Spacing.four, alignItems: 'center' },
+  topIcons: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
   content: { paddingBottom: Spacing.six },
   column: { width: '100%', maxWidth: 620, alignSelf: 'center' },
   header: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.three, gap: Spacing.four },

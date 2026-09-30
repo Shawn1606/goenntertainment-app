@@ -252,7 +252,7 @@ export default function AdminUsersScreen() {
                 ) : null}
               </View>
 
-              <ThemedText style={{ color: surface.accent, fontSize: 20 }}>›</ThemedText>
+              <Icon name="chevron-right" size={18} color={surface.accent} />
               </GlassSurface>
             </Pressable>
           );

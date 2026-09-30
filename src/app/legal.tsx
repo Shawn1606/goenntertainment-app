@@ -41,7 +41,7 @@ import type { UiIconName } from '@/domain/ui-icon';
 import { useBrandSurface } from '@/hooks/use-theme';
 import { notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
-import { goBack } from '@/lib/go-back';
+import { BackButton } from '@/components/ui/icon-button';
 
 /** Symbol je Dokument – dieselbe Sprache wie in den Einstellungen. */
 const ICONS: Record<LegalDocId, UiIconName> = {
@@ -102,9 +102,7 @@ function OverviewView() {
                     {doc.summary}
                   </ThemedText>
                 </View>
-                <ThemedText type="small" style={{ color: surface.textMuted }}>
-                  ›
-                </ThemedText>
+                <Icon name="chevron-right" size={18} color={surface.textMuted} />
               </GlassCard>
             </Pressable>
           </Entrance>
@@ -180,9 +178,7 @@ function DocumentView({ doc }: { doc: LegalDocument }) {
                       {entry.title}
                     </ThemedText>
                   </View>
-                  <ThemedText type="small" style={{ color: surface.textMuted }}>
-                    ›
-                  </ThemedText>
+                  <Icon name="chevron-right" size={18} color={surface.textMuted} />
                 </GlassCard>
               </Pressable>
             ))}
@@ -222,14 +218,7 @@ function Header({ title, subtitle }: { title: string; subtitle: string }) {
 
   return (
     <View style={styles.header}>
-      <Pressable
-        onPress={goBack}
-        accessibilityRole="button"
-        accessibilityLabel="Zurück"
-        hitSlop={10}
-        style={({ pressed }) => pressed && styles.pressed}>
-        <Icon name="close" size={22} color={surface.textMuted} />
-      </Pressable>
+      <BackButton />
       <View style={styles.headerText}>
         <ThemedText style={styles.title}>{title}</ThemedText>
         <ThemedText type="small" style={{ color: surface.textMuted }}>

@@ -17,7 +17,7 @@
 import { useFocusEffect } from 'expo-router';
 import { Image } from 'expo-image';
 import { useCallback, useState } from 'react';
-import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HomeBackground } from '@/components/home-background';
@@ -25,7 +25,6 @@ import { MascotEmpty, MascotError } from '@/components/mascot';
 import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
 import { GlassCard, GlassChip } from '@/components/ui/glass';
-import { Icon } from '@/components/ui/icon';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
 import { formatDay } from '@/domain/date-format';
 import { useBrandSurface, useGlass } from '@/hooks/use-theme';
@@ -33,7 +32,7 @@ import { ApiError, api, type BlockedPerson } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
-import { goBack } from '@/lib/go-back';
+import { BackButton } from '@/components/ui/icon-button';
 
 /** Erste Buchstaben des Namens – Rückfallbild ohne Profilbild. */
 function initialsOf(name: string): string {
@@ -118,14 +117,7 @@ export default function BlockedScreen() {
           />
         }>
         <View style={styles.header}>
-          <Pressable
-            onPress={goBack}
-            accessibilityRole="button"
-            accessibilityLabel="Zurück"
-            hitSlop={10}
-            style={({ pressed }) => pressed && styles.pressed}>
-            <Icon name="close" size={22} color={surface.textMuted} />
-          </Pressable>
+          <BackButton />
           <View style={styles.headerText}>
             <ThemedText style={styles.title}>Blockierte Konten</ThemedText>
             <ThemedText type="small" style={{ color: surface.textMuted }}>

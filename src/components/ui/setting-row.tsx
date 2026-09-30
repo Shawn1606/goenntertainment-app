@@ -137,15 +137,11 @@ export function SettingGroup({
         </View>
         {/* Dasselbe Zeichen wie am Ende einer LinkRow, nur gedreht: aufgeklappt
             zeigt es nach unten. Ein zweites Symbol für „mehr" wäre eine zweite
-            Sprache für dieselbe Sache. */}
-        <ThemedText
-          style={[
-            styles.chevron,
-            { color: surface.textMuted },
-            open && styles.chevronOpen,
-          ]}>
-          ›
-        </ThemedText>
+            Sprache für dieselbe Sache. Gezeichnet statt als Schriftzeichen „›":
+            das saß je nach Schrift schief und wirkte wie ein Platzhalter. */}
+        <View style={open ? styles.chevronOpen : undefined}>
+          <Icon name="chevron-right" size={18} color={surface.textMuted} />
+        </View>
       </Pressable>
 
       {/* Der Inhalt tritt ein, verschwindet aber sofort. Grund wie bei
@@ -285,7 +281,7 @@ export function LinkRow({
           {value}
         </ThemedText>
       ) : onPress ? (
-        <ThemedText style={{ color: surface.textMuted, fontSize: 20 }}>›</ThemedText>
+        <Icon name="chevron-right" size={18} color={surface.textMuted} />
       ) : null}
     </View>
   );
@@ -312,7 +308,6 @@ const styles = StyleSheet.create({
     paddingRight: Spacing.two,
   },
   groupHeadText: { flex: 1, gap: Spacing.two },
-  chevron: { fontSize: 20, lineHeight: 24 },
   chevronOpen: { transform: [{ rotate: '90deg' }] },
   card: { paddingHorizontal: Spacing.three },
   row: {
