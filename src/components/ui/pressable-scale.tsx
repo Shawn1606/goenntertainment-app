@@ -70,14 +70,14 @@ export function PressableScale({
 
           // Bei „Bewegung reduzieren" bleibt das Abdunkeln als Rückmeldung –
           // ganz ohne Reaktion wüsste man nicht, ob der Tipp angekommen ist.
-          scale.value = reduced ? 1 : withSpring(scaleTo, SPRING);
-          dim.value = withTiming(1, { duration: 90 });
+          scale.set(reduced ? 1 : withSpring(scaleTo, SPRING));
+          dim.set(withTiming(1, { duration: 90 }));
         }
         onPressIn?.(event);
       }}
       onPressOut={(event) => {
-        scale.value = withSpring(1, SPRING);
-        dim.value = withTiming(0, { duration: 160 });
+        scale.set(withSpring(1, SPRING));
+        dim.set(withTiming(0, { duration: 160 }));
         onPressOut?.(event);
       }}
       {...rest}>
