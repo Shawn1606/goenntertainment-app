@@ -8,6 +8,8 @@
 import path from 'node:path';
 import express from 'express';
 import { HttpError } from './validate.js';
+import { clientErrorFor } from './client-errors.js';
+import { logError } from './log.js';
 import { internalSecret as internalSecretSetting, trustProxySetting } from './config.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
@@ -23,6 +25,14 @@ import upgradesRouter from './routes/upgrades.js';
 import notificationsRouter from './routes/notifications.js';
 import revenueCatRouter from './routes/revenuecat.js';
 import { internalRouter } from './routes/internal.js';
+
+/** Largest JSON body (F-02). */
+export const JSON_LIMIT = '32kb';
+/** Largest JSON body of the RevenueCat webhook (see the body parsers below). */
+export const WEBHOOK_JSON_LIMIT = '128kb';
+/** Largest urlencoded body and its number of fields (F-02). */
+export const URLENCODED_LIMIT = '16kb';
+export const PARAMETER_LIMIT = 50;
 
 /**
  * Options (tests pass them; the server reads its environment, see config.js):
@@ -82,8 +92,19 @@ export function createApp({ trustProxy = trustProxySetting(), internalSecret = i
     return next();
   });
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  /**
+   * Request bodies (F-02): small limits and flat forms. The largest JSON body the app sends (a
+   * group with its members, the social links) is a few kilobytes. Nothing sends urlencoded bodies
+   * (src/lib/api.ts sends JSON or multipart), so that parser stays small and flat: no nesting
+   * (`extended: false`), at most PARAMETER_LIMIT fields. Multipart forms are bounded per route in
+   * uploads.js. The RevenueCat webhook gets its own, larger JSON limit (mounted first, so the
+   * general parser leaves its body alone): the store's event carries the subscriber's attributes,
+   * and their size is not the app's to choose.
+   * An unreadable or oversized body is answered with 400/413/415 (client-errors.js), not 500.
+   */
+  app.use('/api/webhooks/revenuecat', express.json({ limit: WEBHOOK_JSON_LIMIT }));
+  app.use(express.json({ limit: JSON_LIMIT }));
+  app.use(express.urlencoded({ extended: false, limit: URLENCODED_LIMIT, parameterLimit: PARAMETER_LIMIT }));
 
   // Banner-Bilder oeffentlich ausliefern (wie Laravels /storage)
   app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
@@ -121,22 +142,36 @@ export function createApp({ trustProxy = trustProxySetting(), internalSecret = i
   app.use('/api', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));
 
   // Zentrale Fehlerbehandlung -> immer JSON im Laravel-Format
-  app.use((err, req, res, next) => {
-    if (res.headersSent) {
-      return next(err);
-    }
-    if (err instanceof HttpError) {
-      return res.status(err.status).json({ message: err.message, errors: err.errors });
-    }
-    if (err?.code === 'LIMIT_FILE_SIZE') {
-      return res.status(422).json({
-        message: 'Das Banner-Bild darf hoechstens 5 MB gross sein.',
-        errors: { banner: ['Das Banner-Bild darf hoechstens 5 MB gross sein.'] },
-      });
-    }
-    console.error(err);
-    return res.status(500).json({ message: 'Serverfehler.' });
-  });
+  app.use(handleError);
 
   return app;
+}
+
+/**
+ * The central error handler (exported for test/logging.test.js).
+ *
+ * - HttpError: the route's own status and message.
+ * - A client error from the body parser or multer (client-errors.js): 400/413/415, not logged.
+ * - Anything else: 500, logged through log.js - name, codes and the route pattern, never the
+ *   request body, SQL text or a driver message (F-38).
+ */
+export function handleError(err, req, res, next) {
+  if (res.headersSent) {
+    return next(err);
+  }
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ message: err.message, errors: err.errors });
+  }
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(422).json({
+      message: 'Das Banner-Bild darf hoechstens 5 MB gross sein.',
+      errors: { banner: ['Das Banner-Bild darf hoechstens 5 MB gross sein.'] },
+    });
+  }
+  const client = clientErrorFor(err);
+  if (client) {
+    return res.status(client.status).json({ message: client.message });
+  }
+  logError('request failed', err, req);
+  return res.status(500).json({ message: 'Serverfehler.' });
 }

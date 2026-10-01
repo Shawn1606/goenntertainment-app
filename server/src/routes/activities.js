@@ -14,6 +14,7 @@ import { awardActivityPoints } from '../rewards.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { notifyFollowers } from '../notifications.js';
 import { blockExistsBetween, transformUser } from '../people.js';
+import { logError } from '../log.js';
 
 const router = createRouter();
 
@@ -556,7 +557,7 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     // Nutzer:in einen Fehler fuer etwas, das geklappt hat. Fehlende Punkte holt
     // der Nachtrag beim naechsten Blick auf die Praemien nach (src/rewards.js).
     await awardActivityPoints(req.user.id, result.insertId).catch((err) =>
-      console.error('[rewards] Punkte konnten nicht gebucht werden:', err),
+      logError('[rewards] Punkte konnten nicht gebucht werden', err),
     );
 
     // Follower informieren. Aus demselben Grund wie die Punkte darueber nach dem

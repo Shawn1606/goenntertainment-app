@@ -20,6 +20,7 @@ import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from './db.js';
 import { setBan, recordBanEvidence } from './auth.js';
+import { describeError, logError, logWarn } from './log.js';
 
 // --- Konfiguration (alles per .env uebersteuerbar) ---------------------------
 
@@ -215,7 +216,7 @@ async function createMessage(params) {
       // echter Anfrage-Fehler wiederholt sich unten und wird sichtbar geloggt.
       if ([400, 403, 404].includes(err?.status)) {
         useFallbacks = false;
-        console.warn('[moderation] Server-seitige Fallbacks nicht verfuegbar, weiter ohne:', err?.message);
+        logWarn('[moderation] Server-seitige Fallbacks nicht verfuegbar, weiter ohne', err);
       } else {
         throw err;
       }
@@ -228,7 +229,10 @@ async function createMessage(params) {
  * Ruft die KI auf und liefert
  *   { status: 'classified', youth_safe, severity, categories, fields, reason }
  *   { status: 'refusal' }   – Sicherheits-Klassifikator hat die Pruefung abgelehnt
- *   { status: 'error', error } – Netz/Modell-Problem oder unlesbare Antwort
+ *   { status: 'error', error, logDetail } – Netz/Modell-Problem oder unlesbare Antwort
+ *
+ * `error` goes into the moderation report; `logDetail` is what the server log gets: made by the
+ * code, never the model's reply (which can quote the checked text) - see log.js.
  */
 async function classify({ context, title, description, interests, image }) {
   const blocks = [];
@@ -262,7 +266,7 @@ async function classify({ context, title, description, interests, image }) {
       messages: [{ role: 'user', content: blocks }],
     });
   } catch (err) {
-    return { status: 'error', error: err?.message ?? String(err) };
+    return { status: 'error', error: err?.message ?? String(err), logDetail: describeError(err) };
   }
 
   // Die Sicherheits-Klassifikatoren koennen die Anfrage ablehnen – dann gibt es
@@ -271,7 +275,7 @@ async function classify({ context, title, description, interests, image }) {
     return { status: 'refusal' };
   }
   if (response.stop_reason === 'max_tokens') {
-    return { status: 'error', error: 'Antwort wurde abgeschnitten (max_tokens).' };
+    return { status: 'error', error: 'Antwort wurde abgeschnitten (max_tokens).', logDetail: 'reply cut off (max_tokens)' };
   }
 
   const text = response.content.find((b) => b.type === 'text')?.text ?? '';
@@ -287,7 +291,11 @@ async function classify({ context, title, description, interests, image }) {
       reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 300) : '',
     };
   } catch {
-    return { status: 'error', error: `Antwort war kein gueltiges JSON: ${text.slice(0, 120)}` };
+    return {
+      status: 'error',
+      error: `Antwort war kein gueltiges JSON: ${text.slice(0, 120)}`,
+      logDetail: 'reply was not valid JSON',
+    };
   }
 }
 
@@ -347,7 +355,7 @@ function saveEvidenceImage(image) {
     fs.writeFileSync(path.join(EVIDENCE_DIR, name), image.buffer);
     return `evidence/${name}`;
   } catch (err) {
-    console.error('[moderation] Beweis-Bild konnte nicht gespeichert werden:', err);
+    logError('[moderation] Beweis-Bild konnte nicht gespeichert werden', err);
     return null;
   }
 }
@@ -380,7 +388,7 @@ async function saveReport({ userId, context, decision, snapshot, imagePath, late
     return result.insertId;
   } catch (err) {
     // Ein fehlgeschlagenes Log darf die Moderation nicht kippen.
-    console.error('[moderation] Bericht konnte nicht gespeichert werden:', err);
+    logError('[moderation] Bericht konnte nicht gespeichert werden', err);
     return null;
   }
 }
@@ -423,7 +431,7 @@ export async function moderateContent({
   const decision = decide(result, { isAdmin: Boolean(user?.is_admin) });
 
   if (result.status === 'error') {
-    console.error('[moderation] Pruefung fehlgeschlagen:', result.error);
+    logError('[moderation] Pruefung fehlgeschlagen', result.logDetail ?? 'unknown');
   }
 
   // Beweis-Bild nur aufbewahren, wenn wirklich gesperrt wird.

@@ -10,4 +10,18 @@
  */
 import { Router } from 'express';
 
-export const createRouter = () => Router({ caseSensitive: true, strict: true });
+/**
+ * Remembers where the router is mounted (`req.baseUrl` inside it: the literal mount path from
+ * app.js) for the log line of a failed request (log.js): at the central error handler `req.baseUrl`
+ * is the app's again, and the URL itself is never logged.
+ */
+function rememberMount(req, res, next) {
+  req.routeMount = req.baseUrl;
+  next();
+}
+
+export const createRouter = () => {
+  const router = Router({ caseSensitive: true, strict: true });
+  router.use(rememberMount);
+  return router;
+};

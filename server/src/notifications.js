@@ -29,6 +29,7 @@
 import { pool, toIso } from './db.js';
 import { mediaUrl } from './media.js';
 import { followerIdsOf } from './follows.js';
+import { logError } from './log.js';
 
 /** Sorten, die es gibt. Neue Sorte = Zeile hier und ein Symbol in der App. */
 export const NOTIFICATION_TYPES = ['story', 'activity', 'post', 'like', 'comment', 'follow'];
@@ -95,7 +96,7 @@ export async function notifyFollowers(actor, { type, refId, title, body }) {
     const followers = await followerIdsOf(actor.id);
     return await notifyMany(followers, { actorId: actor.id, type, refId, title, body });
   } catch (err) {
-    console.error('Benachrichtigungen konnten nicht zugestellt werden:', err);
+    logError('Benachrichtigungen konnten nicht zugestellt werden', err);
     return 0;
   }
 }
@@ -105,7 +106,7 @@ export async function notifyQuietly(input) {
   try {
     await notify(input);
   } catch (err) {
-    console.error('Benachrichtigung konnte nicht zugestellt werden:', err);
+    logError('Benachrichtigung konnte nicht zugestellt werden', err);
   }
 }
 
