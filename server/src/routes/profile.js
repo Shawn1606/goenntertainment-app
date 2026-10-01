@@ -150,6 +150,12 @@ async function loadLinks(userId) {
 /** So viele Treffer liefert die Nutzersuche hoechstens. */
 const SEARCH_LIMIT = 30;
 
+/**
+ * Longest search term: a name holds at most 255 characters (users.name in schema.sql), so a
+ * longer term can match nothing. It is answered with no results before any pattern runs (F-02).
+ */
+const MAX_SEARCH_TERM = 255;
+
 // GET /api/users?q=…  (geschuetzt) – Leute suchen (Name oder Benutzername).
 //
 // Gibt es, seit der Freunde-Bereich eine Suche braucht, die zu PERSONEN fuehrt.
@@ -160,7 +166,7 @@ const SEARCH_LIMIT = 30;
 router.get('/users', requireAuth, async (req, res, next) => {
   try {
     const term = String(req.query?.q ?? '').trim();
-    if (term.length < 2) {
+    if (term.length < 2 || term.length > MAX_SEARCH_TERM) {
       return res.json({ data: [] });
     }
 

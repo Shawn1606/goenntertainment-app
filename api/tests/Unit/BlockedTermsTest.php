@@ -105,6 +105,78 @@ class BlockedTermsTest extends TestCase
         self::terms()->find('x', 'bio');
     }
 
+    /* ---------------------------------------------- Input over the maximum (F-02) */
+
+    /** @return array<string, array{0: array}> */
+    public static function lengthFixtures(): array
+    {
+        $data = json_decode((string) file_get_contents(self::shared('blocked-terms.fixtures.json')), true);
+        $cases = [];
+        foreach ($data['length_cases'] ?? [] as $i => $case) {
+            $cases[sprintf('#%d %s x %d (%s)', $i, json_encode($case['unit']), $case['count'], $case['mode'])] = [$case];
+        }
+        // A missing key must not turn the data provider into zero cases (a silent pass).
+        if (count($cases) < 5) {
+            $cases['length_cases missing'] = [['unit' => '', 'count' => 0, 'mode' => 'text', 'blocked' => true]];
+        }
+
+        return $cases;
+    }
+
+    public function test_the_shared_list_carries_max_input_length_2000(): void
+    {
+        $lists = json_decode((string) file_get_contents(self::shared('blocked-terms.json')), true);
+        $this->assertSame(2000, $lists['max_input_length'] ?? null);
+    }
+
+    #[DataProvider('lengthFixtures')]
+    public function test_the_shared_length_cases_like_the_app_and_node(array $case): void
+    {
+        $hit = self::terms()->find(str_repeat($case['unit'], $case['count']), $case['mode']);
+
+        $this->assertSame($case['blocked'], $hit !== null, $case['note'] ?? '');
+        if ($case['blocked']) {
+            $this->assertSame(['term' => '', 'kind' => 'length'], ['term' => $hit['term'], 'kind' => $hit['kind']]);
+        }
+    }
+
+    public function test_fails_closed_on_100000_characters_in_under_500_ms_in_every_mode(): void
+    {
+        $terms = self::terms();
+        foreach (BlockedTerms::MODES as $mode) {
+            $started = hrtime(true);
+            $hit = $terms->find(str_repeat('a', 100_000), $mode);
+            $ms = (hrtime(true) - $started) / 1e6;
+            $this->assertSame('length', $hit['kind'] ?? null, $mode);
+            $this->assertLessThan(500, $ms, "{$mode}: {$ms} ms");
+        }
+    }
+
+    public function test_the_rule_rejects_an_over_long_value_with_the_mode_message(): void
+    {
+        $messages = $this->runRule(new NoBlockedTerms('name', self::terms()), str_repeat('Anna ', 500));
+        $this->assertSame(['Dieser Name ist nicht erlaubt.'], $messages);
+    }
+
+    public function test_a_list_without_a_valid_max_input_length_is_refused(): void
+    {
+        $lists = json_decode((string) file_get_contents(self::shared('blocked-terms.json')), true);
+        foreach ([null, 0, -1, 2.5, '2000'] as $max) {
+            $broken = $lists;
+            if ($max === null) {
+                unset($broken['max_input_length']);
+            } else {
+                $broken['max_input_length'] = $max;
+            }
+            try {
+                BlockedTerms::fromArray($broken);
+                $this->fail('accepted max_input_length '.var_export($max, true));
+            } catch (\RuntimeException $e) {
+                $this->assertStringContainsString('max_input_length', $e->getMessage());
+            }
+        }
+    }
+
     /** @return list<string> */
     private function runRule(NoBlockedTerms $rule, mixed $value): array
     {

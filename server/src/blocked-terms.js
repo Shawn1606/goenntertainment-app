@@ -71,8 +71,48 @@ function loadDefaultLists() {
   const file = process.env.BLOCKED_TERMS_FILE
     ? process.env.BLOCKED_TERMS_FILE
     : new URL('../../shared/blocked-terms.json', import.meta.url);
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  const lists = JSON.parse(fs.readFileSync(file, 'utf8'));
+  maxInputLength(lists); // a list without a valid maximum does not start the server
+  return lists;
 }
+
+/**
+ * The longest input the filter examines (shared/blocked-terms.json `max_input_length`, in code
+ * points). A list without a positive whole number there is unusable: the filter would have no
+ * bound (F-02).
+ */
+function maxInputLength(lists) {
+  const max = lists?.max_input_length;
+  if (!Number.isInteger(max) || max < 1) {
+    throw new TypeError('Liste gesperrter Begriffe: max_input_length fehlt oder ist keine positive ganze Zahl');
+  }
+  return max;
+}
+
+/**
+ * Does `text` have more than `max` Unicode code points? Linear and bounded: a string of at most
+ * `max` UTF-16 units cannot, one of more than 2 * max units must, and in between the code points
+ * are counted, stopping at max + 1. Code points, not UTF-16 units, so that the app (TypeScript)
+ * and Laravel (mb_strlen) draw the line at the same place.
+ */
+export function exceedsMaxInput(text, max) {
+  if (text.length <= max) return false;
+  if (text.length > 2 * max) return true;
+  let count = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) i += 1;
+    }
+    count += 1;
+    if (count > max) return true;
+  }
+  return false;
+}
+
+/** The hit for input over the maximum (fail closed): kind 'length', no term. */
+export const LENGTH_HIT = Object.freeze({ term: '', group: 'max_input_length', kind: 'length' });
 
 export const BLOCKED_TERMS = loadDefaultLists();
 
@@ -370,14 +410,20 @@ function hasUncoveredHit(re, line, allow, spanCache) {
  * @param {string} text
  * @param {object} lists Inhalt von shared/blocked-terms.json
  * @param {'username'|'name'|'text'} mode
- * @returns {{ term: string, group: string, kind: 'substring'|'prefix'|'word' } | null}
- *   Der erste Treffer in Listen-Reihenfolge – oder null.
+ * @returns {{ term: string, group: string, kind: 'substring'|'prefix'|'word'|'length' } | null}
+ *   Der erste Treffer in Listen-Reihenfolge – oder null. Input longer than
+ *   `lists.max_input_length` code points is LENGTH_HIT, before anything else runs (F-02): the
+ *   patterns get slow on very long input, and a route that forgot its own cap must not be able
+ *   to stall the server with it. The same rule, in the same order, in
+ *   src/domain/blocked-terms.ts and api/app/Support/BlockedTerms.php.
  */
 export function findBlockedTerm(text, lists, mode) {
   if (!BLOCKED_TERM_MODES.includes(mode)) {
     throw new TypeError(`Unbekannter Pruefmodus: ${mode}`);
   }
-  if (typeof text !== 'string' || text.trim() === '') return null;
+  if (typeof text !== 'string') return null;
+  if (exceedsMaxInput(text, maxInputLength(lists))) return { ...LENGTH_HIT };
+  if (text.trim() === '') return null;
 
   const compiled = compileBlockedTerms(lists);
   const { chunks, tokens } = analyseText(text, lists);

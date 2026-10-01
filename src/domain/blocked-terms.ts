@@ -31,7 +31,8 @@ export type BlockedTermMode = 'username' | 'name' | 'text';
 
 export const BLOCKED_TERM_MODES: readonly BlockedTermMode[] = ['username', 'name', 'text'];
 
-export type BlockedTermKind = 'substring' | 'prefix' | 'word';
+/** 'length': the input is longer than `max_input_length` (see findBlockedTerm). */
+export type BlockedTermKind = 'substring' | 'prefix' | 'word' | 'length';
 
 export type BlockedTermGroup = {
   id: string;
@@ -44,6 +45,8 @@ export type BlockedTermGroup = {
 
 export type BlockedTermLists = {
   version: number;
+  /** Longest input the filter examines, in code points; longer input is a 'length' hit. */
+  max_input_length: number;
   messages: Record<BlockedTermMode, string>;
   groups: readonly BlockedTermGroup[];
   allow: readonly string[];
@@ -271,7 +274,7 @@ function termTokens(term: string, table: Table): string[] {
   return fold(prepare(term), true, table).match(/[a-z]+|[0-9]+/g) ?? [];
 }
 
-function compileTerm(term: string, kind: BlockedTermKind, table: Table) {
+function compileTerm(term: string, kind: Exclude<BlockedTermKind, 'length'>, table: Table) {
   const tokens = termTokens(term, table);
   if (tokens.length === 0) return null;
   const sequence = tokens.map(runsPattern).join(' ?');
@@ -299,7 +302,7 @@ function compile(lists: BlockedTermLists): Compiled {
     leetAlt: toMap(lists.normalize.leet_alt),
     chars: toMap(lists.normalize.chars),
   };
-  const kinds: BlockedTermKind[] = ['substring', 'prefix', 'word'];
+  const kinds: Exclude<BlockedTermKind, 'length'>[] = ['substring', 'prefix', 'word'];
   const groups = lists.groups.map((group) => {
     const seen = new Set<string>();
     const terms: CompiledTerm[] = [];
@@ -353,9 +356,42 @@ function hasUncoveredHit(
   return false;
 }
 
+/** `max_input_length` of a list; a list without a positive whole number there is unusable. */
+function maxInputLength(lists: BlockedTermLists): number {
+  const max = lists.max_input_length;
+  if (typeof max !== 'number' || !Number.isInteger(max) || max < 1) {
+    throw new TypeError('Liste gesperrter Begriffe: max_input_length fehlt oder ist keine positive ganze Zahl');
+  }
+  return max;
+}
+
+/**
+ * Does `text` have more than `max` Unicode code points? Linear and bounded: at most `max` UTF-16
+ * units cannot, more than 2 * max units must, in between the code points are counted (stopping
+ * at max + 1). Code points, as in server/src/blocked-terms.js and Laravel's mb_strlen.
+ */
+export function exceedsMaxInput(text: string, max: number): boolean {
+  if (text.length <= max) return false;
+  if (text.length > 2 * max) return true;
+  let count = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) i += 1;
+    }
+    count += 1;
+    if (count > max) return true;
+  }
+  return false;
+}
+
 /**
  * Enthaelt `text` einen gesperrten Begriff? Liefert den ersten Treffer in
  * Listen-Reihenfolge – oder null.
+ *
+ * Input longer than `max_input_length` code points is a hit of kind 'length' before anything
+ * else runs (fail closed; same rule and order as the server, see server/src/blocked-terms.js).
  */
 export function findBlockedTerm(
   text: string | null | undefined,
@@ -365,7 +401,9 @@ export function findBlockedTerm(
   if (!BLOCKED_TERM_MODES.includes(mode)) {
     throw new TypeError(`Unbekannter Pruefmodus: ${String(mode)}`);
   }
-  if (typeof text !== 'string' || text.trim() === '') return null;
+  if (typeof text !== 'string') return null;
+  if (exceedsMaxInput(text, maxInputLength(lists))) return { term: '', group: 'max_input_length', kind: 'length' };
+  if (text.trim() === '') return null;
 
   const compiled = compile(lists);
   const { chunks, tokens } = analyseWith(text, compiled.table);

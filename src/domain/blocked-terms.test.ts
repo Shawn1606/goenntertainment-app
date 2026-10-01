@@ -119,9 +119,47 @@ test('ein unbekannter Modus ist ein Programmierfehler, kein „erlaubt"', () => 
 });
 
 test('lange Texte bleiben schnell genug fuer die Eingabe', () => {
-  // 2000 Zeichen = die laengste Beschreibung, die der Server annimmt.
-  const long = 'Wir treffen uns am Samstag im Park, bringt Decken und gute Laune mit. '.repeat(29);
+  // 2000 Zeichen = die laengste Beschreibung, die der Server annimmt. Exactly 2000 now: 29
+  // repetitions were 2030, which is over max_input_length (a 'length' hit).
+  const long = 'Wir treffen uns am Samstag im Park, bringt Decken und gute Laune mit. '.repeat(29).slice(0, 2000);
+  assert.equal(long.length, 2000);
   const started = Date.now();
   assert.equal(findBlockedTerm(long, LISTS, 'text'), null);
   assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+});
+
+/* ------------------------------------------------ Input over the maximum (F-02) */
+
+type LengthCase = { unit: string; count: number; mode: BlockedTermMode; blocked: boolean; note?: string };
+
+test('the shared list carries max_input_length = 2000', () => {
+  assert.equal((LISTS as { max_input_length?: unknown }).max_input_length, 2000);
+});
+
+test('the shared length cases: the same answer as Node and Laravel', () => {
+  const cases = (FIXTURES as unknown as { length_cases?: LengthCase[] }).length_cases;
+  assert.ok(Array.isArray(cases) && cases.length >= 5, 'length_cases missing');
+  for (const c of cases) {
+    const hit = findBlockedTerm(c.unit.repeat(c.count), LISTS, c.mode);
+    const label = `${JSON.stringify(c.unit)} x ${c.count} (${c.mode})${c.note ? ` – ${c.note}` : ''}`;
+    assert.equal(hit !== null, c.blocked, label);
+    if (c.blocked) assert.deepEqual({ term: hit?.term, kind: hit?.kind }, { term: '', kind: 'length' }, label);
+  }
+});
+
+test('the word filter fails closed on 100,000 characters in under 500 ms, in every mode', () => {
+  for (const mode of BLOCKED_TERM_MODES) {
+    const started = performance.now();
+    const hit = findBlockedTerm('a'.repeat(100_000), LISTS, mode);
+    const ms = performance.now() - started;
+    assert.equal(hit?.kind, 'length', mode);
+    assert.ok(ms < 500, `${mode}: ${ms.toFixed(1)} ms`);
+  }
+});
+
+test('a list without a valid max_input_length is refused, never used without a bound', () => {
+  for (const max of [undefined, 0, 2.5]) {
+    const lists = { ...LISTS, max_input_length: max } as unknown as BlockedTermLists;
+    assert.throws(() => findBlockedTerm('Hallo', lists, 'text'), TypeError, String(max));
+  }
 });
