@@ -61,7 +61,7 @@ final class TwoFactor
 
     public const PURPOSE_CONFIRM = 'confirm';
 
-    /** Freigabe an Node fuer DELETE /api/me - siehe server/src/routes/account.js. */
+    /** Freigabe an Node fuer DELETE /api/me - siehe server/src/routes/internal.js. */
     public const PURPOSE_DELETE = 'delete';
 
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
@@ -661,7 +661,7 @@ final class TwoFactor
 
     /**
      * Freigabe fuer Node: „Loeschen ist vollstaendig bestaetigt" - zwei Minuten,
-     * einmal, nur fuer dieses Konto (Einloesen in server/src/routes/account.js).
+     * einmal, nur fuer dieses Konto (Einloesen in server/src/routes/internal.js).
      *
      * Ablauf mit `NOW()` der DATENBANK, nicht mit der Uhr von PHP: Node
      * vergleicht mit `NOW()`, und so reden beide ueber dieselbe Uhr.

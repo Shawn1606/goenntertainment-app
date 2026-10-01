@@ -67,12 +67,17 @@ services:
       storage-init:
         condition: service_completed_successfully
     environment:
+      # Production build: the server refuses to start without its required settings
+      # (server/src/config.js names them).
+      NODE_ENV: production
       DB_HOST: db
       DB_PORT: '3306'
       DB_DATABASE: goenntertainment
       DB_USERNAME: goenn
       DB_PASSWORD: ${DB_PASSWORD:?}
       PORT: '8000'
+      # Shared with api: Laravel sends it on Node's internal routes (account deletion).
+      NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
@@ -89,7 +94,8 @@ services:
     volumes:
       - ./storage:/app/storage
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/api/health | grep -q "\"ok\":true"']
+      # Node's own health route; /api/health belongs to Laravel.
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']
       interval: 10s
       timeout: 5s
       retries: 10
@@ -135,6 +141,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?}
       # Alles, was Laravel noch nicht selbst kann, geht an das Node-Backend.
       NODE_FALLBACK_URL: http://node:8000
+      # Laravel sends it on Node's internal routes (account deletion); the same value as node's.
+      NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
       # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
       # Standard-Tabellen für Cache/Sitzungen/Warteschlange gibt es dort nicht.
       # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche) im Container

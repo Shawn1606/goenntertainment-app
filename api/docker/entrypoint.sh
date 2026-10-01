@@ -15,6 +15,16 @@ if [ -z "$APP_KEY" ]; then
   exit 1
 fi
 
+# Required settings for the way to Node. Names only, never values (some are secrets).
+missing=""
+if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then
+  missing="$missing NODE_INTERNAL_SECRET(at least 32 characters)"
+fi
+if [ -n "$missing" ]; then
+  echo "ERROR: required settings missing or invalid:$missing (see deploy/.env.example)" >&2
+  exit 1
+fi
+
 # Konfiguration einmal zusammenfassen: spart bei jeder Anfrage das Einlesen von
 # ~15 Konfigurationsdateien. Geht, weil der Code kein env() außerhalb von config/
 # aufruft (dann würde der Cache diese Werte verschlucken).

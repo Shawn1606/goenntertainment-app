@@ -165,7 +165,7 @@ if (-not $NoServers) {
 
     # Kurz warten, bis die Backends antworten (Laravel ist in 2–3 s da, Node etwas später).
     for ($i = 0; $i -lt 20; $i++) {
-        if ((Test-Health 'http://127.0.0.1:8000/api/health') -and (Test-Health 'http://127.0.0.1:8001/api/health')) { break }
+        if ((Test-Health 'http://127.0.0.1:8000/api/health') -and (Test-Health 'http://127.0.0.1:8001/internal/health')) { break }
         Start-Sleep -Seconds 2
     }
 }
@@ -179,7 +179,7 @@ function Mark([bool]$v) {
 }
 
 $laravel = Test-Health 'http://127.0.0.1:8000/api/health'
-$node = Test-Health 'http://127.0.0.1:8001/api/health'
+$node = Test-Health 'http://127.0.0.1:8001/internal/health'
 $lan = if ($ip) { Test-Health "http://${ip}:8000/api/health" } else { $false }
 $metro = Test-Port 8081
 

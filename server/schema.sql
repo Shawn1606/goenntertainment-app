@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
 --   'confirm' – E-Mail-Code fuer eine heikle Aktion bei aktiver E-Mail-Methode
 --               (2FA ausschalten, neue Wiederherstellungscodes, Konto loeschen).
 --   'delete'  – Freigabe von Laravel an Node: „diese Person hat das Loeschen
---               vollstaendig bestaetigt" (siehe server/src/routes/account.js).
+--               vollstaendig bestaetigt" (siehe server/src/routes/internal.js).
 --               Kein Code, nur der Token; lebt zwei Minuten.
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App

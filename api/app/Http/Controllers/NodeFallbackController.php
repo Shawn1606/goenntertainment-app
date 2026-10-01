@@ -50,6 +50,15 @@ class NodeFallbackController extends Controller
         'trailer',
     ];
 
+    /**
+     * Headers a client may never send on to Node: only Laravel sets them, on its internal calls
+     * (App\Support\NodeInternal). A copy from the client is dropped, never forwarded.
+     */
+    private const NEVER_FORWARD = [
+        'x-internal-secret',
+        'x-account-deletion-grant',
+    ];
+
     public function __invoke(Request $request, string $path = ''): Response
     {
         $base = rtrim((string) config('services.node_fallback.url'), '/');
@@ -66,7 +75,8 @@ class NodeFallbackController extends Controller
 
         $headers = [];
         foreach ($request->headers->all() as $name => $values) {
-            if (in_array(strtolower($name), self::HOP_BY_HOP, true)) {
+            if (in_array(strtolower($name), self::HOP_BY_HOP, true)
+                || in_array(strtolower($name), self::NEVER_FORWARD, true)) {
                 continue;
             }
             // Bei Formularen mit Dateien baut der HTTP-Client den Rumpf NEU und

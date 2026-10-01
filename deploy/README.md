@@ -99,6 +99,9 @@ nano .env
 ```
 
 Pflicht sind `DOMAIN`, `DB_PASSWORD`, `DB_ROOT_PASSWORD` und `APP_KEY`.
+Also required: `NODE_INTERNAL_SECRET`, the secret Laravel and Node share for Node's internal
+routes (generate it once with `openssl rand -hex 32`). Without it `docker compose` refuses to
+start.
 
 Passwörter erzeugen:
 

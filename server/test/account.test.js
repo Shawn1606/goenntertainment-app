@@ -1,6 +1,10 @@
 /**
  * Integrationstest: Zwei-Faktor-Sperre der Node-Anmeldung, Passwortregel und
- * das Loeschen des eigenen Kontos (DELETE /api/me) – gegen die echte Datenbank.
+ * das Loeschen des eigenen Kontos – gegen die echte Datenbank.
+ *
+ * Deleting an account: Laravel checks (DELETE /api/me, api/tests/Feature/AccountDeletionTest.php)
+ * and calls Node's internal route DELETE /internal/accounts/:id with the shared secret and a
+ * one-time grant; Node deletes (src/routes/internal.js). This file tests the Node side.
  *
  * Gleiches Muster wie api.test.js: App auf freiem Port, Wegwerf-Konten, am Ende
  * alles wieder weg. Die Zwei-Faktor-Spalten werden direkt in der DB gesetzt –
@@ -17,6 +21,7 @@ import { ensureSchema, pool, first } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
 import { MSG_PASSWORD_COMMON, MSG_PASSWORD_PERSONAL } from '../src/password-policy.js';
 import { TEST_PASSWORD as PASSWORD, createUser, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
+import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
 
 let base;
 let server;
@@ -66,12 +71,26 @@ const login = (email, password) =>
 
 const get = (p, token) => fetch(`${base}${p}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
 
-const deleteMe = (token, body = {}, headers = {}) =>
-  fetch(`${base}/api/me`, {
+/**
+ * DELETE /internal/accounts/:id the way Laravel calls it (api/app/Support/NodeInternal.php):
+ * shared secret and grant in headers, no user token. `on` = another app's base address.
+ */
+const deleteInternal = (userId, { secret = TEST_INTERNAL_SECRET, grant, on = base } = {}) =>
+  fetch(`${on}/internal/accounts/${userId}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...headers },
-    body: JSON.stringify(body),
+    headers: {
+      Accept: 'application/json',
+      ...(secret === null ? {} : { 'X-Internal-Secret': secret }),
+      ...(grant === undefined ? {} : { 'X-Account-Deletion-Grant': grant }),
+    },
   });
+
+/** Starts another app on a free port for one test; returns its base address and a stop function. */
+async function otherApp(options) {
+  const other = createApp(options).listen(0);
+  await new Promise((resolve) => other.once('listening', resolve));
+  return { url: `http://127.0.0.1:${other.address().port}`, stop: () => new Promise((r) => other.close(r)) };
+}
 
 const setTwoFactor = (userId, method) =>
   pool.query('UPDATE users SET two_factor_method = ? WHERE id = ?', [method, userId]);
@@ -117,7 +136,7 @@ async function uploadAvatar(token) {
 
 before(async () => {
   await ensureSchema();
-  server = createApp().listen(0);
+  server = createApp({ internalSecret: TEST_INTERNAL_SECRET }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -261,23 +280,69 @@ test('POST /api/reset-password: dieselbe Regel – der Benutzername erst mit gue
   await pool.query('DELETE FROM password_reset_tokens WHERE email = ?', [user.email]);
 });
 
-/* ------------------------------------------------------- DELETE /api/me */
+/* ------------------------------------------ DELETE /internal/accounts/:id */
 
-test('DELETE /api/me: ohne oder mit falschem Passwort bleibt das Konto', async () => {
-  const { token, user } = await registerUser('zfadelpw', 'standard');
+// DELETE /api/me itself (password or confirmation word, last admin, 2FA code) is Laravel's:
+// api/tests/Feature/AccountDeletionTest.php. The two Node tests of the deleted Node copy of that
+// route (wrong password, confirmation word) moved there.
 
-  const none = await deleteMe(token, {});
-  assert.equal(none.status, 422);
-  assert.equal((await none.json()).message, 'Bitte gib dein Passwort ein.');
+test('GET /internal/health answers without a secret', async () => {
+  const res = await fetch(`${base}/internal/health`);
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true });
+});
 
-  const wrong = await deleteMe(token, { password: 'falsch12345' });
-  assert.equal(wrong.status, 422);
-  assert.deepEqual((await wrong.json()).errors.password, ['Das Passwort stimmt nicht.']);
+test('DELETE /internal/accounts/:id: a missing or wrong secret is a 404, the account stays', async () => {
+  const { user } = await registerUser('zfaintsecret', 'standard');
 
+  for (const secret of [null, '', 'wrong-test-only-secret-not-a-secret-0000', TEST_INTERNAL_SECRET.toUpperCase()]) {
+    const res = await deleteInternal(user.id, { secret, grant: await insertGrant(user.id) });
+    assert.equal(res.status, 404, `secret ${secret === null ? 'missing' : 'wrong'}`);
+  }
   assert.ok(await first('SELECT id FROM users WHERE id = ?', [user.id]));
 });
 
-test('DELETE /api/me: loescht Konto, Tokens und alle eigenen Dateien', async () => {
+test('DELETE /internal/accounts/:id: without a configured secret every call is refused (503)', async () => {
+  const { user } = await registerUser('zfaintnone', 'standard');
+  const other = await otherApp({ internalSecret: '' });
+  try {
+    for (const secret of [null, '', TEST_INTERNAL_SECRET]) {
+      const res = await deleteInternal(user.id, { secret, grant: await insertGrant(user.id), on: other.url });
+      assert.equal(res.status, 503);
+    }
+  } finally {
+    await other.stop();
+  }
+  assert.ok(await first('SELECT id FROM users WHERE id = ?', [user.id]));
+});
+
+test('DELETE /internal/accounts/:id: only with a fresh grant from Laravel for this account', async () => {
+  const { user } = await registerUser('zfaint2fa', 'standard');
+  const other = await registerUser('zfaint2faother', 'standard');
+  await setTwoFactor(user.id, 'totp');
+
+  // Missing, invented, expired and another account's grants: no.
+  for (const grant of [undefined, 'erfunden', await insertGrant(user.id, { expired: true }), await insertGrant(other.user.id)]) {
+    const res = await deleteInternal(user.id, { grant });
+    assert.equal(res.status, 403);
+    assert.equal((await res.json()).message, 'Die Bestätigung ist abgelaufen – bitte versuch es noch einmal.');
+  }
+  assert.ok(await first('SELECT id FROM users WHERE id = ?', [user.id]));
+
+  // A real grant: deleted, and the grant is used up.
+  const grant = await insertGrant(user.id);
+  const ok = await deleteInternal(user.id, { grant });
+  assert.equal(ok.status, 200);
+  assert.equal(await first('SELECT id FROM users WHERE id = ?', [user.id]), null);
+  assert.equal(
+    await first('SELECT id FROM two_factor_challenges WHERE token_hash = ?', [
+      crypto.createHash('sha256').update(grant).digest('hex'),
+    ]),
+    null,
+  );
+});
+
+test('DELETE /internal/accounts/:id: removes the account, its tokens and every own file', async () => {
   const host = await registerUser('zfadelall', 'creator');
   const guest = await registerUser('zfadelguest', 'creator');
 
@@ -321,13 +386,14 @@ test('DELETE /api/me: loescht Konto, Tokens und alle eigenen Dateien', async () 
     assert.ok(fs.existsSync(storagePath(file)), `${file} muss vorher da sein`);
   }
 
-  const res = await deleteMe(host.token, { password: PASSWORD });
+  const res = await deleteInternal(host.user.id, { grant: await insertGrant(host.user.id) });
   assert.equal(res.status, 200);
   assert.equal((await res.json()).message, 'Dein Konto wurde gelöscht.');
 
   assert.equal(await first('SELECT id FROM users WHERE id = ?', [host.user.id]), null);
   assert.equal(await first('SELECT id FROM personal_access_tokens WHERE tokenable_id = ?', [host.user.id]), null);
-  assert.equal((await get('/api/user', host.token)).status, 401);
+  // The old token no longer opens any route (a Node route; GET /api/user is Laravel's).
+  assert.equal((await get('/api/notifications', host.token)).status, 401);
 
   for (const file of [avatar, banner, postImage, storyImage]) {
     assert.equal(fs.existsSync(storagePath(file)), false, `${file} muss weg sein`);
@@ -341,69 +407,22 @@ test('DELETE /api/me: loescht Konto, Tokens und alle eigenen Dateien', async () 
   assert.ok(history, 'der Gast behaelt seinen Verlaufs-Eintrag');
   assert.equal(history.banner_path, null);
   assert.notEqual(history.removed_at, null);
-  assert.equal((await get('/api/user', guest.token)).status, 200);
+  assert.equal((await get('/api/notifications', guest.token)).status, 200);
 });
 
-test('DELETE /api/me: Konto ohne Passwort bestaetigt mit LÖSCHEN', async () => {
-  const { token, user } = await registerUser('zfadelgoogle', 'standard');
-  await pool.query('UPDATE users SET password = NULL WHERE id = ?', [user.id]);
-
-  const missing = await deleteMe(token, {});
-  assert.equal(missing.status, 422);
-  assert.ok((await missing.json()).errors.confirm);
-
-  const wrong = await deleteMe(token, { confirm: 'ja' });
-  assert.equal(wrong.status, 422);
-
-  const ok = await deleteMe(token, { confirm: ' löschen ' });
-  assert.equal(ok.status, 200);
-  assert.equal(await first('SELECT id FROM users WHERE id = ?', [user.id]), null);
-});
-
-test('DELETE /api/me: bei aktiver 2FA nur mit Freigabe von Laravel', async () => {
-  const { token, user } = await registerUser('zfadel2fa', 'standard');
-  const other = await registerUser('zfadel2faother', 'standard');
-  await setTwoFactor(user.id, 'totp');
-
-  // Direkt an Node, auch mit richtigem Passwort: nein.
-  const direct = await deleteMe(token, { password: PASSWORD });
-  assert.equal(direct.status, 403);
-  assert.equal((await direct.json()).message, 'Bitte lösche dein Konto über die App.');
-
-  // Erfundene, abgelaufene und fremde Freigaben: nein.
-  const forged = await deleteMe(token, {}, { 'X-Account-Deletion-Grant': 'erfunden' });
-  assert.equal(forged.status, 403);
-  const expired = await deleteMe(token, {}, { 'X-Account-Deletion-Grant': await insertGrant(user.id, { expired: true }) });
-  assert.equal(expired.status, 403);
-  const foreign = await deleteMe(token, {}, { 'X-Account-Deletion-Grant': await insertGrant(other.user.id) });
-  assert.equal(foreign.status, 403);
-  assert.ok(await first('SELECT id FROM users WHERE id = ?', [user.id]));
-
-  // Echte Freigabe: geloescht – und die Freigabe ist verbraucht.
-  const grant = await insertGrant(user.id);
-  const ok = await deleteMe(token, {}, { 'X-Account-Deletion-Grant': grant });
-  assert.equal(ok.status, 200);
-  assert.equal(await first('SELECT id FROM users WHERE id = ?', [user.id]), null);
-  assert.equal(
-    await first('SELECT id FROM two_factor_challenges WHERE token_hash = ?', [
-      crypto.createHash('sha256').update(grant).digest('hex'),
-    ]),
-    null,
-  );
-});
-
-test('DELETE /api/me: ein Admin, der nicht der letzte ist, darf gehen', async () => {
-  const { token, user } = await registerUser('zfadeladmin', 'standard');
+test('DELETE /internal/accounts/:id: an admin who is not the last one may go', async () => {
+  const { user } = await registerUser('zfadeladmin', 'standard');
   // The second admin this test relies on is created here, so the result no longer depends on
-  // what other test files (or earlier runs) left in the database.
+  // what other test files (or earlier runs) left in the database. (Refusing the last admin
+  // depends on every admin in the shared test database; Laravel's test covers that answer.)
   const other = await registerUser('zfadeladmintwo', 'standard');
   await pool.query('UPDATE users SET is_admin = 1 WHERE id IN (?, ?)', [user.id, other.user.id]);
-  // Es gibt ausser diesem Wegwerf-Admin mindestens einen echten – sonst waere das hier 409.
   const [[{ c }]] = await pool.query('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1 AND id <> ?', [user.id]);
   assert.ok(Number(c) > 0, 'Test setzt einen weiteren Admin voraus');
 
-  const res = await deleteMe(token, { password: PASSWORD });
+  const res = await deleteInternal(user.id, { grant: await insertGrant(user.id) });
   assert.equal(res.status, 200);
+  assert.equal(await first('SELECT id FROM users WHERE id = ?', [user.id]), null);
 });
 
 test('DELETE /api/admin/users/:id raeumt jetzt auch die Dateien weg', async () => {

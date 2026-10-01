@@ -9,9 +9,9 @@ import path from 'node:path';
 import express from 'express';
 import { pool } from './db.js';
 import { HttpError } from './validate.js';
+import { internalSecret as internalSecretSetting } from './config.js';
 import interestsRouter from './routes/interests.js';
 import authRouter from './routes/auth.js';
-import accountRouter from './routes/account.js';
 import passwordRouter from './routes/password.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
@@ -27,8 +27,13 @@ import reportsRouter from './routes/reports.js';
 import upgradesRouter from './routes/upgrades.js';
 import notificationsRouter from './routes/notifications.js';
 import revenueCatRouter from './routes/revenuecat.js';
+import { internalRouter } from './routes/internal.js';
 
-export function createApp() {
+/**
+ * Options (tests pass them; the server reads its environment, see config.js):
+ *   internalSecret  shared secret for the internal routes (default NODE_INTERNAL_SECRET)
+ */
+export function createApp({ internalSecret = internalSecretSetting() } = {}) {
   const app = express();
 
   /**
@@ -85,9 +90,13 @@ export function createApp() {
     }
   });
 
+  // Internal routes for Laravel and the container health check; never forwarded from outside
+  // (Laravel forwards only /api paths). Unknown internal paths get the same JSON 404.
+  app.use('/internal', internalRouter({ secret: internalSecret }));
+  app.use('/internal', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));
+
   // Routen (gleiche Pfade wie das alte Laravel-Backend)
   app.use('/api', authRouter); // /register, /login, /logout, /user
-  app.use('/api', accountRouter); // DELETE /me – eigenes Konto loeschen
   app.use('/api', passwordRouter); // /forgot-password, /reset-password
   app.use('/api', progressRouter); // /me/progress, /leaderboard
   app.use('/api/interests', interestsRouter);
