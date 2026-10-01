@@ -85,8 +85,11 @@ const INTERESTS = [
  * Ruestet Spalten nach, die spaeter dazukamen (fuer DBs, die vor der Schema-
  * Aenderung angelegt wurden). Idempotent: prueft erst information_schema, damit es
  * auf MySQL wie MariaDB laeuft (MySQL kennt kein `ADD COLUMN IF NOT EXISTS`).
+ *
+ * Exported for scripts/schema-drift, which runs it on a throwaway database and
+ * compares the result with server/schema.sql (F-33).
  */
-async function ensureSchema() {
+export async function ensureSchema() {
   const col = await pool.query(
     `SELECT 1 FROM information_schema.columns
       WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'is_admin'`,
@@ -337,4 +340,7 @@ async function main() {
   }
 }
 
-main();
+// Run the seed only when this file is executed (`npm run seed`), not when tooling
+// imports it: scripts/schema-drift imports ensureSchema() and must not seed data.
+// `!== false` keeps the old behaviour on a Node without import.meta.main.
+if (import.meta.main !== false) main();
