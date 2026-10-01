@@ -14,7 +14,7 @@ import zlib from 'node:zlib';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
-import { checkPassword } from '../src/auth.js';
+import bcrypt from 'bcryptjs';
 import {
   TEST_PASSWORD,
   TOKENABLE_TYPE,
@@ -84,7 +84,7 @@ test('createUser: users row with the fixture identity, and a token Node accepts'
   assert.equal(row.account_type, 'creator');
   assert.equal(row.is_admin, 0);
   assert.equal(row.two_factor_method, null);
-  assert.equal(await checkPassword(TEST_PASSWORD, row.password), true);
+  assert.equal(await bcrypt.compare(TEST_PASSWORD, row.password), true);
 
   // The returned user is the serialized row: no password, no 2FA secrets.
   assert.equal(user.username, row.username);
@@ -124,8 +124,8 @@ test('createUser: admin, two-factor method and an account without a password', a
 
   const own = await createUser('fixownpw', { password: 'Other-Fixture-Pass-3579' });
   const hash = (await first('SELECT password FROM users WHERE id = ?', [own.user.id])).password;
-  assert.equal(await checkPassword('Other-Fixture-Pass-3579', hash), true);
-  assert.equal(await checkPassword(TEST_PASSWORD, hash), false);
+  assert.equal(await bcrypt.compare('Other-Fixture-Pass-3579', hash), true);
+  assert.equal(await bcrypt.compare(TEST_PASSWORD, hash), false);
 });
 
 test('insertToken: future, past and no expiry, another tokenable_type, and nothing else', async () => {

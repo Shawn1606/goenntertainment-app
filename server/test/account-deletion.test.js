@@ -1,14 +1,19 @@
 /**
- * Integrationstest: Zwei-Faktor-Sperre der Node-Anmeldung, Passwortregel und
- * das Loeschen des eigenen Kontos – gegen die echte Datenbank.
+ * Deleting an account, Node's side, against the real database.
  *
- * Deleting an account: Laravel checks (DELETE /api/me, api/tests/Feature/AccountDeletionTest.php)
- * and calls Node's internal route DELETE /internal/accounts/:id with the shared secret and a
- * one-time grant; Node deletes (src/routes/internal.js). This file tests the Node side.
+ * Laravel checks (DELETE /api/me: password or confirmation word, last admin, 2FA code;
+ * api/tests/Feature/AccountDeletionTest.php) and calls Node's internal route
+ * DELETE /internal/accounts/:id with the shared secret and a one-time grant; Node deletes the data
+ * and the files (src/routes/internal.js, src/account-deletion.js). The admin panel's deletion uses
+ * the same code.
  *
  * Gleiches Muster wie api.test.js: App auf freiem Port, Wegwerf-Konten, am Ende
  * alles wieder weg. Die Zwei-Faktor-Spalten werden direkt in der DB gesetzt –
  * das Einschalten selbst gehoert Laravel und wird dort geprueft.
+ *
+ * (Until this file was renamed from account.test.js it also tested Node's copies of sign-in,
+ * sign-up, GET /api/user and the password reset; those copies are deleted and their tests moved
+ * to api/tests/Feature: LoginTest, RegisterTest, UserProfileTest, PasswordResetTest.)
  */
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -18,9 +23,7 @@ import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
-import { hashPassword } from '../src/auth.js';
-import { MSG_PASSWORD_COMMON, MSG_PASSWORD_PERSONAL } from '../src/password-policy.js';
-import { TEST_PASSWORD as PASSWORD, createUser, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
+import { createUser, deleteTestUsers } from './support/fixtures.js';
 import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
 
 let base;
@@ -34,40 +37,9 @@ const PNG_1X1 = Buffer.from(
   'base64',
 );
 
-async function tryRegister(prefix, overrides = {}) {
-  const s = stamp();
-  const payload = {
-    name: `${prefix} Test`,
-    username: `${prefix}${s}`.slice(0, 28),
-    email: `${prefix}${s}@example.invalid`,
-    password: PASSWORD,
-    account_type: 'standard',
-    device_name: 'test',
-    ...overrides,
-  };
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const body = await res.json().catch(() => null);
-  if (body?.user?.id) createdUserIds.push(body.user.id);
-  return { status: res.status, body, payload };
-}
-
-/**
- * Throw-away account with a token, written straight to the database (test/support/fixtures.js):
- * sign-up belongs to Laravel. tryRegister above stays for the tests of Node's sign-up itself.
- */
+/** Throw-away account with a token, written straight to the database (test/support/fixtures.js). */
 const registerUser = (prefix, accountType = 'creator') =>
   createUser(prefix, { accountType, created: createdUserIds });
-
-const login = (email, password) =>
-  fetch(`${base}/api/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, device_name: 'test' }),
-  });
 
 const get = (p, token) => fetch(`${base}${p}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
 
@@ -157,127 +129,6 @@ after(async () => {
     await pool.end();
     server?.close();
   }
-});
-
-/* ------------------------------------------------ Zwei-Faktor-Sperre (Node) */
-
-test('POST /api/login: bei aktiver 2FA gibt Node keinen Token heraus', async () => {
-  const { user } = await registerUser('zfalogin', 'standard');
-  await setTwoFactor(user.id, 'totp');
-
-  const res = await login(user.email, PASSWORD);
-  assert.equal(res.status, 403);
-  const body = await res.json();
-  assert.equal(body.message, 'Bitte melde dich über die App an.');
-  assert.equal(body.token, undefined);
-  assert.equal(body.user, undefined);
-});
-
-test('POST /api/login: ein falsches Passwort verraet nicht, ob 2FA an ist', async () => {
-  const { user } = await registerUser('zfaloginwrong', 'standard');
-  await setTwoFactor(user.id, 'email');
-
-  const res = await login(user.email, 'falsch12345');
-  assert.equal(res.status, 422);
-});
-
-test('POST /api/login: ohne 2FA wie bisher mit Token', async () => {
-  const { user } = await registerUser('zfaloginplain', 'standard');
-  const res = await login(user.email, PASSWORD);
-  assert.equal(res.status, 200);
-  assert.ok((await res.json()).token);
-});
-
-test('GET /api/user: von der 2FA geht nur die Methode raus, nie Secret oder Codes', async () => {
-  const { token, user } = await registerUser('zfaleak', 'standard');
-  await pool.query(
-    `UPDATE users SET two_factor_method = 'totp', two_factor_secret = 'verschluesselt',
-            two_factor_recovery_codes = 'codes', two_factor_confirmed_at = NOW(), two_factor_last_step = 1
-      WHERE id = ?`,
-    [user.id],
-  );
-
-  const body = await (await get('/api/user', token)).json();
-  assert.equal(body.user.two_factor_method, 'totp');
-  for (const key of [
-    'two_factor_secret',
-    'two_factor_recovery_codes',
-    'two_factor_confirmed_at',
-    'two_factor_last_step',
-    'password',
-  ]) {
-    assert.equal(key in body.user, false, `${key} darf nicht in der Antwort stehen`);
-  }
-});
-
-/* ------------------------------------------------------------ Passwortregel */
-
-test('POST /api/register: haeufige Passwoerter werden abgelehnt – ohne Ruecksicht auf Gross/klein', async () => {
-  for (const password of ['Passwort1', 'schalke04', 'QWERTZ123']) {
-    const { status, body } = await tryRegister('zfapwcommon', { password });
-    assert.equal(status, 422, password);
-    assert.equal(body.message, MSG_PASSWORD_COMMON);
-    assert.deepEqual(body.errors.password, [MSG_PASSWORD_COMMON]);
-  }
-});
-
-test('POST /api/register: Benutzername oder E-Mail-Teil im Passwort wird abgelehnt', async () => {
-  const s = stamp();
-  const username = `zfaname${s}`.slice(0, 20);
-
-  const byName = await tryRegister('zfapwname', { username, password: `${username.toUpperCase()}9` });
-  assert.equal(byName.status, 422);
-  assert.equal(byName.body.message, MSG_PASSWORD_PERSONAL);
-
-  const byMail = await tryRegister('zfapwmail', { email: `mailteil${s}@example.invalid`, password: `x${'mailteil'}${s}` });
-  assert.equal(byMail.status, 422);
-  assert.equal(byMail.body.message, MSG_PASSWORD_PERSONAL);
-});
-
-test('POST /api/register: die alte Grundregel und ihre Meldung gelten unveraendert', async () => {
-  const { status, body } = await tryRegister('zfapwbasic', { password: 'nurbuchstaben' });
-  assert.equal(status, 422);
-  assert.equal(body.message, 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.');
-});
-
-test('POST /api/reset-password: dieselbe Regel – der Benutzername erst mit gueltigem Token', async () => {
-  const common = await fetch(`${base}/api/reset-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: 'x', email: 'niemand@example.invalid', password: 'hallo123' }),
-  });
-  assert.equal(common.status, 422);
-  assert.equal((await common.json()).message, MSG_PASSWORD_COMMON);
-
-  const { user } = await registerUser('zfareset', 'standard');
-  // Die Wegwerf-Adresse traegt sonst den Benutzernamen als lokalen Teil – dann
-  // schluege schon die (oeffentliche) E-Mail-Pruefung an, und der Test pruefte
-  // nicht mehr, dass der Name erst NACH dem Token kommt.
-  user.email = `zfaresetpost${stamp()}@example.invalid`;
-  await pool.query('UPDATE users SET email = ? WHERE id = ?', [user.email, user.id]);
-  const password = `${user.username}77`;
-
-  // Falscher Token: neutrale Meldung – kein Hinweis auf den Benutzernamen.
-  const wrongToken = await fetch(`${base}/api/reset-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: 'falsch', email: user.email, password }),
-  });
-  assert.equal(wrongToken.status, 422);
-  assert.equal((await wrongToken.json()).message, 'Dieser Link zum Zuruecksetzen ist ungueltig.');
-
-  await pool.query(
-    'INSERT INTO password_reset_tokens (email, token, created_at) VALUES (?, ?, NOW())',
-    [user.email, await hashPassword('richtig')],
-  );
-  const rightToken = await fetch(`${base}/api/reset-password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token: 'richtig', email: user.email, password }),
-  });
-  assert.equal(rightToken.status, 422);
-  assert.equal((await rightToken.json()).message, MSG_PASSWORD_PERSONAL);
-  await pool.query('DELETE FROM password_reset_tokens WHERE email = ?', [user.email]);
 });
 
 /* ------------------------------------------ DELETE /internal/accounts/:id */

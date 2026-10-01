@@ -28,33 +28,11 @@ let base;
 let server;
 const createdUserIds = [];
 
-function registerBody(overrides = {}) {
-  const s = stamp();
-  return {
-    name: 'Blockterm Test',
-    username: `blockterm${s}`.slice(0, 28),
-    email: `blockterm-test-${s}@example.invalid`,
-    password: 'Wortliste2026',
-    account_type: 'standard',
-    device_name: 'test',
-    ...overrides,
-  };
-}
-
-async function tryRegister(overrides) {
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(registerBody(overrides)),
-  });
-  const body = await res.json();
-  if (body?.user?.id) createdUserIds.push(body.user.id);
-  return { status: res.status, body };
-}
-
 /**
  * Throw-away account with a token, written straight to the database (test/support/fixtures.js):
- * sign-up belongs to Laravel. tryRegister above stays for the test of Node's sign-up itself.
+ * sign-up belongs to Laravel. (The word filter on sign-up and on PATCH /api/user is tested in
+ * api/tests/Feature/RegisterTest.php and UserProfileTest.php; Node's copies of those routes are
+ * deleted.)
  */
 const registerUser = (accountType = 'creator') =>
   createUser('blockterm', { accountType, created: createdUserIds });
@@ -98,32 +76,6 @@ after(async () => {
     await pool.end();
     server?.close();
   }
-});
-
-test('POST /api/register (Node): gesperrter Benutzername und Name werden abgelehnt', async () => {
-  const username = await tryRegister({ username: 'xXhurensohnXx' });
-  assert.equal(username.status, 422);
-  assert.deepEqual(username.body.errors.username, [MSG_USERNAME]);
-
-  const name = await tryRegister({ name: 'Adolf Hitler' });
-  assert.equal(name.status, 422);
-  assert.equal(name.body.message, MSG_NAME);
-
-  // Echter Nachname im Namen-Feld: geht durch.
-  const fick = await tryRegister({ name: 'Adolf Fick' });
-  assert.equal(fick.status, 201);
-});
-
-test('PATCH /api/user (Node): neuer gesperrter Wert nein, alter Wert blockiert nichts', async () => {
-  const { token, user } = await registerUser('standard');
-  await assertBlocked(await send('PATCH', '/api/user', token, { username: 'sieg_heil' }), 'username', MSG_USERNAME);
-  await assertBlocked(await send('PATCH', '/api/user', token, { name: 'Du Fotze' }), 'name', MSG_NAME);
-
-  // Ein Altname, den die Liste heute traefe, bleibt beim Speichern anderer Felder
-  // stehen – sonst liesse sich nicht einmal mehr das Interesse aendern.
-  await pool.query('UPDATE users SET name = ? WHERE id = ?', ['Schlampe', user.id]);
-  const res = await send('PATCH', '/api/user', token, { name: 'Schlampe', interests: [] });
-  assert.equal(res.status, 200);
 });
 
 test('PATCH /api/admin/users/:id: auch Admins vergeben keinen gesperrten Benutzernamen', async () => {

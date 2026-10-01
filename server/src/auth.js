@@ -3,56 +3,21 @@ import bcrypt from 'bcryptjs';
 import { pool, first } from './db.js';
 import { mediaUrl } from './media.js';
 
-const TOKENABLE_TYPE = 'App\\Models\\User';
-
-/** Zufaelliger 40-Zeichen-String wie Laravels Str::random(40). */
-function randomTokenString(length = 40) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const bytes = crypto.randomBytes(length);
-  let out = '';
-  for (let i = 0; i < length; i += 1) {
-    out += chars[bytes[i] % chars.length];
-  }
-  return out;
-}
-
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-/**
- * Legt einen persoenlichen Zugriffs-Token an – gleiches Format wie Laravel Sanctum:
- * gespeichert wird nur der sha256-Hash, zurueckgegeben wird "{id}|{klartext}".
+/*
+ * Tokens are issued by Laravel (Sanctum) only: sign-up and sign-in are Laravel's routes. Node
+ * reads them (requireAuth below) and deletes them (bans, account deletion).
+ * The server tests write tokens of the same format themselves (test/support/fixtures.js).
  */
-export async function createToken(userId, name = 'mobile') {
-  const plain = randomTokenString();
-  const [result] = await pool.query(
-    `INSERT INTO personal_access_tokens
-       (tokenable_type, tokenable_id, name, token, abilities, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-    [TOKENABLE_TYPE, userId, name, sha256(plain), '["*"]'],
-  );
-  return `${result.insertId}|${plain}`;
-}
 
 /**
  * Kostenfaktor fuer bcrypt. 10 ist weiterhin sicher (Laravel-Standard) und rund
  * 4x schneller als 12 (~80 ms statt ~310 ms mit reinem bcryptjs).
  */
 const BCRYPT_ROUNDS = 10;
-
-/**
- * Prueft bcrypt-Passwoerter; normalisiert Laravels $2y$-Praefix fuer bcryptjs.
- * Async (bcrypt.compare statt compareSync), damit der Event-Loop nicht blockiert –
- * sonst haengen waehrend eines Logins ALLE anderen Anfragen.
- */
-export function checkPassword(plain, hash) {
-  if (!hash) {
-    return Promise.resolve(false);
-  }
-  const normalized = hash.startsWith('$2y$') ? `$2b$${hash.slice(4)}` : hash;
-  return bcrypt.compare(plain, normalized);
-}
 
 /** Async (bcrypt.hash statt hashSync) – blockiert den Event-Loop nicht. */
 export function hashPassword(plain) {
@@ -71,22 +36,6 @@ export function isBanned(user) {
   // banned_until kommt als UTC-String 'YYYY-MM-DD HH:MM:SS' (dateStrings:true).
   const until = new Date(`${String(user.banned_until).replace(' ', 'T')}Z`);
   return until.getTime() > Date.now();
-}
-
-/**
- * Sperr-Details fuer die Anzeige beim Login: Grund, Ende (ISO) und ob dauerhaft.
- * permanent = banned_until liegt >100 Jahre in der Zukunft (echter Bann).
- */
-export function banInfo(user) {
-  const untilMs = user?.banned_until
-    ? new Date(`${String(user.banned_until).replace(' ', 'T')}Z`).getTime()
-    : 0;
-  const permanent = untilMs > Date.now() + 100 * 365 * 24 * 3600 * 1000;
-  return {
-    reason: user?.ban_reason ?? null,
-    permanent,
-    banned_until: permanent || !untilMs ? null : `${String(user.banned_until).replace(' ', 'T')}Z`,
-  };
 }
 
 /**
@@ -173,18 +122,6 @@ export async function userPayload(row, req = null) {
     return null;
   }
   return { ...safe, interests: await loadUserInterests(row.id) };
-}
-
-/** Profil vollstaendig: Username + Kontotyp gesetzt und mind. 3 Interessen. */
-export async function profileComplete(user) {
-  if (!user || user.username === null || user.account_type === null) {
-    return false;
-  }
-  const row = await first(
-    'SELECT COUNT(*) AS c FROM interest_user WHERE user_id = ?',
-    [user.id],
-  );
-  return Number(row?.c ?? 0) >= 3;
 }
 
 /**

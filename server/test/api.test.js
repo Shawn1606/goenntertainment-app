@@ -10,7 +10,7 @@ import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
-import { TEST_PASSWORD, createUser, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
+import { createUser, deleteTestUsers } from './support/fixtures.js';
 
 // Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
 // ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
@@ -31,31 +31,12 @@ const createdActivityIds = [];
  *
  * The account and its token are written straight to the database with the
  * wanted tier (test/support/fixtures.js), the way an admin would grant it:
- * sign-up belongs to Laravel. tryRegister below stays for the tests of Node's
- * sign-up itself.
+ * sign-up belongs to Laravel. (Node's copies of sign-up, GET/PATCH /api/user,
+ * progress and leaderboard are deleted; their tests moved to api/tests/Feature:
+ * RegisterTest, UserProfileTest, ProgressTest.)
  */
 const registerUser = (prefix, accountType = 'creator') =>
   createUser(prefix, { accountType, created: createdUserIds });
-
-/** Registriert ohne Erwartung an den Status – fuer die Pruefung der Kontostufen. */
-async function tryRegister(prefix, accountType) {
-  const stamp = uniqueStamp();
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: `${prefix} Test`,
-      username: `${prefix}${stamp}`.slice(0, 28),
-      email: `${prefix}${stamp}@example.com`,
-      password: TEST_PASSWORD,
-      account_type: accountType,
-      device_name: 'test',
-    }),
-  });
-  const body = await res.json().catch(() => null);
-  if (body?.user?.id) createdUserIds.push(body.user.id);
-  return { status: res.status, body };
-}
 
 /** Hebt einen Nutzer auf eine Kontostufe (direkt in der DB, ohne Admin-Umweg). */
 const setAccountType = (userId, type) =>
@@ -97,13 +78,6 @@ async function createActivity(token, title) {
 const get = (path, token) =>
   fetch(`${base}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
 
-const patchUser = (token, body) =>
-  fetch(`${base}/api/user`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(body),
-  });
-
 /** Macht einen frisch registrierten Wegwerf-Nutzer zum Admin. */
 const makeAdmin = (userId) => pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [userId]);
 
@@ -128,30 +102,6 @@ after(async () => {
     await pool.end();
     server?.close();
   }
-});
-
-test('GET /api/me/progress: frischer Account startet bei 0 XP und Level 1', async () => {
-  const { token } = await registerUser('prog');
-  const res = await get('/api/me/progress', token);
-  assert.equal(res.status, 200);
-  const body = await res.json();
-  assert.equal(body.stats.hosted, 0);
-  assert.equal(body.stats.joined, 0);
-  assert.equal(body.xp, 0);
-});
-
-test('GET /api/me/progress: eigenes Event zaehlt als hosted UND joined', async () => {
-  const { token } = await registerUser('prog');
-  await createActivity(token, 'Progress-Test');
-  const body = await (await get('/api/me/progress', token)).json();
-  // Wer erstellt, ist automatisch dabei – beides muss gezaehlt werden.
-  assert.equal(body.stats.hosted, 1);
-  assert.equal(body.stats.joined, 1);
-  assert.ok(body.xp > 0);
-});
-
-test('GET /api/me/progress ohne Anmeldung ist nicht erlaubt', async () => {
-  assert.equal((await get('/api/me/progress')).status, 401);
 });
 
 test('POST /api/activities/:id/view zaehlt Aufrufe, aber pro Person nur einmal', async () => {
@@ -203,125 +153,6 @@ test('POST /api/activities/:id/view auf ein unbekanntes Event ergibt 404', async
     headers: { Authorization: `Bearer ${token}` },
   });
   assert.equal(res.status, 404);
-});
-
-test('GET /api/leaderboard liefert eine nach XP absteigend sortierte Liste', async () => {
-  const active = await registerUser('lbactive');
-  await createActivity(active.token, 'Leaderboard-Test 1');
-  await createActivity(active.token, 'Leaderboard-Test 2');
-  const idle = await registerUser('lbidle');
-
-  const res = await get('/api/leaderboard', idle.token);
-  assert.equal(res.status, 200);
-  const body = await res.json();
-
-  const xps = body.data.map((e) => e.xp);
-  assert.deepEqual(xps, [...xps].sort((a, b) => b - a), 'muss absteigend sortiert sein');
-
-  const activeEntry = body.data.find((e) => e.user.id === active.user.id);
-  assert.ok(activeEntry, 'aktiver Nutzer muss in der Liste stehen');
-  assert.ok(activeEntry.xp > 0);
-  assert.equal(activeEntry.rank, body.data.indexOf(activeEntry) + 1);
-});
-
-test('GET /api/leaderboard kennt die eigene Position, auch ausserhalb der Top-Liste', async () => {
-  const { token, user } = await registerUser('lbme');
-  const body = await (await get('/api/leaderboard', token)).json();
-  assert.equal(body.me.user.id, user.id);
-  assert.equal(typeof body.me.rank, 'number');
-});
-
-test('PATCH /api/user: Admin schaltet den Kontotyp auf Business und wieder zurueck', async () => {
-  const { token, user } = await registerUser('acctype');
-  await makeAdmin(user.id);
-
-  const toBusiness = await patchUser(token, { account_type: 'business' });
-  assert.equal(toBusiness.status, 200);
-  assert.equal((await toBusiness.json()).user.account_type, 'business');
-
-  const back = await patchUser(token, { account_type: 'standard' });
-  assert.equal(back.status, 200);
-  assert.equal((await back.json()).user.account_type, 'standard');
-});
-
-test('PATCH /api/user: Admin kommt auf jede der vier Stufen', async () => {
-  const { token, user } = await registerUser('acctypeall');
-  await makeAdmin(user.id);
-
-  for (const type of ['standard', 'creator', 'business', 'business_plus']) {
-    const res = await patchUser(token, { account_type: type });
-    assert.equal(res.status, 200, `${type} muss speicherbar sein`);
-    assert.equal((await res.json()).user.account_type, type);
-  }
-});
-
-test('PATCH /api/user: der alte Wert "personal" landet als "standard"', async () => {
-  // Aeltere App-Versionen schicken noch 'personal' – das darf nicht scheitern.
-  const { token, user } = await registerUser('acctypelegacy');
-  await makeAdmin(user.id);
-
-  const res = await patchUser(token, { account_type: 'personal' });
-  assert.equal(res.status, 200);
-  assert.equal((await res.json()).user.account_type, 'standard');
-});
-
-test('PATCH /api/user: ohne Admin-Rechte bleibt der Kontotyp unveraendert', async () => {
-  const { token } = await registerUser('acctypeno', 'standard');
-
-  const res = await patchUser(token, { account_type: 'business' });
-  assert.equal(res.status, 403);
-
-  const me = await (await get('/api/user', token)).json();
-  assert.equal(me.user.account_type, 'standard');
-});
-
-test('PATCH /api/user: unbekannter Kontotyp wird abgelehnt', async () => {
-  const { token, user } = await registerUser('acctypebad');
-  await makeAdmin(user.id);
-
-  const res = await patchUser(token, { account_type: 'enterprise' });
-  assert.equal(res.status, 422);
-  assert.ok((await res.json()).errors.account_type, 'Feldfehler fuer account_type erwartet');
-});
-
-test('PATCH /api/user: andere Felder aendern zu duerfen bleibt allen erlaubt', async () => {
-  const { token } = await registerUser('acctypename');
-  const res = await patchUser(token, { name: 'Neuer Name' });
-  assert.equal(res.status, 200);
-  assert.equal((await res.json()).user.name, 'Neuer Name');
-});
-
-// --- Registrierung: welche Stufen man sich selbst geben darf ------------------
-
-test('POST /api/register: alles ueber Standard kann man sich nicht selbst geben', async () => {
-  // 'creator' gehoert ausdruecklich dazu: Sonst waere die Bestaetigung im
-  // Admin-Panel wertlos, denn ein neues Konto als Creator geht schneller als
-  // eine Anfrage (siehe src/accounts.js).
-  for (const type of ['creator', 'business', 'business_plus']) {
-    const res = await tryRegister('regobenstd', type);
-    assert.equal(res.status, 422, `${type} darf nicht durchgehen`);
-    assert.ok(res.body.errors.account_type, 'Feldfehler fuer account_type erwartet');
-  }
-});
-
-test('POST /api/register: ein neues Konto ist Standard und darf keine Events anlegen', async () => {
-  // Der Weg nach der Aenderung: registrieren -> Standard -> Creator ANFRAGEN.
-  const res = await tryRegister('regneu', 'standard');
-  assert.equal(res.status, 201);
-  assert.equal(res.body.user.account_type, 'standard');
-  assert.equal((await tryCreateActivity(res.body.token, 'Neu-Standard-Test')).status, 403);
-});
-
-test('POST /api/register: unbekannte Kontostufe wird abgelehnt', async () => {
-  const res = await tryRegister('regbad', 'enterprise');
-  assert.equal(res.status, 422);
-  assert.ok(res.body.errors.account_type);
-});
-
-test('POST /api/register: der alte Wert "personal" wird als "standard" angelegt', async () => {
-  const res = await tryRegister('reglegacy', 'personal');
-  assert.equal(res.status, 201);
-  assert.equal(res.body.user.account_type, 'standard');
 });
 
 // --- Events anlegen: erst ab Creator ----------------------------------------
@@ -822,19 +653,6 @@ test('POST /api/me/avatar ohne Anmeldung ist nicht erlaubt', async () => {
   form.append('image', new Blob([PNG_1X1], { type: 'image/png' }), 'bild.png');
   const res = await fetch(`${base}/api/me/avatar`, { method: 'POST', body: form });
   assert.equal(res.status, 401);
-});
-
-test('GET /api/user: Profilbild und Banner kommen als Adresse mit', async () => {
-  const { token } = await registerUser('meimages', 'creator');
-  await putProfileImage(token, 'avatar');
-  await putProfileImage(token, 'banner');
-
-  const body = await (await get('/api/user', token)).json();
-  assert.match(body.user.avatar, /\/storage\/avatars\//);
-  assert.match(body.user.banner, /\/storage\/user-banners\//);
-
-  await dropProfileImage(token, 'avatar');
-  await dropProfileImage(token, 'banner');
 });
 
 test('GET /api/users/:username: ohne Bilder stehen dort null-Werte', async () => {

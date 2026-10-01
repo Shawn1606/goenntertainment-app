@@ -7,15 +7,10 @@
  */
 import path from 'node:path';
 import express from 'express';
-import { pool } from './db.js';
 import { HttpError } from './validate.js';
 import { internalSecret as internalSecretSetting } from './config.js';
-import interestsRouter from './routes/interests.js';
-import authRouter from './routes/auth.js';
-import passwordRouter from './routes/password.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
-import progressRouter from './routes/progress.js';
 import businessRouter from './routes/business.js';
 import profileRouter from './routes/profile.js';
 import rewardsRouter from './routes/rewards.js';
@@ -80,26 +75,16 @@ export function createApp({ internalSecret = internalSecretSetting() } = {}) {
   // Banner-Bilder oeffentlich ausliefern (wie Laravels /storage)
   app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
 
-  // Health-Check
-  app.get('/api/health', async (req, res) => {
-    try {
-      await pool.query('SELECT 1');
-      res.json({ ok: true });
-    } catch {
-      res.status(500).json({ ok: false });
-    }
-  });
-
-  // Internal routes for Laravel and the container health check; never forwarded from outside
-  // (Laravel forwards only /api paths). Unknown internal paths get the same JSON 404.
+  // Internal routes for Laravel and the container health check (GET /internal/health); never
+  // forwarded from outside (Laravel forwards only /api paths). Unknown internal paths get the
+  // same JSON 404.
   app.use('/internal', internalRouter({ secret: internalSecret }));
   app.use('/internal', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));
 
-  // Routen (gleiche Pfade wie das alte Laravel-Backend)
-  app.use('/api', authRouter); // /register, /login, /logout, /user
-  app.use('/api', passwordRouter); // /forgot-password, /reset-password
-  app.use('/api', progressRouter); // /me/progress, /leaderboard
-  app.use('/api/interests', interestsRouter);
+  // Routen. One owner per path: what Laravel (api/) serves is not served here - sign-up,
+  // sign-in, the own account, progress, leaderboard, interests and /api/health are Laravel's
+  // (api/routes/api.php). api/tests/Feature/NodeTwinRoutesTest.php checks that no path below is
+  // one of Laravel's.
   app.use('/api/activities', activitiesRouter);
   app.use('/api/admin', adminRouter); // /stats, /users, /stories, /upgrade-requests, /evidence, /moderation (nur Admin)
   app.use('/api/business', businessRouter); // /insights, /activities/:id/boost (ab Business)

@@ -646,7 +646,7 @@ export async function ensureSchema() {
   // App vor den vier Stufen kannte – das ist heute 'standard'. Idempotent: nach
   // dem ersten Lauf trifft das UPDATE nichts mehr. NULL bleibt bewusst NULL,
   // sonst wuerden Google-Konten ohne Kontotyp ploetzlich als vollstaendig
-  // gelten (profileComplete prueft auf NULL).
+  // gelten (User::profileComplete in Laravel prueft auf NULL).
   await pool.query(`UPDATE users SET account_type = 'standard' WHERE account_type = 'personal'`);
 
   // Laufende Abos aus dem App Store / Play Store (gemeldet von RevenueCat).
@@ -694,9 +694,9 @@ export async function ensureSchema() {
    * Nachtraeglich: Zwei-Faktor-Anmeldung, siehe schema.sql.
    *
    * Bedient wird sie von Laravel (api/app/Support/TwoFactor.php) – das Schema
-   * liegt trotzdem hier, weil dieses Backend das Schema besitzt. Node selbst
-   * liest nur `two_factor_method`: Ist sie gesetzt, gibt es hier keinen Token
-   * (siehe routes/auth.js).
+   * liegt trotzdem hier, weil dieses Backend das Schema besitzt. Node itself
+   * issues no tokens (sign-in is Laravel's) and only passes `two_factor_method`
+   * on in user payloads (serializeUser in auth.js).
    *
    * In einer Schleife und einzeln geprueft, damit eine halb nachgeruestete DB
    * (Abbruch mitten im Start) beim naechsten Start einfach weitermacht. Die
