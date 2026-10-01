@@ -1,6 +1,7 @@
 import { API_URL } from '@/constants/config';
 import type { AccountType } from '@/domain/account';
 import type { BillingPeriod } from '@/domain/billing-period';
+import { createSessionWatch } from '@/domain/session';
 
 /**
  * Die Kontostufe wohnt in der Domain-Schicht (dort stehen auch die Rechte und
@@ -931,6 +932,37 @@ export type UpdateProfileInput = {
   interests?: number[];
 };
 
+/**
+ * Every answer to an authenticated request is reported here (F-20): a 401 means the server no
+ * longer accepts the session (expired, or signed out by a password, e-mail or two-factor change
+ * elsewhere), and the auth state signs out on this device (src/lib/auth-context.tsx). Logic and
+ * tests: src/domain/session.ts.
+ */
+export const sessionWatch = createSessionWatch();
+
+/**
+ * Reads an answer: reports its status with the token the request carried, parses JSON, and
+ * throws an ApiError with the full body (bans and moderation put their details there) when the
+ * request failed. Every fetch site of this file goes through here.
+ */
+async function parseResponse<T>(response: Response, token: string | null | undefined): Promise<T> {
+  sessionWatch.report(response.status, token);
+
+  const isJson = response.headers.get('content-type')?.includes('application/json');
+  const data = isJson ? await response.json() : null;
+
+  if (!response.ok) {
+    throw new ApiError(
+      data?.message ?? 'Etwas ist schiefgelaufen.',
+      response.status,
+      data?.errors ?? {},
+      data ?? null,
+    );
+  }
+
+  return data as T;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, token } = options;
 
@@ -949,19 +981,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
   }
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
-
-  if (!response.ok) {
-    throw new ApiError(
-      data?.message ?? 'Etwas ist schiefgelaufen.',
-      response.status,
-      data?.errors ?? {},
-      data ?? null,
-    );
-  }
-
-  return data as T;
+  return parseResponse<T>(response, token);
 }
 
 /**
@@ -984,19 +1004,7 @@ async function upload<T>(token: string, path: string, form: FormData): Promise<T
     throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
   }
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
-
-  if (!response.ok) {
-    throw new ApiError(
-      data?.message ?? 'Etwas ist schiefgelaufen.',
-      response.status,
-      data?.errors ?? {},
-      data ?? null,
-    );
-  }
-
-  return data as T;
+  return parseResponse<T>(response, token);
 }
 
 /**
@@ -1024,12 +1032,7 @@ async function moderationUpload(
     throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
   }
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
-  if (!response.ok) {
-    throw new ApiError(data?.message ?? 'Etwas ist schiefgelaufen.', response.status, data?.errors ?? {}, data ?? null);
-  }
-  return data as { message: string };
+  return parseResponse<{ message: string }>(response, token);
 }
 
 export const api = {
@@ -1742,20 +1745,8 @@ export const api = {
       throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
     }
 
-    const isJson = response.headers.get('content-type')?.includes('application/json');
-    const data = isJson ? await response.json() : null;
-
-    if (!response.ok) {
-      // Kompletten Body mitgeben: bei einer automatischen Sperre stecken die
-      // Details in `body.ban` bzw. `body.moderation`.
-      throw new ApiError(
-        data?.message ?? 'Etwas ist schiefgelaufen.',
-        response.status,
-        data?.errors ?? {},
-        data ?? null,
-      );
-    }
-
-    return data as { data: Activity };
+    // Kompletten Body mitgeben (parseResponse): bei einer automatischen Sperre stecken die
+    // Details in `body.ban` bzw. `body.moderation`.
+    return parseResponse<{ data: Activity }>(response, token);
   },
 };

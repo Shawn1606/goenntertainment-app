@@ -1,14 +1,18 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
+import { endsSession } from '@/domain/session';
 import {
   api,
   ApiError,
   needsTwoFactor,
+  sessionWatch,
   type RegisterInput,
   type TwoFactorChallenge,
   type UpdateProfileInput,
   type User,
 } from '@/lib/api';
+import { notifyUser } from '@/lib/confirm';
+import { migrateSavedLogin } from '@/lib/credential-store';
 import { clearToken, loadToken, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
@@ -56,11 +60,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
 
+  /**
+   * The token of the current session, for the 401 listener below (it must not re-subscribe on
+   * every sign-in). Updated in an effect, never during render (React Compiler rules); logout and
+   * endLocalSession clear it first, so their own requests cannot report the session as ended.
+   */
+  const tokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  /**
+   * The one way this device signs out (F-20, DECISIONS P2-12): deliberate logout and a 401
+   * during a session both end here. `notify` tells the person why, for the 401 case.
+   */
+  const endLocalSession = useCallback(async (notify: boolean) => {
+    tokenRef.current = null;
+    await clearToken();
+    setToken(null);
+    setUser(null);
+    if (notify) {
+      await notifyUser(
+        'Abgemeldet',
+        'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
+      );
+    }
+  }, []);
+
+  // A 401 to a request with the current token: the server no longer accepts this session.
+  useEffect(
+    () =>
+      sessionWatch.subscribe((rejected) => {
+        if (endsSession(401, rejected, tokenRef.current)) void endLocalSession(true);
+      }),
+    [endLocalSession],
+  );
+
   // Beim Start: gespeicherten Token laden und gegen /api/user prüfen.
   useEffect(() => {
     let active = true;
 
     (async () => {
+      // First of all: an earlier version may have stored the password on this device; it goes
+      // now, even if the sign-in screen is never shown (src/lib/credential-store.ts).
+      await migrateSavedLogin();
+
       const stored = await loadToken();
       if (stored) {
         try {
@@ -123,11 +167,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const { user: me } = await api.me(token);
           setUser(me);
         } catch {
-          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. Ein
-          // ungültiger Token faellt ohnehin beim naechsten Start auf.
+          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. A rejected token (401)
+          // has already ended the session through sessionWatch (endLocalSession).
         }
       },
       logout: async () => {
+        // Clear the ref first: the server's answer to this logout must not count as a 401
+        // during the session (after an account deletion the token is already gone).
+        tokenRef.current = null;
         if (token) {
           try {
             await api.logout(token);
@@ -135,12 +182,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // egal – lokal trotzdem abmelden
           }
         }
-        await clearToken();
-        setToken(null);
-        setUser(null);
+        await endLocalSession(false);
       },
     }),
-    [isBootstrapping, token, user],
+    [isBootstrapping, token, user, endLocalSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

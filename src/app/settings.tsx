@@ -38,7 +38,7 @@ import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
 import { blockedTermMessage } from '@/lib/blocked-terms';
 import { confirmAction, notifyUser } from '@/lib/confirm';
-import { clearCredentials } from '@/lib/credential-store';
+import { clearSavedEmail } from '@/lib/credential-store';
 import { previewSound } from '@/lib/feedback';
 import { useThemePreference } from '@/lib/theme-preference';
 
@@ -216,17 +216,17 @@ export default function SettingsScreen() {
     router.push('/security/password');
   }
 
-  /** Auf diesem Gerät gemerkte Zugangsdaten entfernen (Login füllt dann leer). */
+  /** Die auf diesem Gerät gemerkte E-Mail-Adresse entfernen (Login füllt dann leer). */
   async function onForgetDevice() {
     const ok = await confirmAction(
-      'Zugangsdaten löschen',
-      'Die auf diesem Gerät gespeicherte E-Mail und das Passwort werden entfernt. Beim nächsten Login musst du sie neu eingeben.',
+      'E-Mail-Adresse löschen',
+      'Die auf diesem Gerät gemerkte E-Mail-Adresse wird entfernt. Beim nächsten Login gibst du sie neu ein.',
       'Löschen',
       true,
     );
     if (!ok) return;
-    await clearCredentials();
-    await notifyUser('Erledigt', 'Auf diesem Gerät sind keine Zugangsdaten mehr gespeichert.');
+    await clearSavedEmail();
+    await notifyUser('Erledigt', 'Auf diesem Gerät ist keine E-Mail-Adresse mehr gespeichert.');
   }
 
   /**
@@ -427,8 +427,8 @@ export default function SettingsScreen() {
             <RowDivider />
             <LinkRow
               icon="key"
-              title="Gespeicherte Zugangsdaten löschen"
-              hint="Entfernt E-Mail und Passwort von diesem Gerät"
+              title="Gespeicherte E-Mail-Adresse löschen"
+              hint="Entfernt die gemerkte E-Mail-Adresse von diesem Gerät"
               onPress={onForgetDevice}
             />
           </SettingGroup>
