@@ -11,13 +11,14 @@ import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import * as auth from '../src/auth.js';
 import { TOKENABLE_TYPE, cleanup, createUser, insertToken } from './support/fixtures.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 
 let base;
 let server;
 
 before(async () => {
   await ensureSchema();
-  server = createApp().listen(0);
+  server = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
