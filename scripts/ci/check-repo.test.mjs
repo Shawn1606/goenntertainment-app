@@ -13,9 +13,11 @@ import {
   AUTOSTART_CLASSES,
   CHECKS,
   MUST_IGNORE,
+  SECRET_CLASSES,
   checkAgentPermissions,
   checkAutostart,
   checkIgnoreRules,
+  checkSecrets,
   formatReport,
   ignoreFindings,
   readTracked,
@@ -173,4 +175,51 @@ test('agent permission classes fire on the previous /wlan frontmatter', () => {
     'agent-unscoped-write\t.claude/settings.json:5',
   ]);
   assert.deepEqual(splitRules('Read(./a, b), Bash(ls)'), ['Read(./a, b)', 'Bash(ls)']);
+});
+
+/* ------------------------------------------------------------------------- secrets (F-35) */
+
+/** One planted sample per secret class, assembled at run time (never literal in this file). */
+const at = '@';
+const PLANTED = {
+  'email-slash-password': `kontakt${at}example.invalid / Planted99x`,
+  'email-password-label': `kontakt${at}example.invalid, Passwort: Planted99x`,
+  'private-key': `-----BEGIN ${'RSA PRIVATE'} KEY-----`,
+  'anthropic-api-key': `${'sk-'}${'ant-'}${'A'.repeat(24)}`,
+  'github-token': `${'gh'}${'p_'}${'a'.repeat(36)}`,
+  'aws-access-key-id': `${'AK'}${'IA'}${'ABCDEFGHIJKLMNOP'}`,
+  'stripe-live-key': `${'sk'}${'_live_'}${'x'.repeat(12)}`,
+  'google-api-key': `${'AI'}${'za'}${'B'.repeat(35)}`,
+  'slack-token': `${'xo'}${'xb-'}${'1'.repeat(12)}`,
+  'url-embedded-credentials': `https://user:${'planted'}pw${at}host.invalid/`,
+};
+
+test('F-35: tracked files contain no e-mail/password pair or provider token', () => {
+  const r = checkSecrets(ctx());
+  assert.ok(r.examined > 100, `only ${r.examined} text files examined`);
+  assert.deepEqual(listed(r.findings), []);
+});
+
+test('every secret class fires on its planted sample', () => {
+  assert.deepEqual(Object.keys(PLANTED).sort(), SECRET_CLASSES.map((c) => c.cls).sort());
+  for (const [cls, sample] of Object.entries(PLANTED)) {
+    const { findings } = scanLines([{ path: 'notes/planted.md', text: `line one\n${sample}\n` }], SECRET_CLASSES);
+    assert.ok(
+      findings.some((f) => f.cls === cls && f.location === 'notes/planted.md:2'),
+      `${cls} did not fire on its sample`,
+    );
+  }
+  // The label class is for docs only: fixtures in code pair addresses and passwords on purpose.
+  const inCode = scanLines([{ path: 'test/fixture.js', text: PLANTED['email-password-label'] }], SECRET_CLASSES);
+  assert.ok(!inCode.findings.some((f) => f.cls === 'email-password-label'));
+});
+
+test('secret findings never contain the matched text', () => {
+  const text = Object.values(PLANTED).join('\n');
+  const { findings } = scanLines([{ path: 'notes/planted.md', text }], SECRET_CLASSES);
+  assert.ok(findings.length >= Object.keys(PLANTED).length);
+  const out = formatReport(report('secrets', 1, findings));
+  for (const sample of Object.values(PLANTED)) {
+    assert.ok(!out.includes(sample.slice(-8)), 'a finding repeats the matched text');
+  }
 });

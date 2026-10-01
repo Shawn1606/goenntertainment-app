@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Log;
  *      ihr Text bleibt Wort fuer Wort derselbe: Die App zeigt ihn seit Monaten,
  *      und aeltere App-Fassungen pruefen ihn schon vor dem Absenden.
  *   2. nicht in `shared/common-passwords.json`. Verglichen wird das GANZE
- *      Passwort, kleingeschrieben: „geheim" ist verboten, „geheim1234" nicht.
+ *      Passwort, kleingeschrieben: „geheim" ist verboten, „geheimtipp42" nicht.
  *      Ein Teilstring-Vergleich klaenge strenger, waere aber willkuerlich - er
  *      verboete jedes Passwort, in dem irgendwo „hallo" oder „love" steckt.
  *   3. enthaelt weder den Benutzernamen noch den Teil der E-Mail vor dem @ -

@@ -310,10 +310,44 @@ export function checkAgentPermissions(ctx) {
   return report('agent-permissions', examined, findings);
 }
 
+/* ------------------------------------------------------------------------- secrets (F-35) */
+
+const DOC_FILE = /\.(md|txt)$/i;
+const EMAIL = '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}';
+
+/**
+ * Credential shapes that must never be in a tracked file. Deliberately narrow, so that every hit is
+ * worth a look; broad "looks random" classes flood on lock files and fixtures. Not covered: a bare
+ * password in prose without an address next to it.
+ */
+export const SECRET_CLASSES = [
+  // An address, a slash, then the password: how a working login gets written down in notes.
+  { cls: 'email-slash-password', re: new RegExp(`${EMAIL}\\s*\\/\\s*[^\\s/]{4,}`) },
+  // An address, then a password label and a value - docs only; test fixtures legitimately pair them.
+  {
+    cls: 'email-password-label',
+    re: new RegExp(`${EMAIL}.{0,40}\\b(passwor[dt]|kennwort|pw)\\b\\s*[:=]?\\s*\\S{4,}`, 'i'),
+    applies: (p) => DOC_FILE.test(p),
+  },
+  { cls: 'private-key', re: /-----BEGIN ([A-Z0-9]+ )*PRIVATE KEY-----/ },
+  { cls: 'anthropic-api-key', re: /sk-ant-[A-Za-z0-9_-]{20,}/ },
+  { cls: 'github-token', re: /gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,}/ },
+  { cls: 'aws-access-key-id', re: /(AKIA|ASIA)[0-9A-Z]{16}/ },
+  { cls: 'stripe-live-key', re: /(sk|rk)_live_[A-Za-z0-9]{10,}/ },
+  { cls: 'google-api-key', re: /AIza[0-9A-Za-z_-]{35}/ },
+  { cls: 'slack-token', re: /xox[abprs]-[A-Za-z0-9-]{10,}/ },
+  { cls: 'url-embedded-credentials', re: /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@'"]+:[^/\s@'"]+@/ },
+];
+
+export function checkSecrets(ctx) {
+  const { findings, examined } = scanLines(ctx.files, SECRET_CLASSES);
+  return report('secrets', examined, findings);
+}
+
 /* ------------------------------------------------------------------------------ checks */
 
 /** The checks the CLI runs, in order. Each takes a context and returns report(...). */
-export const CHECKS = [checkIgnoreRules, checkAutostart, checkAgentPermissions];
+export const CHECKS = [checkIgnoreRules, checkAutostart, checkAgentPermissions, checkSecrets];
 
 export function formatReport(r) {
   const head = `${r.check}\texamined ${r.examined}\tfindings ${r.findings.length}`;

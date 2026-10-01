@@ -58,7 +58,7 @@ class PasswordPolicyTest extends TestCase
         $this->assertSame(PasswordPolicy::MSG_COMMON, PasswordPolicy::problem('qwertz123'));
 
         // Nur der GANZE Eintrag zaehlt - kein Wortstamm, kein Leetspeak.
-        $this->assertNull(PasswordPolicy::problem('geheim1234'));
+        $this->assertNull(PasswordPolicy::problem('geheimtipp42'));
         $this->assertNull(PasswordPolicy::problem('passwort1x'));
         $this->assertNull(PasswordPolicy::problem('p4ssw0rt1'));
     }
