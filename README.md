@@ -33,6 +33,15 @@ If the app shows "Keine Verbindung zum Server", the backend in step 2 is not
 running (or unreachable). See the "app can't reach the backend" section in
 [`change/human.md`](change/human.md).
 
+In the output, you'll find options to open the app in a
+
+- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
+- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
+- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
+- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+
+You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+
 ### Mail in development
 
 Laravel (`api/`) sends 2FA codes and other mail over SMTP. In development a local
@@ -52,15 +61,6 @@ Without Docker, the Mailpit binary does the same: download it from the
 [Mailpit releases](https://github.com/axllent/mailpit/releases) and run
 `mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025`.
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
 ## Tests and checks
 
 This is the one list of test suites and checks. CI runs all of them on every pull request
@@ -70,16 +70,17 @@ CI together.
 
 | Suite or check | Test files | Command (from the repository root) | Needs |
 |---|---|---|---|
-| Client unit tests | `src/domain/*.test.ts` | `npm test` | Node 22 |
+| Client unit tests | `src/domain/*.test.ts` | `npm test` | Node >= 22.18 (runs the `.ts` files directly) |
 | Typecheck | all `*.ts`/`*.tsx` in `tsconfig.json` | `npx tsc --noEmit` | `expo-env.d.ts` (see below) |
 | Lint | `src/`, `app/`, `components/` (expo lint's default inputs; tooling under `scripts/` is not linted) | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npm run lint` | |
 | Expo SDK versions | | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo install --check` | |
 | Server tests | `server/test/*.test.js` | `npm --prefix server test` | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
+| `composer.lock` matches `composer.json` | | `cd api && composer validate --no-check-publish --strict` | PHP 8.4, Composer 2 |
 | API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` | PHP 8.4, `composer install`, `api/.env` with a key |
 | CI tooling tests | `scripts/ci/*.test.mjs` | `npm run test:tooling` | |
 | Repository guardrails | | `node scripts/ci/check-repo.mjs` | |
-| Schema drift tool tests | `scripts/schema-drift/*.test.mjs` | `node --test "scripts/schema-drift/*.test.mjs"` | |
-| Schema drift check | | `node scripts/schema-drift/check.mjs` | MySQL 8.4 and an account that may create databases (`SCHEMA_DRIFT_DB_HOST`, `_PORT`, `_USER`, `_PASSWORD`), PHP with `pdo_mysql`, `composer install` in `api/` |
+| Schema drift tool tests | `scripts/schema-drift/*.test.mjs` | `node --test "scripts/schema-drift/*.test.mjs"` | Node >= 22.18, `npm --prefix server ci` |
+| Schema drift check | | `node scripts/schema-drift/check.mjs` | Node >= 22.18, `npm --prefix server ci`, MySQL 8.4 and an account that may create databases (`SCHEMA_DRIFT_DB_HOST`, `_PORT`, `_USER`, `_PASSWORD`), PHP with `pdo_mysql`, `composer install` in `api/` |
 | Workflow policy | | `node scripts/ci/check-workflows.mjs .github/workflows --ci-env deploy/ci.env` | |
 | Versions shared by CI and the Dockerfiles | | `node scripts/ci/check-mirrors.mjs` | |
 | Workflow lint | | actionlint, see [`.github/actionlint/Dockerfile`](.github/actionlint/Dockerfile) | Docker |
