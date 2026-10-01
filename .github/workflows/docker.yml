@@ -74,7 +74,10 @@ jobs:
         run: |
           set -euo pipefail
           BASE=http://127.0.0.1:8080
-          DOMAIN=$(sed -n 's/^DOMAIN=//p' ci.env)
+          # tr: in a CRLF checkout of ci.env (Windows, core.autocrlf) the value keeps a carriage
+          # return under a Linux shell, and the banner URL check below fails although the URL is
+          # right.
+          DOMAIN=$(sed -n 's/^DOMAIN=//p' ci.env | tr -d '\r')
           test -n "$DOMAIN"
 
           echo "--- Gesundheit (Laravel fragt die Datenbank)"
