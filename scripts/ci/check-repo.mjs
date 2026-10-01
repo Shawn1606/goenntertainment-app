@@ -274,8 +274,8 @@ const WRITE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
  * `mcp__<server>__<tool>` or `mcp__<server>__*`, and server names may contain hyphens.
  */
 const RULE = /^(mcp__[A-Za-z0-9_-]+\*?|[A-Za-z0-9_]+)(?:\((.*)\))?$/;
-/** A top-level frontmatter key (at column 0, optionally quoted) and its inline value. */
-const FRONTMATTER_KEY = /^(["']?)([A-Za-z][A-Za-z0-9_-]*)\1:\s*(.*)$/;
+/** A top-level frontmatter key (at column 0, optionally quoted, YAML allows `key :`) and its inline value. */
+const FRONTMATTER_KEY = /^(["']?)([A-Za-z][A-Za-z0-9_-]*)\1[ \t]*:\s*(.*)$/;
 const LIST_ITEM = /^\s*-\s*(.+)$/;
 
 /**

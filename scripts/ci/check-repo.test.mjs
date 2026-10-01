@@ -199,8 +199,9 @@ test('agent permissions: quoted, flow-list and space-separated allowed-tools rea
     agentFile('.claude/commands/single.md', "allowed-tools: 'Bash(curl:*)'"),
     agentFile('.claude/commands/flow.md', 'allowed-tools: [Bash, "Write"]'),
     agentFile('.claude/commands/spaces.md', 'allowed-tools: Read Bash(git status) Edit'),
+    agentFile('.claude/commands/keys.md', '"allowed-tools" : Write', 'disable-model-invocation: true'),
   ]);
-  assert.equal(examined, 4 + 2 + 1 + 2 + 3);
+  assert.equal(examined, 5 + 2 + 1 + 2 + 3 + 1);
   assert.deepEqual(listed(findings), [
     'agent-shell-wildcard\t.claude/commands/quoted.md:3',
     'agent-unscoped-write\t.claude/commands/quoted.md:3',
@@ -212,6 +213,7 @@ test('agent permissions: quoted, flow-list and space-separated allowed-tools rea
     'agent-model-invocable\t.claude/commands/flow.md:1',
     'agent-unscoped-write\t.claude/commands/spaces.md:3',
     'agent-model-invocable\t.claude/commands/spaces.md:1',
+    'agent-unscoped-write\t.claude/commands/keys.md:3',
   ]);
 });
 
