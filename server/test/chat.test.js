@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
-import { TEST_PASSWORD, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
+import { createUser, deleteTestUsers } from './support/fixtures.js';
 
 // Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
 // ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
@@ -25,30 +25,12 @@ let server;
 const createdUserIds = [];
 const createdActivityIds = [];
 
-/** Wegwerf-Konto. Registriert wird immer als 'standard', die Stufe kommt danach. */
-async function registerUser(prefix, accountType = 'creator') {
-  const stamp = uniqueStamp();
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: `${prefix} Test`,
-      username: `${prefix}${stamp}`.slice(0, 28),
-      email: `${prefix}${stamp}@example.com`,
-      password: TEST_PASSWORD,
-      account_type: 'standard',
-      device_name: 'test',
-    }),
-  });
-  assert.equal(res.status, 201, 'Registrierung muss klappen');
-  const body = await res.json();
-  createdUserIds.push(body.user.id);
-  if (accountType !== 'standard') {
-    await pool.query('UPDATE users SET account_type = ? WHERE id = ?', [accountType, body.user.id]);
-    body.user.account_type = accountType;
-  }
-  return body;
-}
+/**
+ * Throw-away account with a token, written straight to the database
+ * (test/support/fixtures.js): sign-up belongs to Laravel.
+ */
+const registerUser = (prefix, accountType = 'creator') =>
+  createUser(prefix, { accountType, created: createdUserIds });
 
 const get = (path, token) =>
   fetch(`${base}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });

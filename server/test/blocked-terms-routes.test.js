@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { blockedTermMessageFor } from '../src/blocked-terms.js';
-import { deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
+import { createUser, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
 
 process.env.FEATURE_ACCOUNT_TIERS = 'true';
 
@@ -52,14 +52,12 @@ async function tryRegister(overrides) {
   return { status: res.status, body };
 }
 
-async function registerUser(accountType = 'creator') {
-  const { status, body } = await tryRegister();
-  assert.equal(status, 201, 'Registrierung muss klappen');
-  if (accountType !== 'standard') {
-    await pool.query('UPDATE users SET account_type = ? WHERE id = ?', [accountType, body.user.id]);
-  }
-  return body;
-}
+/**
+ * Throw-away account with a token, written straight to the database (test/support/fixtures.js):
+ * sign-up belongs to Laravel. tryRegister above stays for the test of Node's sign-up itself.
+ */
+const registerUser = (accountType = 'creator') =>
+  createUser('blockterm', { accountType, created: createdUserIds });
 
 const send = (method, path, token, body) =>
   fetch(`${base}${path}`, {

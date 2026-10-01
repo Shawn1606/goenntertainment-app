@@ -9,8 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createApp } from '../src/app.js';
-import { ensureSchema, pool } from '../src/db.js';
-import { TEST_PASSWORD, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
+import { ensureSchema, first, pool } from '../src/db.js';
+import { TEST_PASSWORD, createUser, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
 
 // Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
 // ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
@@ -25,37 +25,17 @@ const createdActivityIds = [];
 /**
  * Legt einen Wegwerf-Nutzer an und liefert {token, user}.
  *
- * Registriert wird IMMER als 'standard' – mehr darf sich niemand selbst geben
- * (siehe src/accounts.js). Die gewuenschte Stufe kommt danach direkt in die DB,
- * so wie ein Admin sie freischalten wuerde. Voreinstellung ist 'creator': Fast
- * jeder Test hier legt Events an, und das darf ein 'standard'-Konto absichtlich
- * nicht. Wer die Sperre selbst pruefen will, uebergibt 'standard'.
+ * Voreinstellung ist 'creator': Fast jeder Test hier legt Events an, und das
+ * darf ein 'standard'-Konto absichtlich nicht. Wer die Sperre selbst pruefen
+ * will, uebergibt 'standard'.
+ *
+ * The account and its token are written straight to the database with the
+ * wanted tier (test/support/fixtures.js), the way an admin would grant it:
+ * sign-up belongs to Laravel. tryRegister below stays for the tests of Node's
+ * sign-up itself.
  */
-async function registerUser(prefix, accountType = 'creator') {
-  const stamp = uniqueStamp();
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: `${prefix} Test`,
-      username: `${prefix}${stamp}`.slice(0, 28),
-      email: `${prefix}${stamp}@example.com`,
-      password: TEST_PASSWORD,
-      account_type: 'standard',
-      device_name: 'test',
-    }),
-  });
-  assert.equal(res.status, 201, 'Registrierung muss klappen');
-  const body = await res.json();
-  createdUserIds.push(body.user.id);
-  if (accountType !== 'standard') {
-    await setAccountType(body.user.id, accountType);
-    // Die Antwort der Registrierung kennt nur 'standard'. Mitziehen, damit Tests
-    // aus `user` dieselbe Stufe lesen, die jetzt in der DB steht.
-    body.user.account_type = accountType;
-  }
-  return body;
-}
+const registerUser = (prefix, accountType = 'creator') =>
+  createUser(prefix, { accountType, created: createdUserIds });
 
 /** Registriert ohne Erwartung an den Status – fuer die Pruefung der Kontostufen. */
 async function tryRegister(prefix, accountType) {
@@ -80,6 +60,10 @@ async function tryRegister(prefix, accountType) {
 /** Hebt einen Nutzer auf eine Kontostufe (direkt in der DB, ohne Admin-Umweg). */
 const setAccountType = (userId, type) =>
   pool.query('UPDATE users SET account_type = ? WHERE id = ?', [type, userId]);
+
+/** The tier stored for an account (read from the database: GET /api/user belongs to Laravel). */
+const accountTypeOf = async (userId) =>
+  (await first('SELECT account_type FROM users WHERE id = ?', [userId]))?.account_type;
 
 /** POST/DELETE auf die Hervorheben-Endpunkte. */
 const boost = (token, id, method = 'POST') =>
@@ -1278,8 +1262,7 @@ test('POST /api/me/upgrade-request: Standard fragt Creator an, Admin bestaetigt'
 
   // Bestaetigen setzt die Stufe wirklich um.
   assert.equal((await post(`/api/admin/upgrade-requests/${request.id}/approve`, admin.token)).status, 200);
-  const me = await (await get('/api/user', person.token)).json();
-  assert.equal(me.user.account_type, 'creator');
+  assert.equal(await accountTypeOf(person.user.id), 'creator');
   const own = await (await get('/api/me/upgrade-request', person.token)).json();
   assert.equal(own.data.status, 'approved');
   // Creator ist jetzt erreicht, also bleiben nur die Business-Stufen uebrig.
@@ -1306,7 +1289,7 @@ test('POST /api/admin/upgrade-requests/:id/reject: Grund landet bei der Person',
   assert.equal(own.data.status, 'rejected');
   assert.equal(own.data.decision_note, 'Bitte erst ein Gewerbe nachweisen.');
   // Die Stufe bleibt, wo sie war.
-  assert.equal((await (await get('/api/user', person.token)).json()).user.account_type, 'standard');
+  assert.equal(await accountTypeOf(person.user.id), 'standard');
 });
 
 test('POST /api/me/upgrade-request: eine neue Anfrage ersetzt die alte', async () => {

@@ -31,7 +31,7 @@ function testFiles() {
 function usernamePrefixes() {
   const prefixes = new Set();
   for (const { text } of testFiles()) {
-    for (const m of text.matchAll(/\b(?:registerUser|tryRegister|insertTestUser|testIdentity)\((?:pool, )?'([a-z0-9]+)'/g)) {
+    for (const m of text.matchAll(/\b(?:registerUser|tryRegister|insertTestUser|testIdentity|createUser)\((?:pool, )?'([a-z0-9]+)'/g)) {
       prefixes.add(m[1]);
     }
     for (const m of text.matchAll(/`([a-z0-9]+)\$\{(?:s|stamp|stamp\(\)|uniqueStamp\(\))\}/g)) prefixes.add(m[1]);

@@ -16,7 +16,7 @@ import { createApp } from '../src/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
 import { MSG_PASSWORD_COMMON, MSG_PASSWORD_PERSONAL } from '../src/password-policy.js';
-import { TEST_PASSWORD as PASSWORD, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
+import { TEST_PASSWORD as PASSWORD, createUser, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
 
 let base;
 let server;
@@ -50,15 +50,12 @@ async function tryRegister(prefix, overrides = {}) {
   return { status: res.status, body, payload };
 }
 
-/** Wegwerf-Konto; die Stufe kommt direkt in die DB (wie in api.test.js). */
-async function registerUser(prefix, accountType = 'creator') {
-  const { status, body } = await tryRegister(prefix);
-  assert.equal(status, 201, 'Registrierung muss klappen');
-  if (accountType !== 'standard') {
-    await pool.query('UPDATE users SET account_type = ? WHERE id = ?', [accountType, body.user.id]);
-  }
-  return body;
-}
+/**
+ * Throw-away account with a token, written straight to the database (test/support/fixtures.js):
+ * sign-up belongs to Laravel. tryRegister above stays for the tests of Node's sign-up itself.
+ */
+const registerUser = (prefix, accountType = 'creator') =>
+  createUser(prefix, { accountType, created: createdUserIds });
 
 const login = (email, password) =>
   fetch(`${base}/api/login`, {
