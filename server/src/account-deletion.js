@@ -23,6 +23,8 @@
  *   - `password_reset_tokens` (haengt an der E-Mail, nicht an der ID),
  *   - `sessions` von Laravel (ohne Fremdschluessel; die Tabelle gibt es nur,
  *     wo Laravel mitlaeuft),
+ *   - the account's own events, deleted before the account row (MySQL 8.4
+ *     foreign-key check, see deleteUserAccount below),
  *   - die Dateien.
  *
  * ## Event-Banner
@@ -160,6 +162,14 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
         eventBanners,
       ]);
     }
+
+    // Delete the account's own events before the account row. With a single DELETE FROM users,
+    // MySQL 8.4 cascades to activities and to activity_history / reward_points at once; the
+    // events' ON DELETE SET NULL then updates the host's own rows, and InnoDB re-checks their
+    // user_id foreign key against the user row that is already being deleted
+    // (ER_NO_REFERENCED_ROW_2). Deleted first, the SET NULL runs while the user row still exists.
+    // The participants' history was updated above, while activity_id was still set.
+    await conn.query('DELETE FROM activities WHERE user_id = ?', [user.id]);
 
     await conn.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [user.id]);
     await conn.query('DELETE FROM password_reset_tokens WHERE email = ?', [user.email]);
