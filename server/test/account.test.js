@@ -149,18 +149,23 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
-  }
-  for (const file of createdFiles) {
-    try {
-      fs.unlinkSync(storagePath(file));
-    } catch {
-      /* schon weg – genau das pruefen die Tests */
+  // The pool and the server are closed even when the cleanup throws; otherwise their open
+  // handles keep this test process alive and `npm test` never exits.
+  try {
+    if (createdUserIds.length) {
+      await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
     }
+    for (const file of createdFiles) {
+      try {
+        fs.unlinkSync(storagePath(file));
+      } catch {
+        /* schon weg – genau das pruefen die Tests */
+      }
+    }
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  await pool.end();
-  server.close();
 });
 
 /* ------------------------------------------------ Zwei-Faktor-Sperre (Node) */

@@ -130,17 +130,21 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdActivityIds.length) {
-    await pool.query(
-      `DELETE FROM activities WHERE id IN (${createdActivityIds.map(() => '?').join(',')})`,
-      createdActivityIds,
-    );
+  // Closed even when the cleanup throws; open handles would keep `npm test` from exiting.
+  try {
+    if (createdActivityIds.length) {
+      await pool.query(
+        `DELETE FROM activities WHERE id IN (${createdActivityIds.map(() => '?').join(',')})`,
+        createdActivityIds,
+      );
+    }
+    if (createdUserIds.length) {
+      await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
+    }
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
-  }
-  await pool.end();
-  server.close();
 });
 
 test('GET /api/me/progress: frischer Account startet bei 0 XP und Level 1', async () => {

@@ -94,11 +94,15 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
+  // Closed even when the cleanup throws; open handles would keep `npm test` from exiting.
+  try {
+    if (createdUserIds.length) {
+      await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
+    }
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  await pool.end();
-  server.close();
 });
 
 test('POST /api/register (Node): gesperrter Benutzername und Name werden abgelehnt', async () => {
