@@ -20,9 +20,9 @@ function makeResetToken() {
  * Nimmt eine E-Mail entgegen und legt (falls das Konto existiert) einen Reset-Token an.
  * Antwortet IMMER neutral – so verraet die API nicht, ob eine E-Mail registriert ist.
  *
- * Hinweis: Der eigentliche Mail-Versand braucht einen SMTP-Zugang und ist ein
- * eigenes Ticket. Bis dahin wird der Link/Token nur in die Server-Konsole geloggt,
- * damit man den Ablauf testen kann.
+ * Mail delivery of the reset is still missing. Until then the token goes nowhere: it is
+ * never written to the console or a log, because whoever can read the server output
+ * could take over the account.
  */
 router.post('/forgot-password', async (req, res, next) => {
   try {
@@ -42,8 +42,7 @@ router.post('/forgot-password', async (req, res, next) => {
          ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = NOW()`,
         [b.email, tokenHash],
       );
-      // TODO(eigenes Ticket): echten Mail-Versand anbinden (SMTP).
-      console.log(`[forgot-password] Reset-Token fuer ${b.email}: ${token}`);
+      // TODO: deliver the reset by mail; the token is never logged (see above).
     }
 
     res.json({
