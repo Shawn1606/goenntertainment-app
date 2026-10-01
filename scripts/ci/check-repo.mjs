@@ -4,11 +4,14 @@
  *
  *   node scripts/ci/check-repo.mjs     exit 0 = no findings, 1 = findings, 2 = a check could not run
  *
+ * Checks: ignore-rules (F-46), autostart and agent-permissions (F-24), secrets (F-35), log-mailer
+ * (development mail goes to the local mail catcher, never to a log).
+ *
  * Rules every check follows:
  *   - It reports how many items it examined and refuses a verdict when that number is zero:
  *     a check that saw nothing proves nothing.
- *   - A finding is printed as `<class><TAB><path>:<line>` only, never the matched text, so the
- *     output itself cannot leak what it found.
+ *   - A finding is printed as `<class><TAB><location>` only (`path:line`, or just the path for a
+ *     path-level finding), never the matched text, so the output itself cannot leak what it found.
  *   - There is no allow-list. A false positive is fixed by rewording the file, not by exempting
  *     a path.
  *
