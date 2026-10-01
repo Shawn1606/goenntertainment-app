@@ -202,6 +202,17 @@ test('F-35: tracked files contain no e-mail/password pair or provider token', ()
   assert.deepEqual(listed(r.findings), []);
 });
 
+test('url-embedded-credentials does not read an image digest reference as a password', () => {
+  const digest = `docker://alpine:3.20${at}sha256:${'b'.repeat(64)}`;
+  const { findings } = scanLines([{ path: '.github/workflows/x.yml', text: `      - uses: ${digest}
+` }], SECRET_CLASSES);
+  assert.deepEqual(findings, []);
+  // The real shape still fires on the same line layout.
+  const cred = scanLines([{ path: '.github/workflows/x.yml', text: `      url: ${PLANTED['url-embedded-credentials']}
+` }], SECRET_CLASSES);
+  assert.deepEqual(cred.findings.map((f) => f.cls), ['url-embedded-credentials']);
+});
+
 test('every secret class fires on its planted sample', () => {
   assert.deepEqual(Object.keys(PLANTED).sort(), SECRET_CLASSES.map((c) => c.cls).sort());
   for (const [cls, sample] of Object.entries(PLANTED)) {

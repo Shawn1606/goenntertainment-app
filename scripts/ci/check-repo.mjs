@@ -339,7 +339,9 @@ export const SECRET_CLASSES = [
   { cls: 'stripe-live-key', re: /(sk|rk)_live_[A-Za-z0-9]{10,}/ },
   { cls: 'google-api-key', re: /AIza[0-9A-Za-z_-]{35}/ },
   { cls: 'slack-token', re: /xox[abprs]-[A-Za-z0-9-]{10,}/ },
-  { cls: 'url-embedded-credentials', re: /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@'"]+:[^/\s@'"]+@/ },
+  // `image:tag@sha256:<digest>` (docker:// actions, pinned images) has the same shape as user:password@host;
+  // a digest is never a host, so it does not count.
+  { cls: 'url-embedded-credentials', re: /[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/\s:@'"]+:[^/\s@'"]+@(?!sha256:)/ },
 ];
 
 export function checkSecrets(ctx) {
