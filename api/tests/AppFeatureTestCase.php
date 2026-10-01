@@ -31,9 +31,9 @@ abstract class AppFeatureTestCase extends TestCase
     use DatabaseTransactions;
 
     /**
-     * Password of every account made by makeUser(). Obviously fake; a named mirror of
-     * TEST_PASSWORD in server/test/support/fixtures.js (tests/Unit/PasswordPolicyTest.php checks
-     * that it is not on the common-password list).
+     * Password of every account made by makeUser(). Obviously fake; a mirror of TEST_PASSWORD in
+     * server/test/support/fixtures.js, kept equal by tests/Unit/AppFeatureTestCaseTest.php
+     * (tests/Unit/PasswordPolicyTest.php checks that it is not on the common-password list).
      */
     public const TEST_PASSWORD = 'Fixture-Only-Pass-2468';
 

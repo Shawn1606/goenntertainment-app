@@ -24,7 +24,8 @@
  * TEST_PASSWORD is an obviously fake value for throw-away accounts. It passes the password rule
  * (src/password-policy.js) and is not in shared/common-passwords.json; api/tests/Unit/
  * PasswordPolicyTest.php asserts the latter for this exact value (a named mirror of it), and
- * api/tests/AppFeatureTestCase.php uses the same value (another named mirror).
+ * api/tests/AppFeatureTestCase.php uses the same value (api/tests/Unit/AppFeatureTestCaseTest.php
+ * checks that the two are equal).
  *
  * ## Accounts and tokens
  *

@@ -39,6 +39,13 @@ class AppFeatureTestCaseTest extends TestCase
         $this->assertContains('personal_access_tokens', $tables);
     }
 
+    public function test_the_fixture_password_mirrors_the_server_tests(): void
+    {
+        $fixtures = (string) file_get_contents(dirname(__DIR__, 3).'/server/test/support/fixtures.js');
+        $this->assertSame(1, preg_match("/^export const TEST_PASSWORD = '([^']+)';\\r?$/m", $fixtures, $m), 'TEST_PASSWORD not found in server/test/support/fixtures.js');
+        $this->assertSame($m[1], AppFeatureTestCase::TEST_PASSWORD);
+    }
+
     public function test_unit_tests_do_not_boot_the_application(): void
     {
         // The Unit suite runs without any database; a test that needs Laravel or the database
