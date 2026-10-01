@@ -836,8 +836,11 @@ export function needsTwoFactor(result: LoginResult): result is { two_factor: Two
   return 'two_factor' in result && !!result.two_factor;
 }
 
-/** Bestätigung zum Abschalten der 2FA / neuen Codes: Passwort ODER aktueller Code. */
-export type SecondFactorProof = { password: string } | { code: string };
+/**
+ * Bestätigung zum Abschalten der 2FA / neuen Codes: Passwort UND aktueller Code (F-19). Eines
+ * allein reicht nicht mehr – sonst genügte ein gemailter Code oder das Passwort allein.
+ */
+export type SecondFactorProof = { password: string; code: string };
 
 export type RegisterInput = {
   name: string;
@@ -1061,11 +1064,11 @@ export const api = {
       body: { challenge },
     }),
 
-  /** 2FA per E-Mail einrichten, Schritt 1: Code an die Konto-Adresse schicken. */
-  twoFactorEmailStart: (token: string) =>
+  /** 2FA per E-Mail einrichten, Schritt 1: mit dem Passwort bestätigen, Code an die Konto-Adresse. */
+  twoFactorEmailStart: (token: string, password: string) =>
     request<{ message: string; destination: string; expires_in: number; challenge: string }>(
       '/user/two-factor/email',
-      { method: 'POST', token },
+      { method: 'POST', body: { password }, token },
     ),
 
   /** 2FA per E-Mail einrichten, Schritt 2: Code bestätigen – danach ist sie an. */
@@ -1076,9 +1079,13 @@ export const api = {
       token,
     }),
 
-  /** Authenticator-App einrichten, Schritt 1: Geheimnis + otpauth-Link holen. */
-  twoFactorTotpStart: (token: string) =>
-    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', { method: 'POST', token }),
+  /** Authenticator-App einrichten, Schritt 1: mit dem Passwort bestätigen, Geheimnis + otpauth-Link holen. */
+  twoFactorTotpStart: (token: string, password: string) =>
+    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', {
+      method: 'POST',
+      body: { password },
+      token,
+    }),
 
   /** Authenticator-App einrichten, Schritt 2: ersten Code bestätigen. */
   twoFactorTotpConfirm: (token: string, code: string) =>
@@ -1099,7 +1106,7 @@ export const api = {
       token,
     }),
 
-  /** 2FA abschalten – mit Passwort oder aktuellem Code bestätigt. */
+  /** 2FA abschalten – mit Passwort und aktuellem Code bestätigt. Meldet andere Geräte ab. */
   twoFactorDisable: (token: string, proof: SecondFactorProof) =>
     request<{ user: User }>('/user/two-factor', { method: 'DELETE', body: proof, token }),
 

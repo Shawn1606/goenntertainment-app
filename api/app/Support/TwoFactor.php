@@ -13,6 +13,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
@@ -48,6 +49,17 @@ use RuntimeException;
  * absolut: fuenf falsche Codes, dann ist er verbraucht, und fuer den naechsten
  * braucht es wieder das Passwort. Damit hat, wer raet, fuenf Versuche auf eine
  * Million - pro Passwort-Eingabe.
+ *
+ * ## And per account (F-19)
+ *
+ * Whoever knows the password can start a new challenge as often as the limiters allow, so the
+ * per-challenge cap alone still adds up. Every wrong code also counts per ACCOUNT, across all
+ * challenges and step-ups (sign-in, switching on and off, recovery codes, e-mail change, account
+ * deletion): at the cap (config ratelimits.two-factor-failures, default 10 in 15 minutes) no
+ * code is checked, no sign-in challenge is started and no code is mailed until the window has
+ * passed. The count lives in the cache store (the database in the deploy) and is not reset by a
+ * right code. A known password can therefore lock the second factor for the window: that is
+ * the price of the cap.
  */
 final class TwoFactor
 {
@@ -105,6 +117,9 @@ final class TwoFactor
 
     public const EXPIRED = 'expired';
 
+    /** The account's failure cap is reached (see the class comment); nothing was checked. */
+    public const LOCKED = 'locked';
+
     // Meldungen - die App zeigt sie woertlich.
     public const MSG_WRONG = 'Der Code stimmt nicht.';
 
@@ -119,8 +134,6 @@ final class TwoFactor
     public const MSG_REQUEST_FIRST = 'Fordere zuerst einen Code per E-Mail an.';
 
     public const MSG_CODE_REQUIRED = 'Bitte gib den Code ein.';
-
-    public const MSG_PASSWORD_OR_CODE = 'Bitte gib dein Passwort oder einen Code ein.';
 
     public const MSG_PASSWORD_WRONG = 'Das Passwort stimmt nicht.';
 
@@ -192,7 +205,13 @@ final class TwoFactor
      */
     public static function attempt(TwoFactorChallenge $challenge, Closure $verify): string
     {
-        return DB::transaction(function () use ($challenge, $verify) {
+        // The account's cap first: at the cap no code is even looked at.
+        if (self::accountLocked($challenge->user_id)) {
+            return self::LOCKED;
+        }
+
+        $guessed = false;
+        $result = DB::transaction(function () use ($challenge, $verify, &$guessed) {
             $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
 
             if ($locked === null) {
@@ -212,9 +231,75 @@ final class TwoFactor
             }
 
             $locked->increment('attempts');
+            $guessed = true;
 
             return $locked->attempts >= self::MAX_ATTEMPTS ? self::TOO_MANY : self::WRONG;
         });
+
+        // Counted after the transaction, in the cache store: a rollback must not undo it.
+        if ($guessed) {
+            self::recordFailure($challenge->user_id);
+        }
+
+        return $result;
+    }
+
+    /* --------------------------------------------- Fehlversuche je Konto (F-19) */
+
+    /** @return list<array{max: int, seconds: int}> */
+    private static function failureRules(): array
+    {
+        return RateLimitRules::parse(config('ratelimits.two-factor-failures.account'));
+    }
+
+    private static function failureKey(int|string $userId, int $seconds): string
+    {
+        return "two-factor-failures:{$userId}:{$seconds}";
+    }
+
+    /** Has the account reached its cap of wrong codes? */
+    public static function accountLocked(int|string $userId): bool
+    {
+        foreach (self::failureRules() as $rule) {
+            if (RateLimiter::tooManyAttempts(self::failureKey($userId, $rule['seconds']), $rule['max'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Counts one wrong code for the account (every rule of the cap). */
+    public static function recordFailure(int|string $userId): void
+    {
+        foreach (self::failureRules() as $rule) {
+            RateLimiter::hit(self::failureKey($userId, $rule['seconds']), $rule['seconds']);
+        }
+    }
+
+    /** "… bitte warte N Minuten …", with the time left until the cap ends. */
+    public static function lockedMessage(int|string $userId): string
+    {
+        $seconds = 0;
+        foreach (self::failureRules() as $rule) {
+            $key = self::failureKey($userId, $rule['seconds']);
+            if (RateLimiter::tooManyAttempts($key, $rule['max'])) {
+                $seconds = max($seconds, RateLimiter::availableIn($key));
+            }
+        }
+        $minutes = max(1, (int) ceil($seconds / 60));
+
+        return $minutes === 1
+            ? 'Zu viele falsche Codes – bitte warte eine Minute und versuch es dann noch mal.'
+            : "Zu viele falsche Codes – bitte warte {$minutes} Minuten und versuch es dann noch mal.";
+    }
+
+    /** Throws the cap's 422 on $field when the account is at its cap. */
+    public static function refuseIfLocked(User $user, string $field): void
+    {
+        if (self::accountLocked($user->getKey())) {
+            throw ValidationException::withMessages([$field => [self::lockedMessage($user->getKey())]]);
+        }
     }
 
     /**
@@ -338,6 +423,10 @@ final class TwoFactor
      */
     public static function startLogin(User $user): JsonResponse
     {
+        // At the account's cap: no challenge, no code mail (F-19). The caller has proven the
+        // password, so the answer tells nothing new; on `email`, where the sign-in form shows it.
+        self::refuseIfLocked($user, 'email');
+
         $method = $user->two_factor_method;
 
         [$challenge, $token] = self::createChallenge($user, self::PURPOSE_LOGIN, $method);
@@ -608,6 +697,7 @@ final class TwoFactor
                 self::OK => null,
                 self::WRONG => self::MSG_WRONG,
                 self::TOO_MANY => self::MSG_TOO_MANY,
+                self::LOCKED => self::lockedMessage($user->getKey()),
                 default => self::MSG_EXPIRED,
             };
 
@@ -618,43 +708,18 @@ final class TwoFactor
             return;
         }
 
+        // App codes and recovery codes count toward the account's cap like mailed ones (F-19).
+        self::refuseIfLocked($user, $field);
+
         $ok = $otp !== null
             ? self::verifyTotpForUser($user, $otp)
             : self::consumeRecoveryCode($user, $code);
 
         if (! $ok) {
+            self::recordFailure($user->getKey());
+
             throw ValidationException::withMessages([$field => [self::MSG_WRONG]]);
         }
-    }
-
-    /**
-     * Passwort ODER aktueller Code - fuer Ausschalten und neue Codes.
-     *
-     * Ist ein Passwort mitgeschickt, zaehlt NUR das: Ein falsches Passwort wird
-     * nicht still durch einen zufaellig mitgeschickten Code gerettet, und ein
-     * Wiederherstellungscode wird nicht verbraucht, wenn das Passwort genuegt.
-     */
-    public static function assertPasswordOrCode(User $user, mixed $password, mixed $code): void
-    {
-        if (is_string($password) && $password !== '') {
-            if (! Passwords::check($password, $user->password)) {
-                throw ValidationException::withMessages(['password' => [self::MSG_PASSWORD_WRONG]]);
-            }
-
-            return;
-        }
-
-        if (is_scalar($code) && trim((string) $code) !== '') {
-            self::assertCode($user, $code);
-
-            return;
-        }
-
-        $hasPassword = is_string($user->password) && $user->password !== '';
-
-        throw ValidationException::withMessages($hasPassword
-            ? ['password' => [self::MSG_PASSWORD_OR_CODE]]
-            : ['code' => [self::MSG_CODE_REQUIRED]]);
     }
 
     /* ------------------------------------------------------ Loesch-Freigabe */

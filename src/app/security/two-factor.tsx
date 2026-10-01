@@ -46,7 +46,10 @@ export default function TwoFactorScreen() {
   const { token, user, applyUser } = useAuth();
   const [step, setStep] = useState<Step>({ kind: 'overview' });
   const [code, setCode] = useState('');
-  const [proof, setProof] = useState('');
+  // Bestätigung (F-19): Einschalten braucht das Passwort, Ausschalten und neue Codes
+  // Passwort UND einen aktuellen Code.
+  const [password, setPassword] = useState('');
+  const [proofCode, setProofCode] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -67,18 +70,28 @@ export default function TwoFactorScreen() {
 
   async function startEmail() {
     if (!token) return;
-    const res = await run(() => api.twoFactorEmailStart(token));
+    if (!password) {
+      setError('Bitte gib zuerst dein Passwort ein.');
+      return;
+    }
+    const res = await run(() => api.twoFactorEmailStart(token, password));
     if (res) {
       setCode('');
+      setPassword('');
       setStep({ kind: 'email', challenge: res.challenge, destination: res.destination });
     }
   }
 
   async function startTotp() {
     if (!token) return;
-    const res = await run(() => api.twoFactorTotpStart(token));
+    if (!password) {
+      setError('Bitte gib zuerst dein Passwort ein.');
+      return;
+    }
+    const res = await run(() => api.twoFactorTotpStart(token, password));
     if (res) {
       setCode('');
+      setPassword('');
       setStep({ kind: 'totp', secret: res.secret, otpauthUrl: res.otpauth_url });
     }
   }
@@ -101,18 +114,20 @@ export default function TwoFactorScreen() {
     }
   }
 
-  /** Passwort ODER 6-stelliger Code – beides beweist, dass man es selbst ist. */
+  /** Passwort UND aktueller Code (oder Wiederherstellungscode) – erst beides zusammen genügt. */
   function proofBody() {
-    const value = proof.trim();
-    return /^\d{6}$/.test(value) ? { code: value } : { password: proof };
+    return { password, code: proofCode.trim() };
+  }
+
+  function proofComplete(): boolean {
+    if (password && proofCode.trim()) return true;
+    setError('Bitte gib dein Passwort und einen aktuellen Code ein.');
+    return false;
   }
 
   async function disable() {
     if (!token) return;
-    if (!proof) {
-      setError('Bitte bestätige mit deinem Passwort oder einem aktuellen Code.');
-      return;
-    }
+    if (!proofComplete()) return;
     const ok = await confirmAction(
       'Zwei-Faktor ausschalten?',
       'Dann reicht zum Anmelden wieder das Passwort allein.',
@@ -123,8 +138,9 @@ export default function TwoFactorScreen() {
     const res = await run(() => api.twoFactorDisable(token, proofBody()));
     if (res) {
       applyUser(res.user);
-      setProof('');
-      await notifyUser('Ausgeschaltet', 'Die Zwei-Faktor-Anmeldung ist aus.');
+      setPassword('');
+      setProofCode('');
+      await notifyUser('Ausgeschaltet', 'Die Zwei-Faktor-Anmeldung ist aus. Andere Geräte wurden abgemeldet.');
     }
   }
 
@@ -137,13 +153,11 @@ export default function TwoFactorScreen() {
 
   async function newCodes() {
     if (!token) return;
-    if (!proof) {
-      setError('Bitte bestätige mit deinem Passwort oder einem aktuellen Code.');
-      return;
-    }
+    if (!proofComplete()) return;
     const res = await run(() => api.twoFactorRecoveryCodes(token, proofBody()));
     if (res) {
-      setProof('');
+      setPassword('');
+      setProofCode('');
       setStep({ kind: 'codes', codes: res.recovery_codes });
     }
   }
@@ -164,6 +178,7 @@ export default function TwoFactorScreen() {
         <SecurityNote tone="danger">
           Jeder Code funktioniert genau einmal. Diese Liste siehst du nur jetzt.
         </SecurityNote>
+        <SecurityNote>Andere Geräte wurden abgemeldet.</SecurityNote>
         <BrandButton
           title="Codes teilen / speichern"
           variant="glass"
@@ -251,11 +266,20 @@ export default function TwoFactorScreen() {
 
         <Text style={[styles.section, { color: colors.text }]}>Bestätigen, dass du es bist</Text>
         <TextField
-          label="Passwort oder aktueller Code"
-          value={proof}
-          onChangeText={setProof}
+          label="Passwort"
+          value={password}
+          onChangeText={setPassword}
           secureTextEntry
           autoComplete="current-password"
+          leftIcon={<LockIcon />}
+        />
+        <TextField
+          label="Aktueller Code"
+          value={proofCode}
+          onChangeText={setProofCode}
+          autoComplete="one-time-code"
+          textContentType="oneTimeCode"
+          maxLength={9}
           leftIcon={<LockIcon />}
           error={error ?? undefined}
         />
@@ -276,6 +300,17 @@ export default function TwoFactorScreen() {
     <SecurityScreen
       title="Zwei-Faktor-Anmeldung"
       intro="Beim Anmelden brauchst du dann neben dem Passwort einen Code. Selbst wer dein Passwort kennt, kommt so nicht in dein Konto.">
+      <TextField
+        label="Passwort"
+        value={password}
+        onChangeText={setPassword}
+        secureTextEntry
+        autoComplete="current-password"
+        leftIcon={<LockIcon />}
+      />
+      <Text style={[styles.small, { color: colors.textSecondary }]}>
+        Zum Einschalten bestätigst du mit deinem Passwort.
+      </Text>
       <MethodOption
         icon="phone"
         title="Authenticator-App"

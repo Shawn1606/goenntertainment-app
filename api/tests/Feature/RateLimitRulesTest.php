@@ -28,6 +28,7 @@ class RateLimitRulesTest extends TestCase
         'two-factor-setup' => ['user' => '10/60,30/3600'],
         'account-sensitive' => ['user' => '10/60,30/3600'],
         'profile' => ['user' => '30/60,300/3600'],
+        'two-factor-failures' => ['account' => '10/900'],
     ];
 
     public function test_rules_parse(): void
@@ -108,7 +109,7 @@ class RateLimitRulesTest extends TestCase
 
         $pairs = static fn (array $sets): array => array_combine(array_column($sets, 1), array_column($sets, 2));
 
-        $this->assertCount(17, $inConfig, 'every scope of config/ratelimits.php has its own variable');
+        $this->assertCount(18, $inConfig, 'every scope of config/ratelimits.php has its own variable');
         $this->assertSame($pairs($inConfig), $pairs($inExample));
     }
 }

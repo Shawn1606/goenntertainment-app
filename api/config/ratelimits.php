@@ -59,4 +59,13 @@ return [
     'profile' => [
         'user' => env('AUTH_LIMIT_PROFILE_USER', '30/60,300/3600'),
     ],
+
+    // Not a route limiter: wrong second-factor codes per account, across every sign-in challenge
+    // and step-up (App\Support\TwoFactor). At the cap no code is accepted and none is mailed
+    // until the window has passed. A code check accepts 3 of a million codes (one time step
+    // either side), so 10 guesses per 15 minutes hit about once in 33,000 windows: one hit in
+    // roughly a year of non-stop guessing.
+    'two-factor-failures' => [
+        'account' => env('AUTH_LIMIT_2FA_FAILURES', '10/900'),
+    ],
 ];
