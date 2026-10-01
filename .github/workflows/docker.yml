@@ -5,7 +5,9 @@
 # kaputten Bauplan erst beim Ausrollen. Hier läuft bei jedem Push dasselbe wie auf
 # dem Server – nur ohne Caddy/HTTPS – und dann ein echter Durchgang:
 # Gesundheit → Registrierung (Laravel) → Aktivität mit Bild (Laravel → Node) → Bild
-# abrufen (über das gemeinsame Upload-Verzeichnis).
+# abrufen (über das gemeinsame Upload-Verzeichnis). Then: other spellings of Laravel's paths
+# never reach Node, and the account is deleted (Laravel checks, Node deletes over its internal
+# route), after which its token opens nothing.
 #
 # Security: read-only token, actions pinned by commit SHA, no credentials in this file.
 # All settings come from deploy/ci.env (public, fake, labelled ci-only); the Laravel key
@@ -122,6 +124,30 @@ jobs:
             -H 'Content-Type: application/json' -H 'Accept: application/json' \
             -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\"}")
           test "$CODE" = 422
+
+          echo "--- One owner per path: other spellings of a Laravel route never reach Node"
+          # --path-as-is: curl sends the path exactly as written (no dot-segment cleanup).
+          for P in /api/Login /api//login /api/./login /api/x/../login /api/%4Cogin /api/%254Cogin /api/login%2F; do
+            CODE=$(curl -s --path-as-is -o /dev/null -D /tmp/variant.headers -w '%{http_code}' -X POST "$BASE$P" \
+              -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{}')
+            if grep -qi '^x-goenn-backend:' /tmp/variant.headers; then echo "$P reached Node"; exit 1; fi
+            if [ "$CODE" != 404 ]; then echo "$P answered $CODE, expected 404"; exit 1; fi
+          done
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -H 'Accept: application/json' "$BASE/api/login")
+          test "$CODE" = 405
+          # A Node path still goes through.
+          curl -fsS -o /dev/null -D /tmp/node.headers -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' "$BASE/api/activities"
+          grep -qi '^x-goenn-backend: node-fallback' /tmp/node.headers
+
+          echo "--- Delete the account: Laravel checks, Node deletes over its internal route"
+          CODE=$(curl -s -o /tmp/delete.json -w '%{http_code}' -X DELETE "$BASE/api/me" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -d "{\"password\":\"Container-Test-$STAMP\"}")
+          if [ "$CODE" != 200 ]; then echo "DELETE /api/me answered $CODE"; jq . /tmp/delete.json; exit 1; fi
+          for P in /api/user /api/activities; do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' "$BASE$P")
+            if [ "$CODE" != 401 ]; then echo "$P answered $CODE after the deletion, expected 401"; exit 1; fi
+          done
 
           echo "Alles in Ordnung."
 
