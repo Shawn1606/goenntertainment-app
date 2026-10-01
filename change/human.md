@@ -1451,8 +1451,11 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
 
 - Mail-Zugang (SMTP) für den Server in `deploy/.env` eintragen. Am PC fängt Mailpit alle
   Mails ab (`docker compose -f dev/docker-compose.yml up -d`, dann http://127.0.0.1:8025;
-  ohne Docker geht das Mailpit-Programm, siehe README) – Codes stehen nie mehr in einem Log.
-  Eine alte `api/storage/logs/laravel.log` mit Codes darin kann gelöscht werden.
+  ohne Docker geht das Mailpit-Programm, siehe README). Ein vorhandenes `api/.env`, das noch
+  den Log-Mailer nutzt (`MAIL_MAILER` steht dort auf `log`), schreibt Codes weiter ins Log:
+  dort die `MAIL_*`-Zeilen aus `api/.env.example` übernehmen (`MAIL_MAILER=smtp`,
+  `MAIL_HOST=127.0.0.1`, `MAIL_PORT=1025`). Danach die alte `api/storage/logs/laravel.log`
+  löschen (sie kann Codes enthalten). Ab dann stehen Codes nie mehr in einem Log.
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.
