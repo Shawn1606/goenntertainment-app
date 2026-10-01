@@ -12,16 +12,26 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
 
 2. Start the backend (required — the app loads accounts/activities from it)
 
-   The app talks to the Node backend in [`server/`](server/) on port `8000`.
-   It does **not** start automatically. Run it in its own terminal:
+   The app talks to Laravel in [`api/`](api/) on port `8000`. Laravel serves sign-up,
+   sign-in and the account itself and forwards every other `/api` path to the Node backend
+   in [`server/`](server/), which runs behind it on port `8001`. Node no longer serves
+   Laravel's paths, so the app cannot talk to Node directly. Neither starts automatically;
+   run each in its own terminal (on Windows, `scripts/dev-up.ps1` starts both):
 
    ```bash
-   npm run server
+   npm run server                                    # Node on 8001 (PORT in server/.env)
+   php api/artisan serve --host=0.0.0.0 --port=8000  # Laravel in front
    ```
 
-   First-time DB setup (creates tables + seed data): apply `server/schema.sql`
-   to the MySQL database `goenntertainment`, then run `npm run server:seed`.
-   Config lives in `server/.env` (see `server/.env.example`).
+   First-time setup:
+   - Database: apply `server/schema.sql` to the MySQL database `goenntertainment`, then
+     run `npm run server:seed`.
+   - `server/.env` from `server/.env.example` (`PORT=8001`, `DB_*`).
+   - `api/.env` from `api/.env.example`, then `php api/artisan key:generate`; set
+     `DB_CONNECTION=mysql` and the same database settings as in `server/.env`.
+     `NODE_FALLBACK_URL` points Laravel at Node, and `NODE_INTERNAL_SECRET` must be the same
+     value in both files (both examples carry the same dev-only value). An older `api/.env`
+     or `server/.env` takes these lines from the examples.
 
 3. Start the app (in a second terminal)
 

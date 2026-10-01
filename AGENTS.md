@@ -10,7 +10,8 @@ These rules apply to every change, whether a person or an AI assistant writes it
   goes to the local mail catcher (README, "Mail in development"), never to the log mailer.
 - Every route needs authentication, authorisation, input limits, a rate limit and a test.
 - One backend owns each path: once Laravel (`api/`) serves a route, Node (`server/`) must not
-  serve it too.
+  serve it too (`api/tests/Feature/NodeTwinRoutesTest.php` fails otherwise). Node routers come
+  from `createRouter()` (`server/src/router.js`).
 - Every kind of user content needs moderation and a report path.
 - No personal data in fixtures, docs or commits: use obviously fake values (`example.invalid`
   addresses, made-up passwords), never a real address or a working credential.
