@@ -16,21 +16,18 @@ import { createApp } from '../src/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
 import { MSG_PASSWORD_COMMON, MSG_PASSWORD_PERSONAL } from '../src/password-policy.js';
+import { TEST_PASSWORD as PASSWORD, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
 
 let base;
 let server;
 const createdUserIds = [];
 const createdFiles = [];
 
-const PASSWORD = 'geheim1234';
-
 /** 1x1-PNG, reicht fuer jeden Upload. */
 const PNG_1X1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
   'base64',
 );
-
-const stamp = () => `${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
 async function tryRegister(prefix, overrides = {}) {
   const s = stamp();
@@ -152,9 +149,7 @@ after(async () => {
   // The pool and the server are closed even when the cleanup throws; otherwise their open
   // handles keep this test process alive and `npm test` never exits.
   try {
-    if (createdUserIds.length) {
-      await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
-    }
+    await deleteTestUsers(pool, createdUserIds);
     for (const file of createdFiles) {
       try {
         fs.unlinkSync(storagePath(file));
