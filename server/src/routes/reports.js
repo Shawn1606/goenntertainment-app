@@ -18,14 +18,14 @@
  * sofort und nur fuer die eigene Sicht (siehe `routes/friends.js`). Beides
  * zusammen ist die ehrliche Antwort auf „was kann ich jetzt tun?".
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
 import { HttpError } from '../validate.js';
 import { parseReportInput } from '../reports.js';
 import { mediaUrl, publicBase } from '../media.js';
 
-const router = Router();
+const router = createRouter();
 
 /**
  * Gibt es den gemeldeten Gegenstand ueberhaupt?

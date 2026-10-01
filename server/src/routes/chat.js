@@ -29,7 +29,7 @@
  * elegant als eine offene Verbindung, aber es ist ehrlich zu dem, was dieses
  * Backend ist: ein Express-Prozess ohne Zustand zwischen Anfragen.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError } from '../validate.js';
@@ -37,7 +37,7 @@ import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm } from '../blocke
 import { mediaUrl, publicBase } from '../media.js';
 import { isRoomKind, nextBurst, pageLimit, parseMessageInput } from '../messaging.js';
 
-const router = Router();
+const router = createRouter();
 
 /**
  * Zeitstempel der letzten Nachrichten je Konto – der Zustand der Sende-Bremse.

@@ -23,14 +23,14 @@
  * Schritten schiefgehen koennte. Wer zweimal auf denselben Knopf tippt, hat
  * danach genau eine Anfrage; wer sich umentscheidet, ersetzt seine alte.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { Validator } from '../validate.js';
 import { REQUESTABLE_ACCOUNT_TYPES, normalizeAccountType, rankOf, requestableTypesFor } from '../accounts.js';
 import { BILLING_PERIODS, normalizeBillingPeriod } from '../subscriptions.js';
 
-const router = Router();
+const router = createRouter();
 
 /** Laenge der Begruendung – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_MESSAGE = 500;

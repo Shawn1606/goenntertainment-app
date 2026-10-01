@@ -19,7 +19,7 @@
  * Gruppen-Chat sitzen und wuerde weiterlesen – und „blockiert" waere eine Anzeige
  * ohne Wirkung.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError } from '../validate.js';
@@ -34,7 +34,7 @@ import {
 import { dropFollowsBetween } from '../follows.js';
 import { attachStories } from '../stories.js';
 
-const router = Router();
+const router = createRouter();
 
 // GET /api/friends  (geschuetzt) – Freunde, eingehende und offene Anfragen.
 router.get('/friends', requireAuth, async (req, res, next) => {

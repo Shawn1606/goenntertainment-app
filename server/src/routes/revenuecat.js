@@ -26,12 +26,12 @@
  * koennte – und sie fiele niemandem auf, weil alles funktioniert.
  */
 import crypto from 'node:crypto';
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { applyRevenueCatEvent } from '../subscriptions.js';
 
-const router = Router();
+const router = createRouter();
 
 /**
  * Vergleich in konstanter Zeit.

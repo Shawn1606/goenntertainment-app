@@ -23,7 +23,7 @@
  * Storys ueberall kennt – und die einzige, bei der die Leiste nach dem Ansehen
  * nicht wieder bei derselben Story anfaengt.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -48,7 +48,7 @@ import {
   transformStory,
 } from '../stories.js';
 
-const router = Router();
+const router = createRouter();
 
 const STORY_DIR = path.join(process.cwd(), 'storage', 'stories');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];

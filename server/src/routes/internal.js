@@ -7,7 +7,7 @@
  * (internal-secret.js).
  */
 import crypto from 'node:crypto';
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool } from '../db.js';
 import { HttpError } from '../validate.js';
 import { deleteUserAccount } from '../account-deletion.js';
@@ -49,7 +49,7 @@ async function consumeDeletionGrant(userId, grant) {
 
 /** The internal router; `secret` is NODE_INTERNAL_SECRET (config.js). */
 export function internalRouter({ secret } = {}) {
-  const router = Router({ caseSensitive: true, strict: true });
+  const router = createRouter();
 
   // GET /internal/health – container health check: the process answers and reaches the database.
   router.get('/health', async (req, res) => {

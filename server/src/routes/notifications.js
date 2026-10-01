@@ -13,13 +13,13 @@
  * ihren Zaehler nie wieder loswird. Einzeln abhaken gibt es fuer den Fall, dass
  * man genau eine antippt und wegspringt.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError } from '../validate.js';
 import { NOTIFICATION_LIMIT, transformNotification } from '../notifications.js';
 
-const router = Router();
+const router = createRouter();
 
 // GET /api/notifications  (geschuetzt) – neueste zuerst, dazu der Ungelesen-Zaehler.
 router.get('/notifications', requireAuth, async (req, res, next) => {

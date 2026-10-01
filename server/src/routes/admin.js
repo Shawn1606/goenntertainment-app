@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -12,7 +12,7 @@ import { transformRequest } from './upgrades.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { deleteUserAccount } from '../account-deletion.js';
 
-const router = Router();
+const router = createRouter();
 
 // Beweis-Bilder (Screenshots) landen unter storage/evidence und werden wie die
 // Banner ueber /storage ausgeliefert.

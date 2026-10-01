@@ -31,6 +31,11 @@ import { internalRouter } from './routes/internal.js';
 export function createApp({ internalSecret = internalSecretSetting() } = {}) {
   const app = express();
 
+  // One spelling per path, like the routers (src/router.js explains why). These must be set
+  // before the first app.use: Express builds the app's own router lazily from them.
+  app.set('case sensitive routing', true);
+  app.set('strict routing', true);
+
   /**
    * Hinter einem Reverse Proxy (nginx/Traefik in Produktion) steht in
    * `req.protocol` sonst 'http' – denn der Proxy spricht per Klartext mit Node,

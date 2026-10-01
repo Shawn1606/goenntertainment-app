@@ -11,7 +11,7 @@
  *
  * Gelesen wird von allen Angemeldeten – geschrieben nur am eigenen Profil.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -29,7 +29,7 @@ import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
 import { notifyFollowers, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
 
-const router = Router();
+const router = createRouter();
 
 const POST_DIR = path.join(process.cwd(), 'storage', 'posts');
 /** Profilbilder und Karten-Hintergruende ("Banner") des Kontos. */

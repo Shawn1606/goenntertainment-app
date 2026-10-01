@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -15,7 +15,7 @@ import { mediaUrl, publicBase } from '../media.js';
 import { notifyFollowers } from '../notifications.js';
 import { blockExistsBetween, transformUser } from '../people.js';
 
-const router = Router();
+const router = createRouter();
 
 const BANNER_DIR = path.join(process.cwd(), 'storage', 'banners');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];

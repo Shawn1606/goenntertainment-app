@@ -11,13 +11,13 @@
  * denen ein Umsatz spaeter aufsetzt. Sobald es Zahlungen gibt, wird aus dieser
  * einen Stelle eine echte Summe.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError } from '../validate.js';
 import { abilitiesFor, BOOST_DAYS } from '../accounts.js';
 
-const router = Router();
+const router = createRouter();
 
 /** Wie viele Events die Uebersicht hoechstens auflistet. */
 const EVENT_LIMIT = 50;

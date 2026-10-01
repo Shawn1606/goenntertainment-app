@@ -17,7 +17,7 @@
  * sie:er sie loescht (dann ist sie fuer alle weg, statt fuehrerlos
  * zurueckzubleiben).
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError, Validator } from '../validate.js';
@@ -30,7 +30,7 @@ import {
   transformUser,
 } from '../people.js';
 
-const router = Router();
+const router = createRouter();
 
 /** Wie viele Mitglieder eine Gruppe fasst – inklusive Anlegende:r. */
 const MAX_GROUP_MEMBERS = 50;

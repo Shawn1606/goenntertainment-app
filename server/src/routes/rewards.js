@@ -6,7 +6,7 @@
  * kennt: So bleibt eine aeltere App-Version lesbar, wenn ein Coupon dazukommt,
  * und der Preis, gegen den der Server prueft, ist immer der angezeigte.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { requireAuth } from '../auth.js';
 import { HttpError } from '../validate.js';
 import { toIso } from '../db.js';
@@ -20,7 +20,7 @@ import {
   redemptionsFor,
 } from '../rewards.js';
 
-const router = Router();
+const router = createRouter();
 
 /** Einloesung in die API-Form bringen (mit dem Text des Coupons dazu). */
 function transformRedemption(row) {
