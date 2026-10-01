@@ -344,10 +344,26 @@ export function checkSecrets(ctx) {
   return report('secrets', examined, findings);
 }
 
+/* ------------------------------------------------------------------------------ dev mail */
+
+/**
+ * No tracked config may select Laravel's log mailer, as a value or as a default: mails carry 2FA and
+ * reset codes. (A failover chain with 'log' is covered by api/tests/Unit/MailConfigTest.php.)
+ */
+export const LOG_MAILER_CLASSES = [
+  { cls: 'log-mailer', re: /\bMAIL_MAILER\b["']?\s*[:=]\s*["']?log\b/ },
+  { cls: 'log-mailer-default', re: /MAIL_MAILER\s*:-\s*log\b|env\(\s*['"]MAIL_MAILER['"]\s*,\s*['"]log['"]\s*\)/ },
+];
+
+export function checkLogMailer(ctx) {
+  const { findings, examined } = scanLines(ctx.files, LOG_MAILER_CLASSES);
+  return report('log-mailer', examined, findings);
+}
+
 /* ------------------------------------------------------------------------------ checks */
 
 /** The checks the CLI runs, in order. Each takes a context and returns report(...). */
-export const CHECKS = [checkIgnoreRules, checkAutostart, checkAgentPermissions, checkSecrets];
+export const CHECKS = [checkIgnoreRules, checkAutostart, checkAgentPermissions, checkSecrets, checkLogMailer];
 
 export function formatReport(r) {
   const head = `${r.check}\texamined ${r.examined}\tfindings ${r.findings.length}`;

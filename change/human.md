@@ -1449,8 +1449,10 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
 
 ### Was du noch tun musst
 
-- Mail-Zugang (SMTP) in `api/.env` eintragen – sonst stehen die 2FA-Codes nur in
-  `api/storage/logs/laravel.log`.
+- Mail-Zugang (SMTP) für den Server in `deploy/.env` eintragen. Am PC fängt Mailpit alle
+  Mails ab (`docker compose -f dev/docker-compose.yml up -d`, dann http://127.0.0.1:8025;
+  ohne Docker geht das Mailpit-Programm, siehe README) – Codes stehen nie mehr in einem Log.
+  Eine alte `api/storage/logs/laravel.log` mit Codes darin kann gelöscht werden.
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.

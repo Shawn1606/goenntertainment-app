@@ -12,11 +12,13 @@ import assert from 'node:assert/strict';
 import {
   AUTOSTART_CLASSES,
   CHECKS,
+  LOG_MAILER_CLASSES,
   MUST_IGNORE,
   SECRET_CLASSES,
   checkAgentPermissions,
   checkAutostart,
   checkIgnoreRules,
+  checkLogMailer,
   checkSecrets,
   formatReport,
   ignoreFindings,
@@ -222,4 +224,30 @@ test('secret findings never contain the matched text', () => {
   for (const sample of Object.values(PLANTED)) {
     assert.ok(!out.includes(sample.slice(-8)), 'a finding repeats the matched text');
   }
+});
+
+/* ------------------------------------------------------------------------------ dev mail */
+
+test('dev mail: no tracked config selects the log mailer', () => {
+  const r = checkLogMailer(ctx());
+  assert.ok(r.examined > 100);
+  assert.deepEqual(listed(r.findings), []);
+});
+
+test('log-mailer classes fire on planted env, YAML, compose and PHP lines', () => {
+  const key = 'MAIL_' + 'MAILER';
+  const lines = [
+    `${key}=log`,
+    `      ${key}: log`,
+    `      ${key}: \${${key}:-log}`,
+    `    'default' => env('${key}', 'log'),`,
+    `${key}=smtp`,
+  ];
+  const { findings } = scanLines([{ path: 'planted.txt', text: lines.join('\n') }], LOG_MAILER_CLASSES);
+  assert.deepEqual(listed(findings), [
+    'log-mailer\tplanted.txt:1',
+    'log-mailer\tplanted.txt:2',
+    'log-mailer-default\tplanted.txt:3',
+    'log-mailer-default\tplanted.txt:4',
+  ]);
 });

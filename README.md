@@ -33,6 +33,25 @@ If the app shows "Keine Verbindung zum Server", the backend in step 2 is not
 running (or unreachable). See the "app can't reach the backend" section in
 [`change/human.md`](change/human.md).
 
+### Mail in development
+
+Laravel (`api/`) sends 2FA codes and other mail over SMTP. In development a local
+mail catcher, [Mailpit](https://github.com/axllent/mailpit), receives every mail, so
+no code is ever written to a log:
+
+```bash
+docker compose -f dev/docker-compose.yml up -d
+```
+
+The inbox is at http://127.0.0.1:8025 (SMTP on 127.0.0.1:1025, both reachable only
+from this PC). `api/.env.example` already points there. An older `api/.env` that
+still uses the log mailer must take the `MAIL_*` lines from `api/.env.example`, and
+an old `api/storage/logs/laravel.log` should be deleted: it can contain codes.
+
+Without Docker, the Mailpit binary does the same: download it from the
+[Mailpit releases](https://github.com/axllent/mailpit/releases) and run
+`mailpit --smtp 127.0.0.1:1025 --listen 127.0.0.1:8025`.
+
 In the output, you'll find options to open the app in a
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)

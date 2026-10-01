@@ -9,7 +9,20 @@
 services:
   api:
     ports:
-      - '8080:80'
+      # Loopback only: the CI stack is never reachable from outside the runner.
+      - '127.0.0.1:8080:80'
     environment:
-      # In der Prüfung gibt es keinen Mail-Server; die 2FA-Codes landen im Log.
-      MAIL_MAILER: log
+      # CI has no real mail server: Mailpit catches every mail, so no code is ever written to a log.
+      MAIL_MAILER: smtp
+      MAIL_HOST: mailpit
+      MAIL_PORT: '1025'
+    depends_on:
+      mailpit:
+        condition: service_healthy
+
+  # The development mail catcher (pinned image, 127.0.0.1-only ports), reused so the pin lives in
+  # one place.
+  mailpit:
+    extends:
+      file: ../dev/docker-compose.yml
+      service: mailpit

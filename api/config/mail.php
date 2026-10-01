@@ -14,7 +14,9 @@ return [
     |
     */
 
-    'default' => env('MAIL_MAILER', 'log'),
+    // Not 'log': mails carry 2FA and reset codes, and a code must never land in a log. Without a
+    // setting, mail goes to SMTP (in development the local catcher, see api/.env.example).
+    'default' => env('MAIL_MAILER', 'smtp'),
 
     /*
     |--------------------------------------------------------------------------
@@ -81,9 +83,9 @@ return [
 
         'failover' => [
             'transport' => 'failover',
+            // No fallback to 'log': a mail that cannot be sent must fail, not end up in a log.
             'mailers' => [
                 'smtp',
-                'log',
             ],
             'retry_after' => 60,
         ],
