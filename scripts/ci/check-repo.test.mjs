@@ -179,6 +179,114 @@ test('agent permission classes fire on the previous /wlan frontmatter', () => {
   assert.deepEqual(splitRules('Read(./a, b), Bash(ls)'), ['Read(./a, b)', 'Bash(ls)']);
 });
 
+/** An agent file whose frontmatter is `description` (line 2) followed by the given lines (from line 3). */
+const agentFile = (filePath, ...frontmatter) => ({
+  path: filePath,
+  text: ['---', 'description: planted', ...frontmatter, '---', 'body'].join('\n'),
+});
+
+test('agent permissions: quoted, flow-list and space-separated allowed-tools read like the plain list', () => {
+  const { findings, examined } = scanAgentPermissions([
+    agentFile('.claude/commands/quoted.md', 'allowed-tools: "Bash, Write"'),
+    agentFile('.claude/commands/single.md', "allowed-tools: 'Bash(curl:*)'"),
+    agentFile('.claude/commands/flow.md', 'allowed-tools: [Bash, "Write"]'),
+    agentFile('.claude/commands/spaces.md', 'allowed-tools: Read Bash(git status) Edit'),
+  ]);
+  assert.equal(examined, 4 + 2 + 1 + 2 + 3);
+  assert.deepEqual(listed(findings), [
+    'agent-shell-wildcard\t.claude/commands/quoted.md:3',
+    'agent-unscoped-write\t.claude/commands/quoted.md:3',
+    'agent-model-invocable\t.claude/commands/quoted.md:1',
+    'agent-shell-wildcard\t.claude/commands/single.md:3',
+    'agent-model-invocable\t.claude/commands/single.md:1',
+    'agent-shell-wildcard\t.claude/commands/flow.md:3',
+    'agent-unscoped-write\t.claude/commands/flow.md:3',
+    'agent-model-invocable\t.claude/commands/flow.md:1',
+    'agent-unscoped-write\t.claude/commands/spaces.md:3',
+    'agent-model-invocable\t.claude/commands/spaces.md:1',
+  ]);
+});
+
+test('agent permissions: block lists and continuation lines are read item by item', () => {
+  const { findings, examined } = scanAgentPermissions([
+    agentFile(
+      '.claude/commands/block.md',
+      'allowed-tools:',
+      '  - Read',
+      '  - "Bash(curl:*)"',
+      '',
+      "  - 'Write'",
+      'disable-model-invocation: false',
+    ),
+    agentFile('.claude/commands/flush.md', 'allowed-tools:', '- Edit', 'model: planted'),
+    agentFile('.claude/commands/folded.md', 'allowed-tools: Read,', '  Grep, Edit'),
+  ]);
+  assert.equal(examined, 3 + 3 + 1 + 3);
+  assert.deepEqual(listed(findings), [
+    'agent-shell-wildcard\t.claude/commands/block.md:5',
+    'agent-unscoped-write\t.claude/commands/block.md:7',
+    'agent-model-invocable\t.claude/commands/block.md:1',
+    'agent-unscoped-write\t.claude/commands/flush.md:4',
+    'agent-model-invocable\t.claude/commands/flush.md:1',
+    'agent-unscoped-write\t.claude/commands/folded.md:4',
+    'agent-model-invocable\t.claude/commands/folded.md:1',
+  ]);
+});
+
+test('agent permissions: skills and nested .claude directories are checked; skills count as model-invocable', () => {
+  const { findings, examined } = scanAgentPermissions([
+    agentFile('.claude/skills/planted/SKILL.md', 'allowed-tools: Bash(curl:*)'),
+    { path: '.claude/skills/planted/reference.md', text: 'notes without frontmatter' },
+    agentFile('api/.claude/commands/nested.md', 'allowed-tools: Write'),
+    // Sub-agents are not slash commands: no model-invocable finding, but their rules are checked.
+    agentFile('.claude/agents/helper.md', 'allowed-tools: Write'),
+    { path: 'docs/.claude-notes/commands/x.md', text: agentFile('', 'allowed-tools: Write').text },
+  ]);
+  assert.equal(examined, 4 + 3);
+  assert.deepEqual(listed(findings), [
+    'agent-shell-wildcard\t.claude/skills/planted/SKILL.md:3',
+    'agent-model-invocable\t.claude/skills/planted/SKILL.md:1',
+    'agent-unscoped-write\tapi/.claude/commands/nested.md:3',
+    'agent-model-invocable\tapi/.claude/commands/nested.md:1',
+    'agent-unscoped-write\t.claude/agents/helper.md:3',
+  ]);
+});
+
+test('agent permissions: a token that is not a rule is a finding, never skipped', () => {
+  const settings = JSON.stringify({ permissions: { allow: ['Read', 42, 'Bash(ls'] } }, null, 2);
+  const { findings } = scanAgentPermissions([
+    agentFile('.claude/commands/quote.md', 'allowed-tools: Read, "Write, Grep', 'disable-model-invocation: true'),
+    agentFile('.claude/commands/comment.md', 'allowed-tools: Read # read-only', 'disable-model-invocation: true'),
+    agentFile('.claude/commands/bracket.md', 'allowed-tools: [Read, Grep', 'disable-model-invocation: true'),
+    agentFile('.claude/commands/scalar.md', 'allowed-tools: >', '  Read', 'disable-model-invocation: true'),
+    { path: '.claude/settings.json', text: settings },
+  ]);
+  assert.deepEqual(listed(findings), [
+    'agent-unparsed-rule\t.claude/commands/quote.md:3',
+    'agent-unparsed-rule\t.claude/commands/comment.md:3',
+    'agent-unparsed-rule\t.claude/commands/comment.md:3',
+    'agent-unparsed-rule\t.claude/commands/bracket.md:3',
+    'agent-unparsed-rule\t.claude/commands/scalar.md:3',
+    'agent-unparsed-rule\t.claude/settings.json:5',
+    'agent-unparsed-rule\t.claude/settings.json:6',
+  ]);
+});
+
+test('agent permissions: MCP tool names and every spelling of a true disable-model-invocation are accepted', () => {
+  const { findings, examined } = scanAgentPermissions([
+    agentFile(
+      '.claude/commands/mcp.md',
+      'allowed-tools: mcp__srv__tool, mcp__srv__*, mcp__planted-server__read_item, Read(./docs/**), WebFetch(domain:example.invalid)',
+      'disable-model-invocation: yes',
+    ),
+    agentFile('.claude/skills/x/SKILL.md', 'allowed-tools: Grep', 'disable-model-invocation: On'),
+    agentFile('.claude/commands/one.md', 'allowed-tools: Glob', 'disable-model-invocation: 1'),
+    agentFile('.claude/commands/upper.md', 'allowed-tools: Glob', 'disable-model-invocation: TRUE'),
+  ]);
+  assert.equal(examined, 4 + 5 + 1 + 1 + 1);
+  assert.deepEqual(listed(findings), []);
+});
+
 /* ------------------------------------------------------------------------- secrets (F-35) */
 
 /** One planted sample per secret class, assembled at run time (never literal in this file). */

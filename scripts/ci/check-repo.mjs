@@ -222,14 +222,32 @@ export function checkAutostart(ctx) {
   return report('autostart', examined, findings);
 }
 
-/** Agent configuration in the repository: slash commands, sub-agents, shared settings. */
-const AGENT_FILE = /^\.claude\/(commands|agents)\/.+\.md$/;
+/**
+ * Agent configuration in the repository: slash commands, sub-agents and skills in any `.claude`
+ * directory (nested ones load too), and the shared settings.
+ */
+const AGENT_FILE = /(^|\/)\.claude\/(commands|agents|skills)\/.+\.md$/;
+/** Commands and skills the model may run on its own unless `disable-model-invocation` is set. */
+const MODEL_INVOCABLE_FILE = /(^|\/)\.claude\/(commands|skills)\//;
+/** The spellings of a true `disable-model-invocation`. */
+const MODEL_INVOCATION_OFF = /^(true|yes|on|1)$/i;
 const AGENT_SETTINGS = '.claude/settings.json';
 
 const SHELL_INTERPRETER = /^(powershell|pwsh|cmd|bash|sh|zsh|node|npm|npx|python3?)(\.exe)?(\s|:|$)/i;
 const WRITE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
+/**
+ * One permission rule: a tool name with an optional `(argument)`. MCP tools are
+ * `mcp__<server>__<tool>` or `mcp__<server>__*`, and server names may contain hyphens.
+ */
+const RULE = /^(mcp__[A-Za-z0-9_-]+\*?|[A-Za-z0-9_]+)(?:\((.*)\))?$/;
+/** A top-level frontmatter key (at column 0, optionally quoted) and its inline value. */
+const FRONTMATTER_KEY = /^(["']?)([A-Za-z][A-Za-z0-9_-]*)\1:\s*(.*)$/;
+const LIST_ITEM = /^\s*-\s*(.+)$/;
 
-/** Splits `A, B(x, y), C` on commas outside parentheses. */
+/**
+ * Splits `A, B(x, y) C` on commas and on whitespace outside parentheses. Empty pieces are
+ * dropped; quotes and brackets are left in place, so a form it does not understand stays visible.
+ */
 export function splitRules(value) {
   const rules = [];
   let depth = 0;
@@ -237,21 +255,76 @@ export function splitRules(value) {
   for (const ch of value) {
     if (ch === '(') depth += 1;
     if (ch === ')') depth -= 1;
-    if (ch === ',' && depth === 0) {
-      rules.push(current.trim());
+    if (depth <= 0 && (ch === ',' || /\s/.test(ch))) {
+      if (current !== '') rules.push(current);
       current = '';
     } else {
       current += ch;
     }
   }
-  if (current.trim() !== '') rules.push(current.trim());
+  if (current !== '') rules.push(current);
   return rules;
 }
 
-/** Finding classes for one permission rule such as `Bash(curl:*)` or `Write`. */
+/** Removes one pair of surrounding quotes (`"…"` or `'…'`). */
+function unquote(value) {
+  const v = value.trim();
+  return v.length >= 2 && (v[0] === '"' || v[0] === "'") && v.at(-1) === v[0] ? v.slice(1, -1).trim() : v;
+}
+
+/** Removes one pair of surrounding brackets (a YAML flow list). */
+function unbracket(value) {
+  const v = value.trim();
+  return v.startsWith('[') && v.endsWith(']') ? v.slice(1, -1).trim() : v;
+}
+
+/**
+ * Reads the frontmatter of an agent file: every `allowed-tools` rule with its line, and whether
+ * model invocation is switched off. Returns null when the file has no closed frontmatter.
+ *
+ * It does not imitate YAML; it fails closed instead. The value loses one pair of quotes and one
+ * pair of brackets and is split into rules; a block list contributes one rule per `- item`, and
+ * any other line before the next key is split like the value. Whatever is left over that is not
+ * a rule (a stray quote, a bracket, a comment, a block-scalar sign) becomes a token that
+ * ruleClasses reports as `agent-unparsed-rule`, instead of disappearing.
+ */
+export function agentFrontmatter(lines) {
+  if (lines[0]?.trim() !== '---') return null;
+  const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+  if (end < 0) return null;
+  const rules = [];
+  let modelInvocationOff = false;
+  let inAllowed = false;
+  for (let i = 1; i < end; i += 1) {
+    const key = FRONTMATTER_KEY.exec(lines[i]);
+    if (key) {
+      const [, , name, value] = key;
+      inAllowed = name === 'allowed-tools';
+      if (inAllowed) {
+        for (const token of splitRules(unbracket(unquote(value)))) rules.push({ rule: unquote(token), line: i + 1 });
+      }
+      if (name === 'disable-model-invocation') modelInvocationOff = MODEL_INVOCATION_OFF.test(value.trim());
+      continue;
+    }
+    const text = lines[i].trim();
+    if (!inAllowed || text === '' || text.startsWith('#')) continue;
+    const item = LIST_ITEM.exec(lines[i]);
+    if (item) {
+      rules.push({ rule: unquote(item[1]), line: i + 1 });
+    } else {
+      for (const token of splitRules(text)) rules.push({ rule: unquote(token), line: i + 1 });
+    }
+  }
+  return { rules, modelInvocationOff };
+}
+
+/**
+ * Finding classes for one permission rule such as `Bash(curl:*)` or `Write`. Anything that is not
+ * a rule is `agent-unparsed-rule`: a check must not pass over a grant it cannot read.
+ */
 export function ruleClasses(rule) {
-  const m = /^([A-Za-z]+)(?:\((.*)\))?$/.exec(rule.trim());
-  if (!m) return [];
+  const m = typeof rule === 'string' ? RULE.exec(rule.trim()) : null;
+  if (!m) return ['agent-unparsed-rule'];
   const [, tool, arg] = m;
   const classes = [];
   if (tool === 'Bash') {
@@ -265,8 +338,9 @@ export function ruleClasses(rule) {
 }
 
 /**
- * Pre-approved tools of agent commands and shared settings: only exact, read-only shell commands,
- * no write access without a path, and no command the model may run on its own.
+ * Pre-approved tools of agent commands, sub-agents, skills and shared settings: only exact,
+ * read-only shell commands, no write access without a path, no rule the check cannot read, and no
+ * command or skill with pre-approved tools that the model may run on its own.
  * Returns findings and the number of files plus rules examined.
  */
 export function scanAgentPermissions(files) {
@@ -276,23 +350,13 @@ export function scanAgentPermissions(files) {
     const lines = file.text.split(/\r?\n/);
     if (AGENT_FILE.test(file.path)) {
       examined += 1;
-      if (lines[0]?.trim() !== '---') continue;
-      const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
-      if (end < 0) continue;
-      let allowed = null;
-      let modelInvocationOff = false;
-      for (let i = 1; i < end; i += 1) {
-        const m = /^([A-Za-z-]+):\s*(.*)$/.exec(lines[i]);
-        if (!m) continue;
-        if (m[1] === 'allowed-tools') allowed = { value: m[2], line: i + 1 };
-        if (m[1] === 'disable-model-invocation' && m[2].trim() === 'true') modelInvocationOff = true;
-      }
-      if (!allowed || allowed.value.trim() === '') continue;
-      for (const rule of splitRules(allowed.value)) {
+      const fm = agentFrontmatter(lines);
+      if (!fm || fm.rules.length === 0) continue;
+      for (const { rule, line } of fm.rules) {
         examined += 1;
-        for (const cls of ruleClasses(rule)) findings.push({ cls, location: `${file.path}:${allowed.line}` });
+        for (const cls of ruleClasses(rule)) findings.push({ cls, location: `${file.path}:${line}` });
       }
-      if (file.path.startsWith('.claude/commands/') && !modelInvocationOff) {
+      if (MODEL_INVOCABLE_FILE.test(file.path) && !fm.modelInvocationOff) {
         findings.push({ cls: 'agent-model-invocable', location: `${file.path}:1` });
       }
     } else if (file.path === AGENT_SETTINGS) {
