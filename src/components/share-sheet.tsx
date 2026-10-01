@@ -19,7 +19,7 @@
  * gebraucht wird.
  */
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -58,27 +58,46 @@ export function ShareSheet({ activity, onClose }: Props) {
 
   const visible = activity !== null;
 
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      const res = await api.groups(token);
-      setGroups(res.data);
-    } catch {
-      // Kein Fehlertext: Die Gruppen sind hier ein Angebot, nicht der Zweck.
-      // Fehlen sie, bleiben die Ziele außerhalb der App trotzdem benutzbar.
-      setGroups([]);
-    } finally {
-      setLoading(false);
+  // Each opening starts fresh, and so does a token change while open, as
+  // before. Reset while rendering, not in the effect (react.dev: "Adjusting
+  // some state when a prop changes"); the effect below only fetches. Starts as
+  // "closed", so a sheet that mounts open is reset and loads too.
+  const [shownFor, setShownFor] = useState<{ visible: boolean; token: string | null }>({
+    visible: false,
+    token,
+  });
+  if (shownFor.visible !== visible || shownFor.token !== token) {
+    setShownFor({ visible, token });
+    if (visible) {
+      setSentTo([]);
+      setError(null);
+      // Without a token nothing is fetched, so no spinner either.
+      setLoading(Boolean(token));
     }
-  }, [token]);
+  }
 
   useEffect(() => {
-    if (!visible) return;
-    setSentTo([]);
-    setError(null);
-    load();
-  }, [visible, load]);
+    if (!visible || !token) return;
+    let ignore = false;
+    api
+      .groups(token)
+      .then(
+        (res) => {
+          if (!ignore) setGroups(res.data);
+        },
+        () => {
+          // Kein Fehlertext: Die Gruppen sind hier ein Angebot, nicht der Zweck.
+          // Fehlen sie, bleiben die Ziele außerhalb der App trotzdem benutzbar.
+          if (!ignore) setGroups([]);
+        },
+      )
+      .finally(() => {
+        if (!ignore) setLoading(false);
+      });
+    return () => {
+      ignore = true;
+    };
+  }, [visible, token]);
 
   async function sendToGroup(group: FriendGroup) {
     if (!token || !activity || sending !== null) return;

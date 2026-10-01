@@ -52,17 +52,25 @@ export function TabMascot({ tab, line, size = 44, style }: TabMascotProps) {
 
   const [step, setStep] = useState(0);
 
+  // Restart at the main face when the tab or the motion setting changes -
+  // while rendering, not in the effect (react.dev: "Adjusting some state when
+  // a prop changes"). `reaction.moods` follows from `tab`.
+  const [stepFor, setStepFor] = useState({ tab, reduced });
+  if (stepFor.tab !== tab || stepFor.reduced !== reduced) {
+    setStepFor({ tab, reduced });
+    setStep(0);
+  }
+
   /**
    * Bei „Bewegung reduzieren" wird gar nicht gewechselt: Ein Gesicht, das ohne
    * Zutun umspringt, IST Bewegung – auch wenn nichts dabei animiert ist.
    *
-   * Der Zähler beginnt beim Tabwechsel wieder bei 0, weil `tab` in der
-   * Abhängigkeitsliste steht. Genau richtig: Jeder Tab soll mit seinem
-   * Hauptgesicht anfangen und nicht mit dem, bei dem der letzte stehen geblieben
-   * ist.
+   * The counter restarts at 0 on a tab change through the render-time reset
+   * above; `tab` stays in the dependencies so the interval restarts as well.
+   * Genau richtig: Jeder Tab soll mit seinem Hauptgesicht anfangen und nicht mit
+   * dem, bei dem der letzte stehen geblieben ist.
    */
   useEffect(() => {
-    setStep(0);
     if (reduced || reaction.moods.length < 2) return;
     const timer = setInterval(() => setStep((prev) => prev + 1), FACE_MS);
     return () => clearInterval(timer);
