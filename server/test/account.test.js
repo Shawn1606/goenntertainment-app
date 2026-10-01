@@ -447,7 +447,10 @@ test('DELETE /api/me: bei aktiver 2FA nur mit Freigabe von Laravel', async () =>
 
 test('DELETE /api/me: ein Admin, der nicht der letzte ist, darf gehen', async () => {
   const { token, user } = await registerUser('zfadeladmin', 'standard');
-  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [user.id]);
+  // The second admin this test relies on is created here, so the result no longer depends on
+  // what other test files (or earlier runs) left in the database.
+  const other = await registerUser('zfadeladmintwo', 'standard');
+  await pool.query('UPDATE users SET is_admin = 1 WHERE id IN (?, ?)', [user.id, other.user.id]);
   // Es gibt ausser diesem Wegwerf-Admin mindestens einen echten – sonst waere das hier 409.
   const [[{ c }]] = await pool.query('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1 AND id <> ?', [user.id]);
   assert.ok(Number(c) > 0, 'Test setzt einen weiteren Admin voraus');
