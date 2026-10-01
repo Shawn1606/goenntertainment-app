@@ -168,12 +168,15 @@ class BlockedTermsTest extends TestCase
             } else {
                 $broken['max_input_length'] = $max;
             }
+            // The assertion stays outside the try: PHPUnit's own failure is a RuntimeException too.
+            $thrown = null;
             try {
                 BlockedTerms::fromArray($broken);
-                $this->fail('accepted max_input_length '.var_export($max, true));
             } catch (\RuntimeException $e) {
-                $this->assertStringContainsString('max_input_length', $e->getMessage());
+                $thrown = $e;
             }
+            $this->assertNotNull($thrown, 'accepted max_input_length '.var_export($max, true));
+            $this->assertStringContainsString('max_input_length', $thrown->getMessage());
         }
     }
 
