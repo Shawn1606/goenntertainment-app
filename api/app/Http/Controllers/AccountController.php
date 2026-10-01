@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Support\NodeInternal;
 use App\Support\PasswordPolicy;
 use App\Support\Passwords;
+use App\Support\Sessions;
 use App\Support\TwoFactor;
 use Closure;
 use Illuminate\Http\JsonResponse;
@@ -14,7 +15,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
-use Laravel\Sanctum\PersonalAccessToken;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -52,9 +52,8 @@ class AccountController extends Controller
      *
      * Alle Tokens ausser dem, mit dem gerade geaendert wird. Das ist der Sinn
      * der Sache: Wer sein Passwort aendert, weil er fuerchtet, dass es jemand
-     * kennt, will genau diesen Jemand loswerden. Anders als beim Zuruecksetzen
-     * (PasswordController, dort bleibt es wie im alten Backend) - hier gibt es
-     * kein Verhalten, auf das sich jemand verlaesst.
+     * kennt, will genau diesen Jemand loswerden. (A password reset signs out every device,
+     * PasswordController; both go through App\Support\Sessions.)
      */
     public function updatePassword(Request $request): JsonResponse
     {
@@ -92,12 +91,7 @@ class AccountController extends Controller
         $user->remember_token = null;
         $user->save();
 
-        $current = $user->currentAccessToken();
-        $currentId = $current instanceof PersonalAccessToken ? $current->getKey() : null;
-
-        $user->tokens()
-            ->when($currentId !== null, fn ($q) => $q->whereKeyNot($currentId))
-            ->delete();
+        Sessions::revokeOthers($user);
 
         // Ein offener „Passwort vergessen"-Link soll das neue nicht gleich wieder ersetzen koennen.
         DB::table('password_reset_tokens')->where('email', $user->email)->delete();

@@ -14,6 +14,13 @@ function sha256(value) {
  */
 
 /**
+ * The owner type of every token Laravel issues: `App\Models\User` (Sanctum's morph type). A token
+ * of any other type is not an account's token. Named mirror: api/app/Models/User.php (the class
+ * name) and TOKENABLE_TYPE in test/support/fixtures.js.
+ */
+export const TOKENABLE_TYPE = 'App\\Models\\User';
+
+/**
  * Kostenfaktor fuer bcrypt. 10 ist weiterhin sicher (Laravel-Standard) und rund
  * 4x schneller als 12 (~80 ms statt ~310 ms mit reinem bcryptjs).
  */
@@ -49,7 +56,10 @@ export async function setBan(userId, until, reason) {
     userId,
   ]);
   // Bestehende Tokens entwerten -> sofort abgemeldet.
-  await pool.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [userId]);
+  await pool.query('DELETE FROM personal_access_tokens WHERE tokenable_type = ? AND tokenable_id = ?', [
+    TOKENABLE_TYPE,
+    userId,
+  ]);
 }
 
 /**
@@ -127,6 +137,12 @@ export async function userPayload(row, req = null) {
 /**
  * Express-Middleware: verlangt einen gueltigen Bearer-Token (Sanctum-kompatibel).
  * Setzt req.user (DB-Zeile) und req.tokenId.
+ *
+ * Valid means (F-20): the token belongs to an account (`tokenable_type`), has an expiry date and
+ * that date has not passed. Laravel applies the same rule (api/app/Providers/
+ * AppServiceProvider.php) and writes the date when it issues the token (App\Support\Sessions).
+ * The comparison runs in SQL against the database clock, the clock Laravel's dates are read
+ * against too (production runs both in UTC).
  */
 export async function requireAuth(req, res, next) {
   try {
@@ -140,10 +156,15 @@ export async function requireAuth(req, res, next) {
 
     const id = bearer.slice(0, sep);
     const plain = bearer.slice(sep + 1);
+    if (!/^\d{1,20}$/.test(id)) {
+      return res.status(401).json({ message: 'Unauthenticated.' });
+    }
 
     const token = await first(
-      'SELECT * FROM personal_access_tokens WHERE id = ? AND token = ?',
-      [id, sha256(plain)],
+      `SELECT * FROM personal_access_tokens
+        WHERE id = ? AND token = ? AND tokenable_type = ?
+          AND expires_at IS NOT NULL AND expires_at > NOW()`,
+      [id, sha256(plain), TOKENABLE_TYPE],
     );
     if (!token) {
       return res.status(401).json({ message: 'Unauthenticated.' });

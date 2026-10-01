@@ -10,6 +10,7 @@ use App\Support\AccountTypes;
 use App\Support\EmailAddress;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
+use App\Support\Sessions;
 use App\Support\TwoFactor;
 use Closure;
 use Illuminate\Http\JsonResponse;
@@ -378,12 +379,8 @@ class AuthController extends Controller
      */
     private function tokenResponse(Request $request, User $user, int $status = 200): JsonResponse
     {
-        $deviceName = $request->input('device_name');
-        $name = (is_string($deviceName) && $deviceName !== '') ? $deviceName : 'mobile';
-
-        // Sanctum erzeugt genau das Format, das schon in der Tabelle steht:
-        // "{id}|{40 Zeichen}", gespeichert als sha256-Hex, abilities ["*"].
-        $token = $user->createToken($name)->plainTextToken;
+        // With an expiry date (App\Support\Sessions, the one place that issues tokens).
+        $token = Sessions::issue($user, $request->input('device_name'));
 
         return response()->json([
             'user' => (new UserResource($user))->withInterests()->toArray($request),

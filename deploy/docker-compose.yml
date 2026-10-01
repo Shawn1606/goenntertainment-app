@@ -169,6 +169,8 @@ services:
       # array = keine Sitzungen – die API arbeitet nur mit Tokens
       # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
       CACHE_STORE: database
+      # Optional: access-token lifetime in minutes; empty = the default in code (30 days).
+      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
       SESSION_DRIVER: array
       QUEUE_CONNECTION: sync
       # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet

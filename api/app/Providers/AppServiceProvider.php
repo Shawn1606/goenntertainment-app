@@ -7,6 +7,8 @@ use App\Support\RateLimitRules;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
+use Laravel\Sanctum\PersonalAccessToken;
+use Laravel\Sanctum\Sanctum;
 
 class AppServiceProvider extends ServiceProvider
 {
@@ -24,6 +26,16 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureRateLimiting();
+
+        /*
+         * A token is valid only with an expiry date that has not passed (F-20), the rule Node's
+         * requireAuth applies too. Sanctum alone accepts a token without `expires_at` (it then
+         * checks only its age against sanctum.expiration); tokens from before expiry existed
+         * have none and end here. App\Support\Sessions issues every token with one.
+         */
+        Sanctum::authenticateAccessTokensUsing(
+            static fn (PersonalAccessToken $token, bool $isValid): bool => $isValid && $token->expires_at !== null,
+        );
     }
 
     /**

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Resources\UserResource;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
+use App\Support\Sessions;
 use App\Support\Totp;
 use App\Support\TwoFactor;
 use Illuminate\Http\JsonResponse;
@@ -359,10 +360,7 @@ class TwoFactorController extends Controller
      */
     private function tokenResponse(Request $request, User $user): JsonResponse
     {
-        $deviceName = $request->input('device_name');
-        $name = (is_string($deviceName) && $deviceName !== '') ? $deviceName : 'mobile';
-
-        $token = $user->createToken($name)->plainTextToken;
+        $token = Sessions::issue($user, $request->input('device_name'));
 
         return response()->json([
             'user' => $this->userPayload($request, $user),

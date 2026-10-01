@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Rules\ValidEmail;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
+use App\Support\Sessions;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -128,14 +129,22 @@ class PasswordController extends Controller
         /**
          * Neues Passwort setzen und die Reset-Zeile verbrauchen.
          *
-         * Bestehende Zugriffs-Tokens bleiben ABSICHTLICH gueltig - genau so hielt
-         * es das vorige Backend. Angemeldete Geraete werden also nicht abgemeldet.
+         * Every access token of the account is revoked (F-20): whoever resets a password may be
+         * locking someone out who knew the old one, and that someone must not stay signed in.
+         * App\Support\Sessions::revokeAll is the hook PR 3's reset by code reuses.
          */
-        User::where('email', $email)->update([
+        $user = User::where('email', $email)->first();
+        if ($user === null) {
+            throw $this->invalidLink();
+        }
+
+        $user->forceFill([
             'password' => Hash::make((string) $request->input('password')),
             'remember_token' => null,
             'updated_at' => now(),
-        ]);
+        ])->save();
+
+        Sessions::revokeAll($user);
 
         DB::delete('DELETE FROM password_reset_tokens WHERE email = ?', [$email]);
 
