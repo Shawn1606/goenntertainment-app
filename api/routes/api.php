@@ -49,10 +49,13 @@ Route::get('/health', function () {
 | und gesperrte Konten abweisen.
 */
 
-Route::post('/register', [AuthController::class, 'register']);
+// Every route that takes a password, a code or an e-mail address has a named limiter with a
+// per-account cap across client addresses (config/ratelimits.php). The route table and its
+// limits are pinned in tests/Feature/RouteThrottleCoverageTest.php.
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:register');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
-Route::post('/forgot-password', [PasswordController::class, 'forgot']);
-Route::post('/reset-password', [PasswordController::class, 'reset']);
+Route::post('/forgot-password', [PasswordController::class, 'forgot'])->middleware('throttle:password-forgot');
+Route::post('/reset-password', [PasswordController::class, 'reset'])->middleware('throttle:password-reset');
 Route::get('/interests', [InterestController::class, 'index']);
 
 /*
@@ -66,12 +69,12 @@ Route::post('/login/two-factor/resend', [TwoFactorController::class, 'resendLogi
 Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'show']);
-    Route::patch('/user', [AuthController::class, 'update']);
+    Route::patch('/user', [AuthController::class, 'update'])->middleware('throttle:profile');
     Route::get('/me/progress', [ProgressController::class, 'progress']);
     Route::get('/leaderboard', [ProgressController::class, 'leaderboard']);
 
     // Passwort aendern, Konto loeschen. DELETE /me prueft hier und loescht in
-    // Node (AccountController::destroy erklaert, warum).
+    // Node (AccountController::destroy erklaert, warum). One shared budget: each checks the password.
     Route::middleware('throttle:account-sensitive')->group(function () {
         Route::put('/user/password', [AccountController::class, 'updatePassword']);
         Route::delete('/me', [AccountController::class, 'destroy']);
