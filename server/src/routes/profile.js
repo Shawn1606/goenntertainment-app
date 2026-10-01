@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
@@ -364,7 +365,7 @@ async function followTarget(req) {
 }
 
 // POST /api/users/:id/follow  (geschuetzt) – folgen. Idempotent.
-router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
+router.post('/users/:id/follow', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const target = await followTarget(req);
     const fresh = await follow(req.user.id, target.id);
@@ -392,7 +393,7 @@ router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
 // Ohne `followTarget`: Entfolgen muss auch dann gehen, wenn die andere Seite
 // inzwischen blockiert hat – sonst haenge ich in einem Abo fest, das ich nicht
 // mehr loswerde.
-router.delete('/users/:id/follow', requireAuth, async (req, res, next) => {
+router.delete('/users/:id/follow', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const id = Number(req.params.id) || 0;
     await unfollow(req.user.id, id);
@@ -451,7 +452,7 @@ router.get('/users/:username/following', requireAuth, followList('following'));
 //
 // Ersetzen statt einzeln pflegen: Das Formular kennt ohnehin den vollstaendigen
 // Stand, und so gibt es keine halb gespeicherten Zwischenzustaende.
-router.put('/me/links', requireAuth, requireProfile, async (req, res, next) => {
+router.put('/me/links', requireAuth, rateLimit('content'), requireProfile, async (req, res, next) => {
   try {
     const { links, error } = parseLinkList(req.body?.links);
     if (error) {
@@ -618,13 +619,13 @@ function clearProfileImage(kind) {
 // Bewusst OHNE `requireProfile`: Ein Gesicht und ein Hintergrund gehoeren zu
 // jedem Konto. Die Stufe entscheidet, ob es Beitraege und Social-Links gibt
 // (siehe oben) – nicht, ob man ein Profilbild haben darf.
-router.post('/me/avatar', requireAuth, uploadImage, setProfileImage('avatar'));
-router.delete('/me/avatar', requireAuth, clearProfileImage('avatar'));
-router.post('/me/banner', requireAuth, uploadImage, setProfileImage('banner'));
-router.delete('/me/banner', requireAuth, clearProfileImage('banner'));
+router.post('/me/avatar', requireAuth, rateLimit('moderated'), uploadImage, setProfileImage('avatar'));
+router.delete('/me/avatar', requireAuth, rateLimit('content'), clearProfileImage('avatar'));
+router.post('/me/banner', requireAuth, rateLimit('moderated'), uploadImage, setProfileImage('banner'));
+router.delete('/me/banner', requireAuth, rateLimit('content'), clearProfileImage('banner'));
 
 // POST /api/posts  (geschuetzt, ab Creator; multipart wegen Bild)
-router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res, next) => {
+router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploadImage, async (req, res, next) => {
   try {
     const body = String(req.body?.body ?? '').trim();
     const v = new Validator(req.body ?? {});
@@ -714,7 +715,7 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
 // gibt es Loeschen und neu anlegen. Der Text laeuft durch dieselbe
 // KI-Verifizierung wie beim Anlegen, sonst waere Bearbeiten die Luecke, durch die
 // man sie umgeht.
-router.patch('/posts/:id', requireAuth, async (req, res, next) => {
+router.patch('/posts/:id', requireAuth, rateLimit('moderated'), async (req, res, next) => {
   try {
     const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [
       req.params.id,
@@ -782,7 +783,7 @@ async function loadPostOr404(id) {
 }
 
 // POST /api/posts/:id/like  (geschuetzt) – idempotent.
-router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
+router.post('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, post.user_id)) {
@@ -815,7 +816,7 @@ router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/posts/:id/like  (geschuetzt) – Gefaellt mir zuruecknehmen.
-router.delete('/posts/:id/like', requireAuth, async (req, res, next) => {
+router.delete('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     await pool.query('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?', [
@@ -862,7 +863,7 @@ router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
 //
 // Bewusst OHNE `requireProfile`: Kommentieren darf jedes Konto. Die Stufe
 // entscheidet, wer einen eigenen Auftritt hat – nicht, wer mitreden darf.
-router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
+router.post('/posts/:id/comments', requireAuth, rateLimit('comment'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, post.user_id)) {
@@ -936,7 +937,7 @@ router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/comments/:id  (geschuetzt) – eigener Kommentar, eigener Beitrag, Admin.
-router.delete('/comments/:id', requireAuth, async (req, res, next) => {
+router.delete('/comments/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const row = await first(
       `SELECT c.id, c.user_id, c.post_id, p.user_id AS post_user_id
@@ -959,7 +960,7 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/posts/:id  (geschuetzt) – eigener Beitrag; Admins jeden.
-router.delete('/posts/:id', requireAuth, async (req, res, next) => {
+router.delete('/posts/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [req.params.id]);
     if (!post) throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');

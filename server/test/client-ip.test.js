@@ -13,6 +13,7 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { cleanup, createUser } from './support/fixtures.js';
 
@@ -22,7 +23,7 @@ const savedPublicUrl = process.env.PUBLIC_URL;
 
 /** Starts createApp(options) plus the test-only route; returns its base address and a stop function. */
 async function start(options) {
-  const app = createApp(options);
+  const app = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS, ...options });
   app.get('/test-only/client', (req, res) => res.json({ ip: req.ip, protocol: req.protocol }));
   const server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
@@ -75,7 +76,7 @@ test('a chain from the trusted hop counts only its last entry', async () => {
 });
 
 test('the trust function trusts exactly the configured hop', async () => {
-  const trust = createApp({ trustProxy: '10.0.0.20' }).get('trust proxy fn');
+  const trust = createApp({ trustProxy: '10.0.0.20', writeLimits: FUNCTIONAL_WRITE_LIMITS }).get('trust proxy fn');
   assert.equal(trust('10.0.0.20', 0), true);
   assert.equal(trust('::ffff:10.0.0.20', 0), true);
   for (const other of ['10.0.0.21', '127.0.0.1', '172.17.0.1', CLIENT]) {

@@ -68,6 +68,11 @@ export function internalRouter({ secret } = {}) {
    * api/app/Http/Controllers/AccountController.php) and sends the shared secret and a one-time
    * grant for exactly this account. What is left here is the deletion itself
    * (account-deletion.js, the same code the admin panel uses).
+   *
+   * The one write route without the write limiter (rate-limit.js): it needs the shared secret
+   * and a one-time grant for this account, Laravel's `account-sensitive` throttle runs before it,
+   * and Laravel calls it without a client address (a per-address bucket would count Laravel).
+   * test/write-limits.test.js lists it as exempt with this reason.
    */
   router.delete('/accounts/:id(\\d+)', requireInternalSecret(secret), async (req, res, next) => {
     try {

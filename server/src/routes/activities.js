@@ -15,6 +15,7 @@ import { notifyFollowers } from '../notifications.js';
 import { blockExistsBetween, transformUser } from '../people.js';
 import { logError } from '../log.js';
 import { singleUpload } from '../uploads.js';
+import { rateLimit } from '../rate-limit.js';
 
 const router = createRouter();
 
@@ -419,7 +420,7 @@ router.get('/saved', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/activities  (geschuetzt, multipart wegen Banner)
-router.post('/', requireAuth, uploadBanner, async (req, res, next) => {
+router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, res, next) => {
   try {
     // Events erstellen gibt es erst ab Creator. Die App blendet den ＋-Knopf
     // bei Standard-Konten aus – hier steht der Riegel, der auch dann haelt,
@@ -603,7 +604,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 // DELETE /api/activities/:id  – loescht ein Event.
 // Erlaubt fuer Admins (jedes Event) ODER die:den Ersteller:in (nur das eigene).
 // Die Verknuepfungen (Teilnehmer, Interessen) raeumt die DB per ON DELETE CASCADE.
-router.delete('/:id', requireAuth, async (req, res, next) => {
+router.delete('/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id, user_id, banner_path FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -645,7 +646,7 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/activities/:id/join  (geschuetzt, idempotent)
-router.post('/:id/join', requireAuth, async (req, res, next) => {
+router.post('/:id/join', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first(
       'SELECT id, max_participants, title, location, starts_at, banner_path FROM activities WHERE id = ?',
@@ -689,7 +690,7 @@ router.post('/:id/join', requireAuth, async (req, res, next) => {
 // Zaehlt einen Aufruf des Detail-Popups. Pro Person genau einmal – so ist die
 // Zahl "wie viele Leute haben es gesehen" und nicht "wie oft wurde geklickt".
 // Aufrufe der:des Erstellenden zaehlen nicht mit.
-router.post('/:id/view', requireAuth, async (req, res, next) => {
+router.post('/:id/view', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id, user_id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -714,7 +715,7 @@ router.post('/:id/view', requireAuth, async (req, res, next) => {
 //
 // Bewusst OHNE Kapazitaets-Pruefung: Merken belegt keinen Platz. Man darf auch ein
 // volles Event merken – vielleicht wird ein Platz frei.
-router.post('/:id/save', requireAuth, async (req, res, next) => {
+router.post('/:id/save', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -732,7 +733,7 @@ router.post('/:id/save', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/activities/:id/save  (geschuetzt) – nicht mehr merken.
-router.delete('/:id/save', requireAuth, async (req, res, next) => {
+router.delete('/:id/save', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -748,7 +749,7 @@ router.delete('/:id/save', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/activities/:id/join  (geschuetzt)
-router.delete('/:id/join', requireAuth, async (req, res, next) => {
+router.delete('/:id/join', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -817,7 +818,7 @@ function transformComment(req, row, viewer, hostId) {
 //
 // Der Host darf sein eigenes Event moegen – anders als bei den Aufrufen verfaelscht
 // das keine Statistik, es ist eine sichtbare Geste wie jede andere.
-router.post('/:id/like', requireAuth, async (req, res, next) => {
+router.post('/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, activity.user_id)) {
@@ -839,7 +840,7 @@ router.post('/:id/like', requireAuth, async (req, res, next) => {
 //
 // Ohne Block-Pruefung, wie bei Beitraegen: Das eigene Gefaellt-mir zurueckzuziehen
 // muss auch dann gehen, wenn man inzwischen blockiert (wurde).
-router.delete('/:id/like', requireAuth, async (req, res, next) => {
+router.delete('/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     await pool.query('DELETE FROM activity_likes WHERE activity_id = ? AND user_id = ?', [
@@ -887,7 +888,7 @@ router.get('/:id/comments', requireAuth, async (req, res, next) => {
 // Kommentieren darf jedes Konto, unabhaengig von Stufe und Teilnahme – wie
 // unter Beitraegen. Pruefung in derselben Reihenfolge: Laenge, feste
 // Begriffsliste, dann die KI-Verifizierung.
-router.post('/:id/comments', requireAuth, async (req, res, next) => {
+router.post('/:id/comments', requireAuth, rateLimit('comment'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, activity.user_id)) {
@@ -952,7 +953,7 @@ router.post('/:id/comments', requireAuth, async (req, res, next) => {
 
 // DELETE /api/activities/:id/comments/:commentId  (geschuetzt)
 // Erlaubt fuer die:den Verfasser:in, den Host des Events und Admins.
-router.delete('/:id/comments/:commentId', requireAuth, async (req, res, next) => {
+router.delete('/:id/comments/:commentId', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     // Nur Kommentare DIESES Events: Eine fremde Kommentar-ID unter der eigenen

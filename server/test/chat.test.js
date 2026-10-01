@@ -12,6 +12,7 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 
@@ -90,7 +91,7 @@ const makeAdmin = (userId) => pool.query('UPDATE users SET is_admin = 1 WHERE id
 
 before(async () => {
   await ensureSchema();
-  server = createApp().listen(0);
+  server = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });

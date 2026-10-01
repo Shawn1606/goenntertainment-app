@@ -14,6 +14,7 @@
 import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { abilitiesFor, BOOST_DAYS } from '../accounts.js';
 
@@ -196,7 +197,7 @@ async function ownActivity(req) {
 // POST /api/business/activities/:id/boost  (geschuetzt, ab Business)
 // Hebt ein eigenes Event fuer BOOST_DAYS Tage hervor: Die Empfehlungen der App
 // ziehen es dadurch nach vorne (siehe src/domain/recommendations.ts).
-router.post('/activities/:id/boost', requireAuth, requireBusiness, async (req, res, next) => {
+router.post('/activities/:id/boost', requireAuth, rateLimit('content'), requireBusiness, async (req, res, next) => {
   try {
     const activity = await ownActivity(req);
     const { boostSlots } = abilitiesFor(req.user);
@@ -233,7 +234,7 @@ router.post('/activities/:id/boost', requireAuth, requireBusiness, async (req, r
 });
 
 // DELETE /api/business/activities/:id/boost  (geschuetzt, ab Business)
-router.delete('/activities/:id/boost', requireAuth, requireBusiness, async (req, res, next) => {
+router.delete('/activities/:id/boost', requireAuth, rateLimit('content'), requireBusiness, async (req, res, next) => {
   try {
     const activity = await ownActivity(req);
     await pool.query('UPDATE activities SET boosted_until = NULL, updated_at = NOW() WHERE id = ?', [

@@ -32,6 +32,7 @@
 import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm } from '../blocked-terms.js';
 import { mediaUrl, publicBase } from '../media.js';
@@ -399,7 +400,7 @@ router.get('/chats/:kind/:refId/messages', requireAuth, async (req, res, next) =
 });
 
 // POST /api/chats/:kind/:refId/messages  (geschuetzt) – Text und/oder Event teilen.
-router.post('/chats/:kind/:refId/messages', requireAuth, async (req, res, next) => {
+router.post('/chats/:kind/:refId/messages', requireAuth, rateLimit('chat'), async (req, res, next) => {
   try {
     if (!isRoomKind(req.params.kind)) throw new HttpError(404, 'Diesen Chat gibt es nicht.');
     const room = await loadRoomForMember(req.params.kind, req.params.refId, req.user);
@@ -471,7 +472,7 @@ router.post('/chats/:kind/:refId/messages', requireAuth, async (req, res, next) 
 //
 // `GREATEST` sorgt dafuer, dass der Stand nie zuruecklaeuft: Zwei Geraete, die
 // verschieden weit gelesen haben, wuerden sich sonst gegenseitig zuruecksetzen.
-router.post('/chats/:kind/:refId/read', requireAuth, async (req, res, next) => {
+router.post('/chats/:kind/:refId/read', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     if (!isRoomKind(req.params.kind)) throw new HttpError(404, 'Diesen Chat gibt es nicht.');
     const room = await loadRoomForMember(req.params.kind, req.params.refId, req.user);
@@ -506,7 +507,7 @@ router.post('/chats/:kind/:refId/read', requireAuth, async (req, res, next) => {
 // angelegt, Event veranstaltet) sowie fuer Admins. Genau das war eine der
 // Beschwerden ueber vergleichbare Apps: Nachrichten, die fuer immer stehen
 // bleiben, auch wenn sie nicht stehen bleiben sollten.
-router.delete('/chats/messages/:id', requireAuth, async (req, res, next) => {
+router.delete('/chats/messages/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const message = await first(
       `SELECT m.id, m.user_id, r.kind, r.group_id, r.activity_id

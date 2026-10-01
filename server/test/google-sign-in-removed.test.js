@@ -10,6 +10,7 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
 import { serializeUser, userPayload } from '../src/auth.js';
 import { TOKENABLE_TYPE, cleanup, createUser } from './support/fixtures.js';
@@ -30,7 +31,7 @@ before(async () => {
     }
     return realFetch(url, init);
   };
-  server = createApp().listen(0);
+  server = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });

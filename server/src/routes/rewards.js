@@ -8,6 +8,7 @@
  */
 import { createRouter } from '../router.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { toIso } from '../db.js';
 import {
@@ -62,7 +63,7 @@ router.get('/me/rewards', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/me/rewards/redeem  (geschuetzt) – Coupon gegen Punkte.
-router.post('/me/rewards/redeem', requireAuth, async (req, res, next) => {
+router.post('/me/rewards/redeem', requireAuth, rateLimit('account'), async (req, res, next) => {
   try {
     const slug = String(req.body?.coupon ?? '').trim();
     const result = await redeemCoupon(req.user.id, slug);

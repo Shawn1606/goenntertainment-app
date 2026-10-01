@@ -13,8 +13,11 @@
  *   - NODE_INTERNAL_SECRET: shared with Laravel (api/), which sends it on the internal routes
  *     (routes/internal.js), at least INTERNAL_SECRET_MIN_LENGTH characters. Outside production
  *     it may be empty; the internal routes then refuse every call (fail closed).
+ *
+ * Optional, checked when set: WRITE_LIMIT_<CLASS>, the write limits per class (rate-limit.js).
  */
 import express from 'express';
+import { writeLimitSettingProblems } from './rate-limit.js';
 
 /** Shortest accepted NODE_INTERNAL_SECRET (`openssl rand -hex 32` gives 64 characters). */
 export const INTERNAL_SECRET_MIN_LENGTH = 32;
@@ -84,6 +87,9 @@ export function startupProblems(env = process.env) {
   if (secret === '' ? production : secret.length < INTERNAL_SECRET_MIN_LENGTH) {
     problems.push(`NODE_INTERNAL_SECRET (required in production, at least ${INTERNAL_SECRET_MIN_LENGTH} characters)`);
   }
+
+  // Optional everywhere (the code has defaults), but a set value must be valid (rate-limit.js).
+  problems.push(...writeLimitSettingProblems(env));
 
   return problems;
 }

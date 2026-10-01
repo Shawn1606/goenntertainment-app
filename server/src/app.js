@@ -10,6 +10,7 @@ import express from 'express';
 import { HttpError } from './validate.js';
 import { clientErrorFor } from './client-errors.js';
 import { logError } from './log.js';
+import { createLimitStore, resolveWriteLimits } from './rate-limit.js';
 import { internalSecret as internalSecretSetting, trustProxySetting } from './config.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
@@ -39,9 +40,19 @@ export const PARAMETER_LIMIT = 50;
  *   trustProxy      whose forwarding headers count, Express 'trust proxy' syntax
  *                   (default NODE_TRUST_PROXY; see trustProxySetting)
  *   internalSecret  shared secret for the internal routes (default NODE_INTERNAL_SECRET)
+ *   writeLimits     rules per write class, { class: 'user:10/1h,ip:60/1h' }, over the
+ *                   environment (WRITE_LIMIT_<CLASS>) and the defaults (rate-limit.js)
  */
-export function createApp({ trustProxy = trustProxySetting(), internalSecret = internalSecretSetting() } = {}) {
+export function createApp({
+  trustProxy = trustProxySetting(),
+  internalSecret = internalSecretSetting(),
+  writeLimits = {},
+} = {}) {
   const app = express();
+
+  // The counters of the write limiter (F-07), one set per app; every write route reads them
+  // through rateLimit() (rate-limit.js). Invalid rules throw here, before anything listens.
+  app.locals.writeLimits = createLimitStore({ limits: resolveWriteLimits(process.env, writeLimits) });
 
   // One spelling per path, like the routers (src/router.js explains why). These must be set
   // before the first app.use: Express builds the app's own router lazily from them.

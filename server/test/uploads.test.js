@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { cleanup, createUser } from './support/fixtures.js';
 
@@ -41,7 +42,7 @@ let target;
 
 before(async () => {
   await ensureSchema();
-  server = createApp().listen(0);
+  server = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
   creator = await createUser('uploadcreator', { accountType: 'creator' });
@@ -227,8 +228,10 @@ test('more than 5 interests or typed interests are refused before any loop runs 
 function startChildServer() {
   const appUrl = new URL('../src/app.js', import.meta.url).href;
   const code = `const { createApp } = await import(process.argv[1]);
-const server = createApp().listen(0, '127.0.0.1', () => process.stdout.write('PORT ' + server.address().port + '\\n'));`;
-  const child = spawn(process.execPath, ['--input-type=module', '-e', code, appUrl], {
+const server = createApp({ writeLimits: JSON.parse(process.argv[2]) })
+  .listen(0, '127.0.0.1', () => process.stdout.write('PORT ' + server.address().port + '\\n'));`;
+  const args = ['--input-type=module', '-e', code, appUrl, JSON.stringify(FUNCTIONAL_WRITE_LIMITS)];
+  const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     env: process.env,
     stdio: ['ignore', 'pipe', 'pipe'],

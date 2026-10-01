@@ -20,6 +20,7 @@
 import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
 import {
@@ -141,7 +142,7 @@ router.get('/groups', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/groups  (geschuetzt) – Gruppe anlegen; die:der Anlegende ist drin.
-router.post('/groups', requireAuth, async (req, res, next) => {
+router.post('/groups', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const name = String(req.body?.name ?? '').trim();
     const description = String(req.body?.description ?? '').trim();
@@ -207,7 +208,7 @@ router.post('/groups', requireAuth, async (req, res, next) => {
 // Neu mit dem Chat: Eine Gruppe, in der geredet wird, ueberlebt ihren ersten
 // Anlass. „Kickerrunde" heisst dann irgendwann „Donnerstagsrunde", und dafuer
 // muss man sie nicht neu anlegen und alle neu aufnehmen.
-router.patch('/groups/:id', requireAuth, async (req, res, next) => {
+router.patch('/groups/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const group = await loadGroupForMember(req.params.id, req.user.id);
     if (group.owner_id !== req.user.id) {
@@ -250,7 +251,7 @@ router.patch('/groups/:id', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/groups/:id/members  (geschuetzt, nur Anlegende:r) – Freund:in aufnehmen.
-router.post('/groups/:id/members', requireAuth, async (req, res, next) => {
+router.post('/groups/:id/members', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const group = await loadGroupForMember(req.params.id, req.user.id);
     if (group.owner_id !== req.user.id) {
@@ -289,7 +290,7 @@ router.post('/groups/:id/members', requireAuth, async (req, res, next) => {
 
 // DELETE /api/groups/:id/members/:userId  (geschuetzt) – jemanden entfernen oder
 // selbst gehen. Die:der Anlegende kann nicht gehen, ohne die Gruppe zu loeschen.
-router.delete('/groups/:id/members/:userId', requireAuth, async (req, res, next) => {
+router.delete('/groups/:id/members/:userId', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const group = await loadGroupForMember(req.params.id, req.user.id);
     const targetId = Number(req.params.userId) || 0;
@@ -325,7 +326,7 @@ router.delete('/groups/:id/members/:userId', requireAuth, async (req, res, next)
 });
 
 // DELETE /api/groups/:id  (geschuetzt, nur Anlegende:r) – Gruppe loeschen.
-router.delete('/groups/:id', requireAuth, async (req, res, next) => {
+router.delete('/groups/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const group = await loadGroupForMember(req.params.id, req.user.id);
     if (group.owner_id !== req.user.id) {

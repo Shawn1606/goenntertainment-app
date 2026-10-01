@@ -26,6 +26,7 @@
 import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { Validator } from '../validate.js';
 import { REQUESTABLE_ACCOUNT_TYPES, normalizeAccountType, rankOf, requestableTypesFor } from '../accounts.js';
 import { BILLING_PERIODS, normalizeBillingPeriod } from '../subscriptions.js';
@@ -80,7 +81,7 @@ router.get('/me/upgrade-request', requireAuth, async (req, res, next) => {
 
 // POST /api/me/upgrade-request  (geschuetzt) – Stufe anfragen.
 // Body: { account_type, billing_period?, message? }
-router.post('/me/upgrade-request', requireAuth, async (req, res, next) => {
+router.post('/me/upgrade-request', requireAuth, rateLimit('account'), async (req, res, next) => {
   try {
     const type = typeof req.body?.account_type === 'string' ? req.body.account_type : '';
     const message = typeof req.body?.message === 'string' ? req.body.message.trim() : '';

@@ -93,6 +93,20 @@ services:
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
       FEATURE_IMPORTED_EVENTS: ${FEATURE_IMPORTED_EVENTS:-}
       FEATURE_ACCOUNT_TIERS: ${FEATURE_ACCOUNT_TIERS:-}
+      # Write limits per route class (server/src/rate-limit.js); empty = the code's defaults, an
+      # invalid value stops the start. The counters live in Node's memory: keep ONE node process.
+      WRITE_LIMIT_MODERATED: ${WRITE_LIMIT_MODERATED:-}
+      WRITE_LIMIT_COMMENT: ${WRITE_LIMIT_COMMENT:-}
+      WRITE_LIMIT_CHAT: ${WRITE_LIMIT_CHAT:-}
+      WRITE_LIMIT_REACTION: ${WRITE_LIMIT_REACTION:-}
+      WRITE_LIMIT_RELATIONSHIP: ${WRITE_LIMIT_RELATIONSHIP:-}
+      WRITE_LIMIT_BLOCK: ${WRITE_LIMIT_BLOCK:-}
+      WRITE_LIMIT_REPORT: ${WRITE_LIMIT_REPORT:-}
+      WRITE_LIMIT_STATE: ${WRITE_LIMIT_STATE:-}
+      WRITE_LIMIT_CONTENT: ${WRITE_LIMIT_CONTENT:-}
+      WRITE_LIMIT_ACCOUNT: ${WRITE_LIMIT_ACCOUNT:-}
+      WRITE_LIMIT_ADMIN: ${WRITE_LIMIT_ADMIN:-}
+      WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
       - ./storage:/app/storage
     healthcheck:

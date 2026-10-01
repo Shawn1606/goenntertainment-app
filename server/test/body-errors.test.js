@@ -11,6 +11,7 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { cleanup, createUser } from './support/fixtures.js';
 
@@ -66,7 +67,7 @@ const jsonOfSize = (bytes, key = 'note') => JSON.stringify({ [key]: 'x'.repeat(b
 
 before(async () => {
   await ensureSchema();
-  const app = createApp();
+  const app = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS });
   // Test-only route behind the app's body parsers: shows what they made of a body.
   app.post('/test-only/echo', (req, res) => res.json({ body: req.body ?? null }));
   server = app.listen(0);

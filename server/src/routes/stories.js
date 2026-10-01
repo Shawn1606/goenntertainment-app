@@ -29,6 +29,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
@@ -146,7 +147,7 @@ router.get('/users/:id/stories', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/stories  (geschuetzt, ab Creator; multipart wegen Bild)
-router.post('/stories', requireAuth, requirePublisher, uploadImage, async (req, res, next) => {
+router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, uploadImage, async (req, res, next) => {
   try {
     const caption = String(req.body?.caption ?? '').trim();
     const v = new Validator(req.body ?? {});
@@ -231,7 +232,7 @@ router.post('/stories', requireAuth, requirePublisher, uploadImage, async (req, 
 });
 
 // POST /api/stories/:id/view  (geschuetzt) – als gesehen merken (idempotent).
-router.post('/stories/:id/view', requireAuth, async (req, res, next) => {
+router.post('/stories/:id/view', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const story = await first('SELECT id FROM stories WHERE id = ? AND expires_at > NOW()', [
       req.params.id,
@@ -250,7 +251,7 @@ router.post('/stories/:id/view', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/stories/:id  (geschuetzt) – eigene Story; Admins jede.
-router.delete('/stories/:id', requireAuth, async (req, res, next) => {
+router.delete('/stories/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const story = await first('SELECT id, user_id, image_path FROM stories WHERE id = ?', [
       req.params.id,

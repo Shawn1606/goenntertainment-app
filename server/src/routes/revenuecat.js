@@ -29,6 +29,7 @@ import crypto from 'node:crypto';
 import { createRouter } from '../router.js';
 import { pool, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { applyRevenueCatEvent } from '../subscriptions.js';
 import { logError, logInfo } from '../log.js';
 
@@ -57,7 +58,7 @@ function tokenMatches(given, expected) {
 }
 
 // POST /api/webhooks/revenuecat  (oeffentlich, per Token im Header geschuetzt)
-router.post('/webhooks/revenuecat', async (req, res, next) => {
+router.post('/webhooks/revenuecat', rateLimit('webhook'), async (req, res, next) => {
   try {
     const expected = process.env.REVENUECAT_WEBHOOK_TOKEN;
     if (!expected) {

@@ -22,6 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
@@ -59,7 +60,7 @@ const deleteInternal = (userId, { secret = TEST_INTERNAL_SECRET, grant, on = bas
 
 /** Starts another app on a free port for one test; returns its base address and a stop function. */
 async function otherApp(options) {
-  const other = createApp(options).listen(0);
+  const other = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS, ...options }).listen(0);
   await new Promise((resolve) => other.once('listening', resolve));
   return { url: `http://127.0.0.1:${other.address().port}`, stop: () => new Promise((r) => other.close(r)) };
 }
@@ -108,7 +109,7 @@ async function uploadAvatar(token) {
 
 before(async () => {
   await ensureSchema();
-  server = createApp({ internalSecret: TEST_INTERNAL_SECRET }).listen(0);
+  server = createApp({ internalSecret: TEST_INTERNAL_SECRET, writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });

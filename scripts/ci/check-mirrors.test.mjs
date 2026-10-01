@@ -34,6 +34,8 @@ const FILES = {
   'server/.env.example': 'PORT=8001\r\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\r\n',
   'server/src/uploads.js': '/** Largest image. */\nexport const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;\n',
   'api/app/Http/Controllers/NodeFallbackController.php': '<?php\n        $nodeLimit = 5 * 1024 ** 2;\n',
+  'server/src/rate-limit.js': "export const RATE_LIMIT_MESSAGE = 'Zu viele Versuche – bitte warte kurz.';\n",
+  'api/app/Providers/AppServiceProvider.php': "<?php\n        fn () => response()->json(['message' => 'Zu viele Versuche – bitte warte kurz.'], 429);\n",
   'src/app/create-activity.tsx': "import x from 'y';\nconst MAX_INTERESTS = 5;\n",
   'server/src/routes/activities.js': '/** Interests. */\nconst MAX_INTERESTS = 5;\n',
 };
@@ -56,9 +58,22 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 7);
-    assert.equal(r.places, 16);
-    assert.equal(r.occurrences, 17, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 8);
+    assert.equal(r.places, 18);
+    assert.equal(r.occurrences, 19, 'two mysql services in ci.yml count separately');
+  });
+});
+
+test('detects a 429 message that differs between Node and Laravel', () => {
+  withTree({ 'server/src/rate-limit.js': "export const RATE_LIMIT_MESSAGE = 'Zu viele Versuche – warte.';\n" }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Rate limit message differs: /);
+  });
+  withTree({ 'api/app/Providers/AppServiceProvider.php': "<?php\n        ['message' => 'Too Many Attempts.'];\n" }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      "Rate limit message: cannot find 'Zu viele Versuche ...' message in api/app/Providers/AppServiceProvider.php",
+    ]);
   });
 });
 

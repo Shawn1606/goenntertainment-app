@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEvidence } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { Validator, HttpError, isAlphaDash } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
 import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
@@ -186,7 +187,7 @@ async function loadTargetUser(req) {
 }
 
 // PATCH /api/admin/users/:id  (nur Admin) – Benutzername aendern.
-router.patch('/users/:id', requireAuth, requireAdmin, async (req, res, next) => {
+router.patch('/users/:id', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
@@ -226,7 +227,7 @@ function requireReason(req) {
 
 // POST /api/admin/users/:id/ban  (nur Admin) – dauerhaft sperren.
 // multipart: Feld `reason` (Pflicht) + optionales Beweis-Bild `evidence`.
-router.post('/users/:id/ban', requireAuth, requireAdmin, uploadEvidence, async (req, res, next) => {
+router.post('/users/:id/ban', requireAuth, rateLimit('admin'), requireAdmin, uploadEvidence, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);
@@ -241,7 +242,7 @@ router.post('/users/:id/ban', requireAuth, requireAdmin, uploadEvidence, async (
 
 // POST /api/admin/users/:id/timeout  (nur Admin) – zeitlich sperren.
 // multipart: Felder `minutes` + `reason` (Pflicht) + optionales Beweis-Bild `evidence`.
-router.post('/users/:id/timeout', requireAuth, requireAdmin, uploadEvidence, async (req, res, next) => {
+router.post('/users/:id/timeout', requireAuth, rateLimit('admin'), requireAdmin, uploadEvidence, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);
@@ -260,7 +261,7 @@ router.post('/users/:id/timeout', requireAuth, requireAdmin, uploadEvidence, asy
 });
 
 // POST /api/admin/users/:id/unban  (nur Admin) – Sperre/Timeout aufheben (Grund leeren).
-router.post('/users/:id/unban', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/users/:id/unban', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     await pool.query('UPDATE users SET banned_until = NULL, ban_reason = NULL, updated_at = NOW() WHERE id = ?', [
@@ -278,7 +279,7 @@ router.post('/users/:id/unban', requireAuth, requireAdmin, async (req, res, next
 // Selbst-Loeschen ueber DELETE /api/me. Der letzte Admin ist hier nicht zu
 // schuetzen: Wer loescht, ist selbst Admin und bleibt (loadTargetUser verbietet
 // das eigene Konto).
-router.delete('/users/:id', requireAuth, requireAdmin, async (req, res, next) => {
+router.delete('/users/:id', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     await deleteUserAccount(user.id);
@@ -495,7 +496,7 @@ async function loadPendingRequest(req) {
 }
 
 // POST /api/admin/upgrade-requests/:id/approve  (nur Admin) – Stufe freischalten.
-router.post('/upgrade-requests/:id/approve', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/upgrade-requests/:id/approve', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const request = await loadPendingRequest(req);
 
@@ -519,7 +520,7 @@ router.post('/upgrade-requests/:id/approve', requireAuth, requireAdmin, async (r
 
 // POST /api/admin/upgrade-requests/:id/reject  (nur Admin) – Anfrage ablehnen.
 // Body: { reason? } – freiwillig, wird der Person unter ihrer Anfrage gezeigt.
-router.post('/upgrade-requests/:id/reject', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/upgrade-requests/:id/reject', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const request = await loadPendingRequest(req);
     const note = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 255) : '';

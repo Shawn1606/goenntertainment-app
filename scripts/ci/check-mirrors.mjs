@@ -9,6 +9,7 @@
 //                  NodeInternal.php and api/docker/entrypoint.sh;
 //   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example;
 //   - the upload size limit: server/src/uploads.js and Laravel's NodeFallbackController;
+//   - the 429 message: server/src/rate-limit.js and api/app/Providers/AppServiceProvider.php;
 //   - the interests per event: the app's create-activity screen and server/src/routes/activities.js.
 // CI tests what production runs only while these agree. A Dependabot update of a base image
 // that moves Node or PHP fails here until CI (and composer.json) move with it, on purpose.
@@ -83,6 +84,15 @@ export const MIRRORS = [
     sources: [
       { file: 'server/src/uploads.js', what: 'MAX_UPLOAD_BYTES', extract: all(/^export const MAX_UPLOAD_BYTES = (\d+) \* 1024 \* 1024;/gm) },
       { file: 'api/app/Http/Controllers/NodeFallbackController.php', what: '$nodeLimit', extract: all(/\$nodeLimit = (\d+) \* 1024 \*\* 2;/g) },
+    ],
+  },
+  {
+    // The answer to a rate-limited request: Laravel's limiters and Node's write limiter send the
+    // same German text, which the app shows verbatim.
+    name: 'Rate limit message',
+    sources: [
+      { file: 'server/src/rate-limit.js', what: 'RATE_LIMIT_MESSAGE', extract: all(/^export const RATE_LIMIT_MESSAGE = '([^']+)';/gm) },
+      { file: 'api/app/Providers/AppServiceProvider.php', what: "'Zu viele Versuche ...' message", extract: all(/'(Zu viele Versuche[^']*)'/g) },
     ],
   },
   {
