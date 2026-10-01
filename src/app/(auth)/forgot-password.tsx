@@ -10,9 +10,8 @@ import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { TextField } from '@/components/ui/text-field';
 import { MailIcon } from '@/components/ui/icons';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
+import { isEmailAddress } from '@/domain/email';
 import { api, ApiError } from '@/lib/api';
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * „Passwort vergessen": schickt die E-Mail ans Backend (/api/forgot-password) und
@@ -29,7 +28,7 @@ export default function ForgotPasswordScreen() {
   const [loading, setLoading] = useState(false);
 
   async function onSubmit() {
-    if (!EMAIL_RE.test(email.trim())) {
+    if (!isEmailAddress(email.trim())) {
       setError('Bitte gib eine gültige E-Mail-Adresse ein.');
       return;
     }

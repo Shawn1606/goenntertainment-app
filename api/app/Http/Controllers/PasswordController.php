@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Rules\ValidEmail;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
 use Closure;
@@ -31,9 +32,7 @@ class PasswordController extends Controller
     /** Wie Laravel: Reset-Links laufen nach 60 Minuten ab. */
     private const EXPIRE_MINUTES = 60;
 
-    private const MSG_EMAIL = 'Bitte eine gueltige E-Mail-Adresse angeben.';
-
-    private const EMAIL_PATTERN = '/^[^\s@]+@[^\s@]+\.[^\s@]+$/';
+    private const MSG_EMAIL = ValidEmail::MESSAGE;
 
     /**
      * POST /api/forgot-password
@@ -45,10 +44,9 @@ class PasswordController extends Controller
     public function forgot(Request $request): JsonResponse
     {
         Validator::make($request->all(), [
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'email' => ['bail', 'required', new ValidEmail],
         ], [
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
         ])->validate();
 
         $email = (string) $request->input('email');
@@ -83,12 +81,11 @@ class PasswordController extends Controller
     {
         Validator::make($request->all(), [
             'token' => ['required'],
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'email' => ['bail', 'required', new ValidEmail],
             'password' => ['bail', 'required', $this->passwordRule($request), $this->confirmationRule($request)],
         ], [
             'token.required' => 'Der Token fehlt.',
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
             'password.required' => 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.',
         ])->validate();
 

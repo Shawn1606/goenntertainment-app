@@ -16,6 +16,7 @@ import { Features } from '@/constants/features';
 import { MIN_AGE } from '@/constants/operator';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
 import { tierFor } from '@/domain/account';
+import { isEmailAddress } from '@/domain/email';
 import { LEGAL_VERSION } from '@/domain/legal';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -37,7 +38,6 @@ import { passwordStrength } from '@/lib/password-strength';
  */
 const START_TIER = tierFor('standard');
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[A-Za-z0-9_-]+$/;
 
 /** Mindestanzahl Interessen für ein vollständiges Profil (Backend verlangt ≥ 3). */
@@ -99,7 +99,8 @@ export default function RegisterScreen() {
       userBlocked: blockedTermMessage(u, 'username'),
       userLenOk: u.length >= 3 && u.length <= 30,
       userCharsOk: u.length > 0 && USERNAME_RE.test(u),
-      emailOk: EMAIL_RE.test(email.trim()),
+      // Dieselbe Prüfung wie am Server, mit derselben Längengrenze (src/domain/email.ts).
+      emailOk: isEmailAddress(email.trim()),
       // Dieselbe Regel wie am Server (Länge, Buchstaben + Zahl, keine Liste häufiger
       // Passwörter, kein Benutzername darin) – siehe src/domain/password-strength.ts.
       passOk: passwordStrength(p, [u, email.trim(), name.trim()]).meetsPolicy,

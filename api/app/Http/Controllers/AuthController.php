@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Rules\NoBlockedTerms;
+use App\Rules\ValidEmail;
 use App\Support\AccountTypes;
+use App\Support\EmailAddress;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
 use App\Support\TwoFactor;
@@ -38,13 +40,10 @@ use Illuminate\Validation\ValidationException;
  */
 class AuthController extends Controller
 {
-    /** Muster der bisherigen E-Mail-Pruefung (server/src/validate.js). */
-    private const EMAIL_PATTERN = '/^[^\s@]+@[^\s@]+\.[^\s@]+$/';
-
     /** Benutzername: Buchstaben, Zahlen, Unterstrich, Bindestrich. */
     private const USERNAME_PATTERN = '/^[\w-]+$/';
 
-    private const MSG_EMAIL = 'Bitte eine gueltige E-Mail-Adresse angeben.';
+    private const MSG_EMAIL = ValidEmail::MESSAGE;
 
     private const MSG_USERNAME_FORMAT = 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).';
 
@@ -62,7 +61,8 @@ class AuthController extends Controller
              */
             'name' => ['bail', 'required', 'string', new NoBlockedTerms('name')],
             'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, new NoBlockedTerms('username')],
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            // The former pattern, in linear time and capped at 254 characters (App\Support\EmailAddress).
+            'email' => ['bail', 'required', new ValidEmail],
             'password' => ['bail', 'required', $this->passwordRule()],
             /**
              * `required` steht hier nicht zur Zierde: Ohne es ueberspringt Laravel
@@ -81,7 +81,6 @@ class AuthController extends Controller
             'username.max' => self::MSG_USERNAME_FORMAT,
             'username.regex' => self::MSG_USERNAME_FORMAT,
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
             'password.required' => self::MSG_PASSWORD,
             'account_type.required' => 'Ungueltiger Kontotyp.',
         ]);
@@ -104,7 +103,7 @@ class AuthController extends Controller
             }
 
             $email = $request->input('email');
-            if (! $v->errors()->has('email') && is_string($email) && preg_match(self::EMAIL_PATTERN, $email) === 1) {
+            if (! $v->errors()->has('email') && EmailAddress::isValid($email)) {
                 if (User::where('email', $email)->exists()) {
                     $v->errors()->add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
                 }
@@ -162,11 +161,10 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         Validator::make($request->all(), [
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'email' => ['bail', 'required', new ValidEmail],
             'password' => ['required'],
         ], [
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
             'password.required' => 'Das Passwort ist erforderlich.',
         ])->validate();
 
@@ -261,9 +259,8 @@ class AuthController extends Controller
         }
 
         if ($request->has('email')) {
-            $rules['email'] = ['bail', 'required', 'regex:'.self::EMAIL_PATTERN];
+            $rules['email'] = ['bail', 'required', new ValidEmail];
             $messages['email.required'] = self::MSG_EMAIL;
-            $messages['email.regex'] = self::MSG_EMAIL;
         }
 
         /**
@@ -307,7 +304,7 @@ class AuthController extends Controller
 
             $email = $request->input('email');
             if (! $v->errors()->has('email') && is_string($email) && $email !== $user->email
-                && preg_match(self::EMAIL_PATTERN, $email) === 1) {
+                && EmailAddress::isValid($email)) {
                 if (User::where('email', $email)->where('id', '<>', $user->id)->exists()) {
                     $v->errors()->add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
                 }
