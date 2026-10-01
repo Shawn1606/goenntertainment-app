@@ -27,6 +27,11 @@ const FILES = {
   'api/Dockerfile': 'FROM php:8.4-apache\nCOPY --from=composer:2 /usr/bin/composer /usr/bin/composer\n',
   'api/composer.json': JSON.stringify({ require: { php: '^8.4', 'laravel/framework': '^13.0' } }, null, 4),
   'deploy/docker-compose.yml': 'services:\n  db:\n    image: mysql:8.4\n',
+  'server/src/config.js': 'export const INTERNAL_SECRET_MIN_LENGTH = 32;\n',
+  'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 32;\n}\n',
+  'api/docker/entrypoint.sh': 'if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then\n  exit 1\nfi\n',
+  'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n',
+  'server/.env.example': 'PORT=8001\r\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\r\n',
 };
 
 function withTree(overrides, fn) {
@@ -47,9 +52,35 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 3);
-    assert.equal(r.places, 7);
-    assert.equal(r.occurrences, 8, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 5);
+    assert.equal(r.places, 12);
+    assert.equal(r.occurrences, 13, 'two mysql services in ci.yml count separately');
+  });
+});
+
+test('detects an internal secret minimum length that differs between Node, Laravel and the container', () => {
+  withTree({ 'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 24;\n}\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Internal secret minimum length differs: 32 \(server\/src\/config\.js .*\), 24 \(api\/app\/Support\/NodeInternal\.php .*\), 32 \(api\/docker\/entrypoint\.sh .*\)$/);
+  });
+  withTree({ 'api/docker/entrypoint.sh': 'exit 0\n' }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      'Internal secret minimum length: cannot find NODE_INTERNAL_SECRET length check in api/docker/entrypoint.sh',
+    ]);
+  });
+});
+
+test('detects development internal secrets that differ between api/ and server/', () => {
+  withTree({ 'server/.env.example': 'NODE_INTERNAL_SECRET=dev-only-other-not-a-secret-00000000000\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Development NODE_INTERNAL_SECRET differs: /);
+  });
+  withTree({ 'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=\n' }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      'Development NODE_INTERNAL_SECRET: cannot find NODE_INTERNAL_SECRET in api/.env.example',
+    ]);
   });
 });
 

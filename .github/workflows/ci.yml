@@ -352,7 +352,7 @@ jobs:
       - name: Workflow policy
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-workflows.mjs .github/workflows --ci-env deploy/ci.env
-      - name: Versions shared by CI and the Dockerfiles
+      - name: Values written in several places (scripts/ci/check-mirrors.mjs)
         if: ${{ !cancelled() }}
         run: node scripts/ci/check-mirrors.mjs
       - name: Repository guardrails

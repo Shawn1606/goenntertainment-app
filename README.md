@@ -92,7 +92,7 @@ CI together.
 | Schema drift tool tests | `scripts/schema-drift/*.test.mjs` | `node --test "scripts/schema-drift/*.test.mjs"` | Node >= 22.18, `npm --prefix server ci` |
 | Schema drift check | | `node scripts/schema-drift/check.mjs` | Node >= 22.18, `npm --prefix server ci`, MySQL 8.4 and an account that may create databases (`SCHEMA_DRIFT_DB_HOST`, `_PORT`, `_USER`, `_PASSWORD`), PHP with `pdo_mysql`, `composer install` in `api/` |
 | Workflow policy | | `node scripts/ci/check-workflows.mjs .github/workflows --ci-env deploy/ci.env` | |
-| Versions shared by CI and the Dockerfiles | | `node scripts/ci/check-mirrors.mjs` | |
+| Values written in several places (CI and Dockerfile versions, the internal secret rules) | | `node scripts/ci/check-mirrors.mjs` | |
 | Workflow lint | | actionlint, see [`.github/actionlint/Dockerfile`](.github/actionlint/Dockerfile) | Docker |
 | Dependency audit | | `node scripts/ci/audit.mjs npm .`, `… npm server`, `… composer api` | network (registry); not blocking yet |
 | Container smoke test | | [`.github/workflows/docker.yml`](.github/workflows/docker.yml) with [`deploy/ci.env`](deploy/ci.env) | Docker |

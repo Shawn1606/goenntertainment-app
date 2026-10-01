@@ -4,7 +4,10 @@
 //   - PHP minor:   CI (PHP_VERSION in ci.yml), the API image (api/Dockerfile FROM) and the
 //                  constraint in api/composer.json ("^8.4" and "^8.4.1" both read as 8.4);
 //   - MySQL minor: every `image: mysql:` in ci.yml (service containers) and in
-//                  deploy/docker-compose.yml.
+//                  deploy/docker-compose.yml;
+//   - the minimum length of NODE_INTERNAL_SECRET: server/src/config.js, api/app/Support/
+//                  NodeInternal.php and api/docker/entrypoint.sh;
+//   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example.
 // CI tests what production runs only while these agree. A Dependabot update of a base image
 // that moves Node or PHP fails here until CI (and composer.json) move with it, on purpose.
 //
@@ -50,6 +53,25 @@ export const MIRRORS = [
     sources: [
       { file: '.github/workflows/ci.yml', what: 'image: mysql:', extract: all(/^\s*image:\s*['"]?mysql:(\d+\.\d+)/gm) },
       { file: 'deploy/docker-compose.yml', what: 'image: mysql:', extract: all(/^\s*image:\s*['"]?mysql:(\d+\.\d+)/gm) },
+    ],
+  },
+  {
+    // Node refuses to start with, Laravel refuses to send, and the api container refuses to start
+    // with a shorter NODE_INTERNAL_SECRET: one minimum, written in three places.
+    name: 'Internal secret minimum length',
+    sources: [
+      { file: 'server/src/config.js', what: 'INTERNAL_SECRET_MIN_LENGTH', extract: all(/^export const INTERNAL_SECRET_MIN_LENGTH = (\d+);/gm) },
+      { file: 'api/app/Support/NodeInternal.php', what: 'SECRET_MIN_LENGTH', extract: all(/\bconst SECRET_MIN_LENGTH = (\d+);/g) },
+      { file: 'api/docker/entrypoint.sh', what: 'NODE_INTERNAL_SECRET length check', extract: all(/"\$\{#NODE_INTERNAL_SECRET\}" -lt (\d+)/g) },
+    ],
+  },
+  {
+    // Development: Laravel (api/.env) and Node (server/.env) must hold the same value, or deleting
+    // an account fails; both .env files start from these examples.
+    name: 'Development NODE_INTERNAL_SECRET',
+    sources: [
+      { file: 'api/.env.example', what: 'NODE_INTERNAL_SECRET', extract: all(/^NODE_INTERNAL_SECRET=(\S+)\s*$/gm) },
+      { file: 'server/.env.example', what: 'NODE_INTERNAL_SECRET', extract: all(/^NODE_INTERNAL_SECRET=(\S+)\s*$/gm) },
     ],
   },
 ];
