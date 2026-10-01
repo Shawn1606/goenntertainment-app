@@ -197,35 +197,31 @@ test('every write route is limited and in its documented class (the denominator)
 });
 
 test('every write route answers 429 once its class limit is used up', async () => {
-  const node = await startApp({ writeLimits: everyClass('user:1/1h', 'ip:100000/1h') });
-  // Webhook: its own app with one request per address (it has no account).
-  const webhook = await startApp({ writeLimits: { ...everyClass('user:1/1h', 'ip:100000/1h'), webhook: 'ip:1/1h' } });
+  // One request per account in every class; the webhook (no account) one per address.
+  const node = await startApp({ writeLimits: { ...everyClass('user:1/1h', 'ip:100000/1h'), webhook: 'ip:1/1h' } });
   try {
-    const routes = writeRoutes(createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS, internalSecret: TEST_INTERNAL_SECRET })).filter(
-      ({ key }) => !Object.hasOwn(EXEMPT, key),
-    );
+    // The documented table (the first test pins it to the app's real routes).
+    const routes = EXPECTED.filter((line) => !line.endsWith(' exempt')).map((line) => line.split(' ').slice(0, 2));
     assert.equal(routes.length, 56);
-    for (const { key } of routes) {
-      const [method, pattern] = key.split(' ');
+    for (const [method, pattern] of routes) {
+      const key = `${method} ${pattern}`;
       const routePath = concrete(pattern);
       const anonymous = pattern === '/api/webhooks/revenuecat';
-      const base = anonymous ? webhook.url : node.url;
       // A fresh account per route: the per-account counter of the class starts at zero.
       const token = anonymous ? undefined : (await createUser('limitroute', { isAdmin: pattern.startsWith('/api/admin/') })).token;
 
-      const first = await call(base, method, routePath, { token });
+      const first = await call(node.url, method, routePath, { token });
       assert.notEqual(first.status, 429, `${key}: the first request was refused`);
       if (!anonymous) assert.notEqual(first.status, 401, `${key}: the fixture token was not accepted`);
       await first.arrayBuffer();
 
-      const second = await call(base, method, routePath, { token });
+      const second = await call(node.url, method, routePath, { token });
       assert.equal(second.status, 429, `${key}: the second request was not limited`);
       assert.deepEqual(await second.json(), { message: RATE_LIMIT_MESSAGE }, key);
       assert.ok(Number(second.headers.get('retry-after')) >= 1, `${key}: Retry-After ${second.headers.get('retry-after')}`);
     }
   } finally {
     await node.stop();
-    await webhook.stop();
   }
 });
 

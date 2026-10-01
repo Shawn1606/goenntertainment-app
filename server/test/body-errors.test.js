@@ -133,6 +133,20 @@ test('urlencoded bodies are limited to 16 KB and 50 fields', async () => {
   assert.equal(fifty.status, 401, '50 fields are parsed, then refused for the missing token');
 });
 
+test('100,000-character JSON and urlencoded values are refused with 413 in under 1 s', async () => {
+  for (const [body, type] of [
+    [JSON.stringify({ name: 'x'.repeat(100_000) }), 'application/json'],
+    [`name=${'x'.repeat(100_000)}`, 'application/x-www-form-urlencoded'],
+  ]) {
+    const started = performance.now();
+    const res = await post('/api/groups', body, { 'Content-Type': type });
+    const ms = performance.now() - started;
+    assert.equal(res.status, 413, type);
+    assert.equal((await res.json()).message, MSG_TOO_LARGE, type);
+    assert.ok(ms < 1000, `${type}: ${ms.toFixed(0)} ms`);
+  }
+});
+
 test('urlencoded bodies stay flat: bracketed names are not turned into nested objects', async () => {
   const res = await post('/test-only/echo', 'a[b][c]=1&list[]=2', { 'Content-Type': 'application/x-www-form-urlencoded' });
   assert.equal(res.status, 200);
