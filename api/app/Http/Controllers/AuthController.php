@@ -10,6 +10,7 @@ use App\Support\AccountTypes;
 use App\Support\EmailAddress;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
+use App\Support\ReservedAccounts;
 use App\Support\Sessions;
 use App\Support\TwoFactor;
 use Closure;
@@ -61,9 +62,11 @@ class AuthController extends Controller
              * dieselbe, die die App vorab am Feld zeigt.
              */
             'name' => ['bail', 'required', 'string', new NoBlockedTerms('name')],
-            'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, new NoBlockedTerms('username')],
+            // Names and addresses the system creates for itself are refused (F-05,
+            // shared/reserved-accounts.json), before anyone can take them ahead of the seed.
+            'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, self::notReservedUsername(null), new NoBlockedTerms('username')],
             // The former pattern, in linear time and capped at 254 characters (App\Support\EmailAddress).
-            'email' => ['bail', 'required', new ValidEmail],
+            'email' => ['bail', 'required', new ValidEmail, self::notReservedEmail()],
             'password' => ['bail', 'required', $this->passwordRule()],
             /**
              * `required` steht hier nicht zur Zierde: Ohne es ueberspringt Laravel
@@ -251,7 +254,7 @@ class AuthController extends Controller
         }
 
         if ($request->has('username')) {
-            $rules['username'] = ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, $blockedTermsRule('username', $user->username)];
+            $rules['username'] = ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, self::notReservedUsername($user->username), $blockedTermsRule('username', $user->username)];
             $messages['username.required'] = 'Der Benutzername ist erforderlich.';
             $messages['username.string'] = 'Der Benutzername ist erforderlich.';
             $messages['username.min'] = self::MSG_USERNAME_FORMAT;
@@ -427,6 +430,31 @@ class AuthController extends Controller
             $fail(in_array($value, AccountTypes::ALL, true)
                 ? 'Diese Stufe gibt es erst nach Freischaltung – frag sie in der App an.'
                 : 'Ungueltiger Kontotyp.');
+        };
+    }
+
+    /**
+     * A username the system reserves for itself (shared/reserved-accounts.json) is refused, unless
+     * it is the account's current one (the admin may keep sending its own name with a profile).
+     */
+    public static function notReservedUsername(?string $current): Closure
+    {
+        return static function (string $attribute, mixed $value, Closure $fail) use ($current): void {
+            $unchanged = is_string($value) && $current !== null
+                && mb_strtolower($value, 'UTF-8') === mb_strtolower($current, 'UTF-8');
+            if (! $unchanged && ReservedAccounts::default()->isReservedUsername($value)) {
+                $fail(ReservedAccounts::MSG_USERNAME);
+            }
+        };
+    }
+
+    /** An address in a domain the system reserves for its own accounts is refused. */
+    public static function notReservedEmail(): Closure
+    {
+        return static function (string $attribute, mixed $value, Closure $fail): void {
+            if (ReservedAccounts::default()->isReservedEmail($value)) {
+                $fail(ReservedAccounts::MSG_EMAIL);
+            }
         };
     }
 

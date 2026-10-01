@@ -121,8 +121,6 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
       </Stack.Protected>
-      {/* Admin-Panel: immer per URL /admin erreichbar (eigener Login, im Browser bedienbar) */}
-      <Stack.Screen name="admin" />
       {/* Rechtstexte IN der App: Impressum, Nutzungsbedingungen, Haftung, Regeln,
           Datenschutz (siehe src/domain/legal.ts).
 

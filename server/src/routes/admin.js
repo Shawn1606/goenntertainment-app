@@ -7,6 +7,7 @@ import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEviden
 import { rateLimit } from '../rate-limit.js';
 import { Validator, HttpError, isAlphaDash } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
+import { MSG_RESERVED_USERNAME, isReservedUsername } from '../reserved-accounts.js';
 import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
 import { transformRequest } from './upgrades.js';
 import { mediaUrl, publicBase } from '../media.js';
@@ -194,6 +195,13 @@ router.patch('/users/:id', requireAuth, rateLimit('admin'), requireAdmin, async 
     const v = new Validator(req.body ?? {});
     if (username.length < 3 || username.length > 30 || !isAlphaDash(username)) {
       v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+    } else if (
+      username.toLowerCase() !== String(user.username ?? '').toLowerCase() &&
+      isReservedUsername(username)
+    ) {
+      // The system's own names (shared/reserved-accounts.json) are not handed to another account,
+      // not even by an admin (F-05); an account that already has one keeps it.
+      v.add('username', MSG_RESERVED_USERNAME);
     } else {
       // Auch fuer Admins: Umbenennen ist genau der Weg, auf dem ein anstoessiger
       // Altname verschwinden soll – nicht der, auf dem ein neuer entsteht.

@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { pool } from './db.js';
 import { hashPassword } from './auth.js';
+import { isReservedUsername } from './reserved-accounts.js';
 
 /**
  * Fuellt die DB mit den Start-Daten (portiert aus den Laravel-Seedern):
@@ -9,6 +10,12 @@ import { hashPassword } from './auth.js';
  *
  * Idempotent: laesst sich beliebig oft ausfuehren, ohne Duplikate.
  * Aufruf:  npm run seed     (im Ordner server/)
+ *
+ * The admin step only CREATES the admin (F-05): it refuses when an account with ADMIN_EMAIL or
+ * the username "admin" already exists and changes nothing then (exit code 1). It never promotes,
+ * renames or resets an existing account. `npm run seed:admin` runs only that step and exits 1
+ * when ADMIN_EMAIL or ADMIN_PASSWORD is empty, so a one-off seed container cannot look successful
+ * without having created the admin.
  */
 
 /** Wie Laravels Str::slug: klein, Sonderzeichen -> '-', Raender getrimmt. */
@@ -165,41 +172,61 @@ async function seedInterests() {
   console.log(`Interessen: ${INTERESTS.length} eingespielt/aktualisiert.`);
 }
 
-async function seedAdmin() {
-  const email = process.env.ADMIN_EMAIL;
-  const password = process.env.ADMIN_PASSWORD;
+/** Username of the seeded admin; reserved in shared/reserved-accounts.json. */
+export const ADMIN_USERNAME = 'admin';
 
+const ADMIN_REFUSED =
+  'Admin: refused - an account with ADMIN_EMAIL or the username "admin" already exists; nothing was changed.';
+
+/**
+ * Creates the admin account, only on an empty slot (F-05).
+ *
+ * Refuses, and changes nothing, when an account with the address or with the username "admin"
+ * exists: adopting it would hand admin rights to whoever registered that address or name first,
+ * keep their tokens and second factor, and reset the password on every run. The log lines carry
+ * no address.
+ *
+ * @returns {Promise<'skipped'|'created'|'refused'>}
+ */
+export async function seedAdmin({ email, password } = {}) {
   if (!email || !password) {
     console.log('Admin: uebersprungen (ADMIN_EMAIL/ADMIN_PASSWORD nicht gesetzt).');
-    return;
+    return 'skipped';
   }
 
-  // Wie Laravels updateOrCreate: nur ueber die E-Mail matchen.
-  const hashed = await hashPassword(String(password));
-  const [existing] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
-
+  const [existing] = await pool.query('SELECT id FROM users WHERE email = ? OR username = ? LIMIT 1', [
+    email,
+    ADMIN_USERNAME,
+  ]);
   if (existing.length > 0) {
-    // `COALESCE` statt fest 'business_plus': Ein erneuter Seed-Lauf soll die
-    // eingestellte Kontostufe nicht zurueckdrehen – wer zum Pruefen auf
-    // Standard gewechselt ist, bleibt dort.
-    await pool.query(
-      `UPDATE users
-          SET name = 'Admin', username = 'admin', password = ?,
-              account_type = COALESCE(account_type, 'business_plus'), is_admin = 1, updated_at = NOW()
-        WHERE id = ?`,
-      [hashed, existing[0].id],
-    );
-    console.log(`Admin: Konto fuer ${email} aktualisiert (is_admin = 1).`);
-  } else {
+    console.error(ADMIN_REFUSED);
+    return 'refused';
+  }
+
+  const hashed = await hashPassword(String(password));
+  try {
     // Hoechste Stufe: So sieht das Admin-Konto von Anfang an alles (inkl.
     // Business-Bereich) und kann zum Pruefen nach unten wechseln.
     await pool.query(
       `INSERT INTO users (name, username, email, password, account_type, is_admin, created_at, updated_at)
-         VALUES ('Admin', 'admin', ?, ?, 'business_plus', 1, NOW(), NOW())`,
-      [email, hashed],
+         VALUES ('Admin', ?, ?, ?, 'business_plus', 1, NOW(), NOW())`,
+      [ADMIN_USERNAME, email, hashed],
     );
-    console.log(`Admin: Konto fuer ${email} angelegt (is_admin = 1).`);
+  } catch (err) {
+    // The unique keys on email and username: someone took the slot between the check and the insert.
+    if (err?.code === 'ER_DUP_ENTRY') {
+      console.error(ADMIN_REFUSED);
+      return 'refused';
+    }
+    throw err;
   }
+  console.log('Admin: account created (is_admin = 1).');
+  return 'created';
+}
+
+/** Every username this seed creates: the admin and the venue hosts. */
+export function seededUsernames() {
+  return [ADMIN_USERNAME, ...PERMANENT.map((entry) => entry.host.username)];
 }
 
 /**
@@ -220,7 +247,7 @@ async function seedAdmin() {
  * der Geocoder findet die Haeuser auch ueber Namen und Stadt (siehe
  * src/domain/place-query.ts).
  */
-const PERMANENT = [
+export const PERMANENT = [
   {
     title: 'Bowling',
     location: 'Bowling-Center, Göttingen',
@@ -325,15 +352,59 @@ async function seedPermanent() {
   console.log(`Dauerangebote: ${neu} neu, ${aktualisiert} aktualisiert.`);
 }
 
-async function main() {
+/**
+ * An error for the console without request data: a database error prints its class, code and
+ * numbers only (its message and `sql` can carry the bound values, here the admin's address and
+ * password hash).
+ */
+function describeSeedError(err) {
+  if (err && (err.sqlState || err.errno)) {
+    return `${err.name ?? 'Error'} ${err.code ?? ''} errno=${err.errno ?? '?'} sqlState=${err.sqlState ?? '?'}`;
+  }
+  return `${err?.name ?? 'Error'}: ${err?.message ?? String(err)}`;
+}
+
+/** `--only=admin` (npm run seed:admin) or nothing; anything else is refused. */
+function parseArgs(argv) {
+  const unknown = argv.filter((arg) => arg !== '--only=admin');
+  if (unknown.length > 0) throw new Error(`unknown argument(s): ${unknown.join(' ')} (allowed: --only=admin)`);
+  return { onlyAdmin: argv.includes('--only=admin') };
+}
+
+async function main(argv = process.argv.slice(2)) {
   try {
+    const { onlyAdmin } = parseArgs(argv);
+
+    // Every account the seed creates must be one nobody else can register (F-05): checked before
+    // anything is written.
+    const unreserved = seededUsernames().filter((username) => !isReservedUsername(username));
+    if (unreserved.length > 0) {
+      console.error(`Seed refused: not reserved in shared/reserved-accounts.json: ${unreserved.join(', ')}`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const admin = { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD };
+
+    if (onlyAdmin) {
+      const missing = ['ADMIN_EMAIL', 'ADMIN_PASSWORD'].filter((name) => !process.env[name]);
+      if (missing.length > 0) {
+        console.error(`seed:admin: ${missing.join(' and ')} must be set; no admin was created.`);
+        process.exitCode = 1;
+        return;
+      }
+      await ensureSchema();
+      if ((await seedAdmin(admin)) !== 'created') process.exitCode = 1;
+      return;
+    }
+
     await ensureSchema();
     await seedInterests();
     await seedPermanent();
-    await seedAdmin();
+    if ((await seedAdmin(admin)) === 'refused') process.exitCode = 1;
     console.log('Seed fertig.');
   } catch (err) {
-    console.error('Seed fehlgeschlagen:', err);
+    console.error(`Seed fehlgeschlagen: ${describeSeedError(err)}`);
     process.exitCode = 1;
   } finally {
     await pool.end();
