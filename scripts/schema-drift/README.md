@@ -150,6 +150,13 @@ same commit:
 
 Then run the check.
 
+The check verifies an `ADD COLUMN` only where `db.js` has one (type, nullability, default, position). It
+does not notice a missing one. A column added to `schema.sql` alone, on a table no copy creates (for
+example `activities`), or added to `schema.sql` and to the `CREATE TABLE IF NOT EXISTS` of a table that
+already exists, without a guarded `ADD COLUMN`, passes with 0 differences. Existing databases would never
+get that column, so review this by hand: every new column on an existing table needs its guarded
+`ADD COLUMN` in `ensureSchema()` of `db.js`.
+
 ## Contract for a Node copy
 
 A registered Node copy exports an async function, sends one statement per `pool.query()` call through
@@ -160,7 +167,8 @@ A registered Node copy exports an async function, sends one statement per `pool.
 ## Limits (not checked)
 
 - Upgrades from historical versions of `schema.sql`; only today's reference and today's copies are
-  compared.
+  compared, so a `schema.sql` column without a `db.js` `ADD COLUMN` can pass (the two cases and the hand
+  review are under "When the check fails").
 - Dependencies between copies: `db.js` places columns after `users.ban_reason` and
   `activities.max_participants`, which only `seed.js` and `schema.sql` create.
 - `php artisan migrate` on top of a `schema.sql` database (it would fail on `users`; the deploy never does
