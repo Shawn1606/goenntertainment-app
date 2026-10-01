@@ -3,11 +3,17 @@
  *
  * Two kinds per check: the real repository must be clean (these fail on a tree that still has
  * the problem), and every finding class must fire on a planted sample (proves the check can fail
- * at all). Planted samples are built at run time and scanned in memory; nothing here is written
- * to disk, and no planted sample appears literally in this file (the repository scan reads it).
+ * at all). Planted samples are built at run time and never appear literally in this file (the
+ * repository scan reads it). Most are scanned in memory; the tests of what the reader skips write
+ * theirs to a temporary directory and remove it afterwards.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   AUTOSTART_CLASSES,
@@ -22,6 +28,7 @@ import {
   checkSecrets,
   formatReport,
   ignoreFindings,
+  main,
   readTracked,
   repoContext,
   report,
@@ -49,8 +56,9 @@ test('the tracked-file reader sees the repository and skips binary files', () =>
   assert.ok(paths.length > 100, `only ${paths.length} tracked files seen`);
   assert.ok(paths.includes('package.json'));
   const { files, binary, missing } = readTracked(undefined, paths);
-  assert.equal(files.length + binary + missing, paths.length);
-  assert.ok(binary > 0, 'the repository has images; none was recognised as binary');
+  assert.equal(files.length + binary.length + missing.length, paths.length);
+  assert.ok(binary.length > 0, 'the repository has images; none was recognised as binary');
+  assert.ok(binary.every((p) => paths.includes(p)) && missing.every((p) => paths.includes(p)));
   assert.ok(!files.some((f) => f.text.includes('\0')));
 });
 
@@ -369,4 +377,115 @@ test('log-mailer classes fire on planted env, YAML, compose and PHP lines', () =
     'log-mailer-default\tplanted.txt:3',
     'log-mailer-default\tplanted.txt:4',
   ]);
+});
+
+/* ------------------------------------------------------------ files the reader does not scan */
+
+/** Writes `{ relativePath: content }` into a new temporary directory; the caller removes it. */
+function plantFiles(files) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'check-repo-'));
+  for (const [rel, content] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), content);
+  }
+  return dir;
+}
+
+/** A script that registers a logon task and holds a fake key, assembled at run time. */
+const plantedScript = () =>
+  [`${'Register-'}${'ScheduledTask'} -TaskName planted -Action $action`, `$key = '${PLANTED['aws-access-key-id']}'`].join('\r\n');
+/** How Windows PowerShell 5.1 writes a file by default: UTF-16LE with a byte-order mark. */
+const utf16le = (text) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, 'utf16le')]);
+const utf16be = (text) => Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(text, 'utf16le').swap16()]);
+/** The start of a PNG file: NUL bytes early on, as in every image. */
+const binaryBytes = () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+
+test('UTF-16 files with a BOM are scanned; binary and missing paths are listed; a binary script is a finding', () => {
+  const dir = plantFiles({
+    'scripts/planted-le.ps1': utf16le(plantedScript()),
+    'scripts/planted-be.ps1': utf16be(plantedScript()),
+    'scripts/odd.ps1': binaryBytes(),
+    'assets/planted.png': binaryBytes(),
+    'assets/bom-then-nul.bin': Buffer.from([0xff, 0xfe, 0x00, 0x00, 0x41, 0x00]),
+    'notes/plain.md': 'plain text\n',
+  });
+  try {
+    const paths = [
+      'scripts/planted-le.ps1',
+      'scripts/planted-be.ps1',
+      'scripts/odd.ps1',
+      'assets/planted.png',
+      'assets/bom-then-nul.bin',
+      'notes/plain.md',
+      'notes/gone.md',
+    ];
+    const read = readTracked(dir, paths);
+    assert.deepEqual(
+      read.files.map((f) => f.path),
+      ['scripts/planted-le.ps1', 'scripts/planted-be.ps1', 'notes/plain.md'],
+    );
+    assert.equal(read.files[0].text, plantedScript());
+    assert.equal(read.files[1].text, plantedScript());
+    assert.deepEqual(read.binary, ['scripts/odd.ps1', 'assets/planted.png', 'assets/bom-then-nul.bin']);
+    assert.deepEqual(read.missing, ['notes/gone.md']);
+
+    const planted = { root: dir, paths, ...read };
+    const autostart = checkAutostart(planted);
+    assert.equal(autostart.examined, 3);
+    assert.deepEqual(listed(autostart.findings), [
+      'autostart-scheduled-task\tscripts/planted-le.ps1:1',
+      'autostart-scheduled-task\tscripts/planted-be.ps1:1',
+      'script-not-text\tscripts/odd.ps1',
+    ]);
+    assert.deepEqual(listed(checkSecrets(planted).findings), [
+      'aws-access-key-id\tscripts/planted-le.ps1:2',
+      'aws-access-key-id\tscripts/planted-be.ps1:2',
+    ]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('main prints what it did not scan before the per-check reports, missing files by path only', () => {
+  const dir = plantFiles({
+    '.claude/settings.json': JSON.stringify({ permissions: { allow: ['Read'] } }),
+    'scripts/planted.ps1': utf16le(plantedScript()),
+    'assets/planted.png': binaryBytes(),
+    'notes/plain.md': 'plain text\n',
+    'notes/gone.md': 'removed from the working tree after staging\n',
+  });
+  try {
+    // core.longpaths: the temporary directory can be deep on Windows (git's object paths pass 260).
+    const git = (...args) => execFileSync('git', ['-c', 'core.longpaths=true', '-C', dir, ...args], { stdio: 'pipe' });
+    git('init', '-q');
+    // -f: a global excludes file of the machine running the tests must not change what is tracked.
+    git('add', '-f', '--', '.claude/settings.json', 'scripts/planted.ps1', 'assets/planted.png', 'notes/plain.md', 'notes/gone.md');
+    fs.rmSync(path.join(dir, 'notes', 'gone.md'));
+
+    const out = [];
+    const code = main(dir, { log: (s) => out.push(s), error: (s) => out.push(`error: ${s}`) });
+    const lines = out.join('\n').split('\n');
+    assert.deepEqual(lines.slice(0, 2), [
+      'check-repo: tracked 5, text 3, not scanned: binary 1, missing 1',
+      '  not-scanned-missing\tnotes/gone.md',
+    ]);
+    assert.match(lines[2], /^ignore-rules\texamined \d+\tfindings \d+$/);
+    assert.ok(lines.includes('  autostart-scheduled-task\tscripts/planted.ps1:1'), 'the UTF-16 script was not scanned');
+    assert.ok(lines.includes('  aws-access-key-id\tscripts/planted.ps1:2'), 'the UTF-16 script was not scanned');
+    assert.ok(!lines.some((l) => l.startsWith('error: ')), lines.find((l) => l.startsWith('error: ')));
+    assert.equal(code, 1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the CLI reports how many tracked files it did not scan, before the per-check reports', () => {
+  const cli = fileURLToPath(new URL('./check-repo.mjs', import.meta.url));
+  const r = spawnSync(process.execPath, [cli], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  const m = /^check-repo: tracked (\d+), text (\d+), not scanned: binary (\d+), missing (\d+)$/m.exec(r.stdout);
+  assert.ok(m, `no not-scanned line; first line: ${r.stdout.split('\n')[0]}`);
+  const [tracked, text, binary, missing] = m.slice(1).map(Number);
+  assert.equal(text + binary + missing, tracked);
+  assert.ok(binary > 0, 'the repository has images; none was counted as binary');
+  assert.ok(r.stdout.startsWith(m[0]), 'the not-scanned line must come first');
 });

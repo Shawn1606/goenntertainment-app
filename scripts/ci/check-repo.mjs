@@ -7,6 +7,10 @@
  * Checks: ignore-rules (F-46), autostart and agent-permissions (F-24), secrets (F-35), log-mailer
  * (development mail goes to the local mail catcher, never to a log).
  *
+ * Output: first one line with what the text checks could not read (`check-repo: tracked N,
+ * text T, not scanned: binary B, missing M`, then each missing path as
+ * `  not-scanned-missing<TAB>path`), then one report per check, then the total.
+ *
  * Rules every check follows:
  *   - It reports how many items it examined and refuses a verdict when that number is zero:
  *     a check that saw nothing proves nothing.
@@ -40,27 +44,42 @@ export function trackedFiles(root = REPO_ROOT) {
 }
 
 /**
- * Tracked text files with their content. Binary files (a NUL byte in the first 8000 bytes, the
- * same test git uses) are counted but not read; files missing from the working tree are counted
- * as missing.
+ * The text of a file, or null when it is binary. UTF-16 is recognised by its byte-order mark only
+ * (Windows PowerShell 5.1 writes UTF-16LE with a BOM by default), never guessed. Everything else
+ * is read as UTF-8 unless a NUL byte appears in the first 8000 bytes, the same test git uses; a
+ * decoded UTF-16 text is held to the same test over the same window (4000 code units).
+ */
+export function decodeText(buf) {
+  let text;
+  if (buf[0] === 0xff && buf[1] === 0xfe) {
+    text = buf.subarray(2).toString('utf16le');
+  } else if (buf[0] === 0xfe && buf[1] === 0xff) {
+    text = new TextDecoder('utf-16be').decode(buf.subarray(2));
+  } else {
+    return buf.subarray(0, 8000).includes(0) ? null : buf.toString('utf8');
+  }
+  return text.slice(0, 4000).includes('\0') ? null : text;
+}
+
+/**
+ * Tracked text files with their content, plus the paths that were not read: `binary` (see
+ * decodeText) and `missing` (not in the working tree, or not a readable file).
  */
 export function readTracked(root = REPO_ROOT, paths = trackedFiles(root)) {
   const files = [];
-  let binary = 0;
-  let missing = 0;
+  const binary = [];
+  const missing = [];
   for (const p of paths) {
     let buf;
     try {
       buf = fs.readFileSync(path.join(root, p));
     } catch {
-      missing += 1;
+      missing.push(p);
       continue;
     }
-    if (buf.subarray(0, 8000).includes(0)) {
-      binary += 1;
-      continue;
-    }
-    files.push({ path: p, text: buf.toString('utf8') });
+    const text = decodeText(buf);
+    if (text === null) binary.push(p);
+    else files.push({ path: p, text });
   }
   return { files, binary, missing };
 }
@@ -87,13 +106,25 @@ export function scanLines(files, classes) {
 }
 
 /**
- * What every check gets: the repository root, the tracked paths and the tracked text files.
- * Built once per run; tests build their own with planted files.
+ * What every check gets: the repository root, the tracked paths, the tracked text files, and the
+ * tracked paths that were not read (`binary`, `missing`). Built once per run; tests build their
+ * own with planted files.
  */
 export function repoContext(root = REPO_ROOT) {
   const paths = trackedFiles(root);
-  const { files } = readTracked(root, paths);
-  return { root, paths, files };
+  const { files, binary, missing } = readTracked(root, paths);
+  return { root, paths, files, binary, missing };
+}
+
+/**
+ * The denominator of the text checks: how many tracked files were read and how many were not.
+ * Missing files are listed by path; binary ones are only counted (images and sounds).
+ */
+export function formatNotScanned(ctx) {
+  return [
+    `check-repo: tracked ${ctx.paths.length}, text ${ctx.files.length}, not scanned: binary ${ctx.binary.length}, missing ${ctx.missing.length}`,
+    ...ctx.missing.map((p) => `  not-scanned-missing\t${p}`),
+  ].join('\n');
 }
 
 /* ------------------------------------------------------------------ ignore rules (F-46) */
@@ -219,7 +250,10 @@ export const AUTOSTART_CLASSES = [
 
 export function checkAutostart(ctx) {
   const { findings, examined } = scanLines(ctx.files, AUTOSTART_CLASSES);
-  return report('autostart', examined, findings);
+  // A script the reader could not decode (another encoding, or real binary content) cannot be
+  // scanned here, nor reviewed in a diff: it is a finding of its own.
+  const notText = ctx.binary.filter((p) => SCRIPT_FILE.test(p)).map((p) => ({ cls: 'script-not-text', location: p }));
+  return report('autostart', examined + notText.length, [...findings, ...notText]);
 }
 
 /**
@@ -439,9 +473,10 @@ export function formatReport(r) {
   return [head, ...r.findings.map((f) => `  ${f.cls}\t${f.location}`)].join('\n');
 }
 
-export function main(root = REPO_ROOT) {
+/** Runs every check over `root`. `log` and `error` receive the output (tests capture it). */
+export function main(root = REPO_ROOT, { log = console.log, error = console.error } = {}) {
   if (CHECKS.length === 0) {
-    console.error('check-repo: no checks registered - refusing to report a verdict');
+    error('check-repo: no checks registered - refusing to report a verdict');
     return 2;
   }
   let failed = 0;
@@ -449,21 +484,22 @@ export function main(root = REPO_ROOT) {
   try {
     ctx = repoContext(root);
   } catch (err) {
-    console.error(`check-repo: cannot read the repository: ${err.message}`);
+    error(`check-repo: cannot read the repository: ${err.message}`);
     return 2;
   }
+  log(formatNotScanned(ctx));
   for (const check of CHECKS) {
     let r;
     try {
       r = check(ctx);
     } catch (err) {
-      console.error(`check-repo: ${err.message}`);
+      error(`check-repo: ${err.message}`);
       return 2;
     }
-    console.log(formatReport(r));
+    log(formatReport(r));
     failed += r.findings.length;
   }
-  console.log(`check-repo: ${CHECKS.length} checks, ${failed} findings`);
+  log(`check-repo: ${CHECKS.length} checks, ${failed} findings`);
   return failed === 0 ? 0 : 1;
 }
 
