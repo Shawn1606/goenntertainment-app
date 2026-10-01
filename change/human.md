@@ -1442,9 +1442,10 @@ Untere Leiste wie bei Instagram/TikTok: **Home · Karte · ＋ Erstellen · Freu
 
 ### Autostart
 
-Beim Windows-Login und beim Start von Claude Code läuft `scripts/dev-up.ps1`: wartet aufs
-Internet, trägt die WLAN-IP in `.env.local` ein und startet Laravel, Node und Expo in
-eigenen Fenstern. Abschalten: `scripts/install-autostart.ps1 -Uninstall`.
+Beim Start von Claude Code läuft `scripts/dev-up.ps1` (persönlicher SessionStart-Hook): wartet
+aufs Internet, trägt die WLAN-IP in `.env.local` ein und startet Laravel, Node und Expo in
+eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angelegte Verknüpfung
+„GOE4Fun Dev-Umgebung" im Autostart-Ordner kann gelöscht werden.
 
 ### Was du noch tun musst
 

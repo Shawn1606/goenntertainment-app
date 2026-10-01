@@ -200,10 +200,120 @@ export function checkIgnoreRules(ctx) {
   return report('ignore-rules', samples.length + ctx.paths.length, findings);
 }
 
+/* ------------------------------------------------------- machine-specific tooling (F-24) */
+
+/** Script files: the only place a logon autostart can be installed from. Docs may mention one. */
+const SCRIPT_FILE = /\.(ps1|psm1|psd1|bat|cmd|vbs|sh)$/i;
+
+export const AUTOSTART_CLASSES = [
+  {
+    cls: 'autostart-startup-folder',
+    re: /GetFolderPath\(\s*['"]?(Common)?Startup|shell:(common )?startup|Start Menu\\Programs\\Startup/i,
+  },
+  { cls: 'autostart-run-key', re: /CurrentVersion\\Run(Once)?\b/i },
+  { cls: 'autostart-scheduled-task', re: /\bschtasks(\.exe)?\s+\/create\b|\bRegister-ScheduledTask\b/i },
+].map((c) => ({ ...c, applies: (p) => SCRIPT_FILE.test(p) }));
+
+export function checkAutostart(ctx) {
+  const { findings, examined } = scanLines(ctx.files, AUTOSTART_CLASSES);
+  return report('autostart', examined, findings);
+}
+
+/** Agent configuration in the repository: slash commands, sub-agents, shared settings. */
+const AGENT_FILE = /^\.claude\/(commands|agents)\/.+\.md$/;
+const AGENT_SETTINGS = '.claude/settings.json';
+
+const SHELL_INTERPRETER = /^(powershell|pwsh|cmd|bash|sh|zsh|node|npm|npx|python3?)(\.exe)?(\s|:|$)/i;
+const WRITE_TOOL = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
+
+/** Splits `A, B(x, y), C` on commas outside parentheses. */
+export function splitRules(value) {
+  const rules = [];
+  let depth = 0;
+  let current = '';
+  for (const ch of value) {
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      rules.push(current.trim());
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  if (current.trim() !== '') rules.push(current.trim());
+  return rules;
+}
+
+/** Finding classes for one permission rule such as `Bash(curl:*)` or `Write`. */
+export function ruleClasses(rule) {
+  const m = /^([A-Za-z]+)(?:\((.*)\))?$/.exec(rule.trim());
+  if (!m) return [];
+  const [, tool, arg] = m;
+  const classes = [];
+  if (tool === 'Bash') {
+    if (arg === undefined || arg.trim() === '' || arg.includes('*')) classes.push('agent-shell-wildcard');
+    if (arg !== undefined && SHELL_INTERPRETER.test(arg.trim())) classes.push('agent-shell-interpreter');
+  }
+  if (WRITE_TOOL.test(tool) && (arg === undefined || arg.trim() === '' || arg.includes('*'))) {
+    classes.push('agent-unscoped-write');
+  }
+  return classes;
+}
+
+/**
+ * Pre-approved tools of agent commands and shared settings: only exact, read-only shell commands,
+ * no write access without a path, and no command the model may run on its own.
+ * Returns findings and the number of files plus rules examined.
+ */
+export function scanAgentPermissions(files) {
+  const findings = [];
+  let examined = 0;
+  for (const file of files) {
+    const lines = file.text.split(/\r?\n/);
+    if (AGENT_FILE.test(file.path)) {
+      examined += 1;
+      if (lines[0]?.trim() !== '---') continue;
+      const end = lines.findIndex((l, i) => i > 0 && l.trim() === '---');
+      if (end < 0) continue;
+      let allowed = null;
+      let modelInvocationOff = false;
+      for (let i = 1; i < end; i += 1) {
+        const m = /^([A-Za-z-]+):\s*(.*)$/.exec(lines[i]);
+        if (!m) continue;
+        if (m[1] === 'allowed-tools') allowed = { value: m[2], line: i + 1 };
+        if (m[1] === 'disable-model-invocation' && m[2].trim() === 'true') modelInvocationOff = true;
+      }
+      if (!allowed || allowed.value.trim() === '') continue;
+      for (const rule of splitRules(allowed.value)) {
+        examined += 1;
+        for (const cls of ruleClasses(rule)) findings.push({ cls, location: `${file.path}:${allowed.line}` });
+      }
+      if (file.path.startsWith('.claude/commands/') && !modelInvocationOff) {
+        findings.push({ cls: 'agent-model-invocable', location: `${file.path}:1` });
+      }
+    } else if (file.path === AGENT_SETTINGS) {
+      examined += 1;
+      const allow = JSON.parse(file.text)?.permissions?.allow ?? [];
+      for (const rule of allow) {
+        examined += 1;
+        const line = lines.findIndex((l) => l.includes(JSON.stringify(rule))) + 1;
+        for (const cls of ruleClasses(rule)) findings.push({ cls, location: `${file.path}:${line}` });
+      }
+    }
+  }
+  return { findings, examined };
+}
+
+export function checkAgentPermissions(ctx) {
+  const { findings, examined } = scanAgentPermissions(ctx.files);
+  return report('agent-permissions', examined, findings);
+}
+
 /* ------------------------------------------------------------------------------ checks */
 
 /** The checks the CLI runs, in order. Each takes a context and returns report(...). */
-export const CHECKS = [checkIgnoreRules];
+export const CHECKS = [checkIgnoreRules, checkAutostart, checkAgentPermissions];
 
 export function formatReport(r) {
   const head = `${r.check}\texamined ${r.examined}\tfindings ${r.findings.length}`;
