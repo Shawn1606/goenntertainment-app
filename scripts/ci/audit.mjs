@@ -139,7 +139,8 @@ export function loadAllowSection(file, section) {
   return { allow };
 }
 
-function runTool(cmd, args, cwd) {
+/** Runs npm or composer and parses what it printed: `{ json }`, or `{ error }` when it could not run. */
+export function runTool(cmd, args, cwd) {
   // Windows ships npm and composer as .cmd/.bat wrappers, which need a shell there; the
   // command line is then one string. The arguments are fixed strings in this file, never
   // user input. Elsewhere no shell is involved.
@@ -157,7 +158,11 @@ function runTool(cmd, args, cwd) {
   }
 }
 
-export function audit(tool, dir, { allowlist = DEFAULT_ALLOWLIST, root = REPO_ROOT } = {}) {
+/**
+ * Audits one lock file. `run` starts the tool (runTool); tests pass a fake one, so the wrapper's
+ * paths are tested without npm, composer or a network.
+ */
+export function audit(tool, dir, { allowlist = DEFAULT_ALLOWLIST, root = REPO_ROOT, run = runTool } = {}) {
   const abs = resolve(root, dir);
   const rel = relative(root, abs).split('\\').join('/') || '.';
   const label = `${tool} ${rel}`;
@@ -169,7 +174,7 @@ export function audit(tool, dir, { allowlist = DEFAULT_ALLOWLIST, root = REPO_RO
   const extra = [];
   if (tool === 'npm') {
     if (!existsSync(join(abs, 'package-lock.json'))) return { code: 2, lines: [`${label}: no package-lock.json`] };
-    const r = runTool('npm', ['audit', '--json', '--package-lock-only'], abs);
+    const r = run('npm', ['audit', '--json', '--package-lock-only'], abs);
     parsed = r.error ? r : parseNpmAudit(r.json);
   } else if (tool === 'composer') {
     const lockFile = join(abs, 'composer.lock');
@@ -184,7 +189,7 @@ export function audit(tool, dir, { allowlist = DEFAULT_ALLOWLIST, root = REPO_RO
     }
     const ignore = composerIgnoreProblem(manifest);
     if (ignore) extra.push(ignore);
-    const r = runTool('composer', ['audit', '--locked', '--format=json', '--no-interaction'], abs);
+    const r = run('composer', ['audit', '--locked', '--format=json', '--no-interaction'], abs);
     parsed = r.error ? r : parseComposerAudit(r.json, lock);
   } else {
     return { code: 2, lines: ['usage: node scripts/ci/audit.mjs npm|composer <dir> [--allowlist <file>]'] };
