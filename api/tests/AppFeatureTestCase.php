@@ -46,6 +46,42 @@ abstract class AppFeatureTestCase extends TestCase
     private static ?string $schemaProblem = null;
 
     /**
+     * The cache store of these tests: the database store the deploy runs (CACHE_STORE=database,
+     * deploy/docker-compose.yml), so rate-limit counters and the two-factor failure count live in
+     * the `cache` table of server/schema.sql, inside the test's transaction. phpunit.xml keeps the
+     * array store for the tests without a database.
+     */
+    public const CACHE_STORE = 'database';
+
+    /**
+     * Builds the application with CACHE_STORE set to self::CACHE_STORE. The value must be in the
+     * environment while the configuration loads: the rate limiter takes its store when the
+     * application boots, so changing the config afterwards would not reach it.
+     */
+    protected function refreshApplication()
+    {
+        $saved = [getenv('CACHE_STORE'), $_ENV['CACHE_STORE'] ?? null, $_SERVER['CACHE_STORE'] ?? null];
+        putenv('CACHE_STORE='.self::CACHE_STORE);
+        $_ENV['CACHE_STORE'] = $_SERVER['CACHE_STORE'] = self::CACHE_STORE;
+
+        try {
+            parent::refreshApplication();
+        } finally {
+            $saved[0] === false ? putenv('CACHE_STORE') : putenv('CACHE_STORE='.$saved[0]);
+            if ($saved[1] === null) {
+                unset($_ENV['CACHE_STORE']);
+            } else {
+                $_ENV['CACHE_STORE'] = $saved[1];
+            }
+            if ($saved[2] === null) {
+                unset($_SERVER['CACHE_STORE']);
+            } else {
+                $_SERVER['CACHE_STORE'] = $saved[2];
+            }
+        }
+    }
+
+    /**
      * Runs after the application is created and before the traits start the transaction, so a
      * missing or wrong database ends in this message rather than a driver error.
      */
