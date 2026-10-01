@@ -2,8 +2,8 @@
 
 namespace Tests\Feature;
 
-use App\Http\Controllers\NodeFallbackController;
 use App\Models\User;
+use App\Support\OwnedRoutes;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -70,22 +70,56 @@ class GoogleSignInRemovedTest extends AppFeatureTestCase
         $this->assertNull(DB::table('users')->where('id', $user->id)->value('google_id'));
     }
 
-    public function test_the_route_table_has_no_google_route(): void
+    /**
+     * Every route except the Node fallback whose URI or controller names Google: a Google route
+     * need not have 'google' in its path.
+     *
+     * The fallback is recognised the way App\Support\OwnedRoutes recognises it (by its name, or by
+     * its controller class), and the test asserts that exactly that one route was left out, so the
+     * exclusion cannot silently widen or stop matching.
+     *
+     * @return array{checked: int, skipped: int, google: list<string>}
+     */
+    private static function googleRoutes(): array
     {
         $checked = 0;
+        $skipped = 0;
         $google = [];
         foreach (Route::getRoutes()->getRoutes() as $route) {
-            if ($route->getActionName() === NodeFallbackController::class) {
+            if (OwnedRoutes::isFallback($route)) {
+                $skipped++;
+
                 continue;
             }
             $checked++;
-            if (str_contains(strtolower($route->uri()), 'google')) {
+            $names = strtolower($route->uri().' '.($route->getControllerClass() ?? '').' '.$route->getActionName());
+            if (str_contains($names, 'google')) {
                 $google[] = implode('|', $route->methods()).' '.$route->uri();
             }
         }
 
-        $this->assertGreaterThan(0, $checked);
-        $this->assertSame([], $google, "{$checked} routes checked");
+        return ['checked' => $checked, 'skipped' => $skipped, 'google' => $google];
+    }
+
+    public function test_the_route_table_has_no_google_route(): void
+    {
+        $routes = self::googleRoutes();
+
+        $this->assertGreaterThan(0, $routes['checked']);
+        $this->assertSame(1, $routes['skipped'], 'exactly one route, the Node fallback, is left out of the check');
+        $this->assertSame([], $routes['google'], "{$routes['checked']} routes checked");
+    }
+
+    /** The check above fires: a Google route registered at runtime is found, by its URI or its controller. */
+    public function test_the_route_check_finds_a_registered_google_route(): void
+    {
+        Route::post('/api/auth/google', fn () => response()->json([]));
+        Route::post('/api/auth/provider', [GoogleProbeController::class, 'store']);
+
+        $this->assertSame(
+            ['POST api/auth/google', 'POST api/auth/provider'],
+            self::googleRoutes()['google'],
+        );
     }
 
     public function test_the_user_payload_never_contains_google_id(): void
@@ -101,5 +135,14 @@ class GoogleSignInRemovedTest extends AppFeatureTestCase
 
         $this->assertContains('google_id', $user->getHidden());
         $this->assertNotContains('google_id', $user->getFillable());
+    }
+}
+
+/** A controller whose class name names Google; only used to prove that the route check fires. */
+final class GoogleProbeController
+{
+    public function store(): array
+    {
+        return [];
     }
 }
