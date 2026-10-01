@@ -5,9 +5,10 @@
  * ADMIN_EMAIL/ADMIN_PASSWORD; and it never prints the address.
  *
  * The CLI runs as a child process against the test database (the DB_* settings of this process).
- * Values are obviously fake. The tests of this file run in order and share the "admin" slot.
+ * Values are obviously fake. Every test starts with an empty "admin" slot, so none depends on what
+ * an earlier one left behind.
  */
-import test, { after, before } from 'node:test';
+import test, { after, before, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
@@ -47,6 +48,9 @@ async function deleteAdminSlot() {
 
 before(async () => {
   await ensureSchema();
+});
+
+beforeEach(async () => {
   await deleteAdminSlot();
 });
 
@@ -96,7 +100,6 @@ test('seed:admin refuses when the username admin is taken by another address', a
   const row = await adminRow();
   assert.equal(row.email, holder);
   assert.equal(row.is_admin, 0);
-  await deleteAdminSlot();
 });
 
 test('seed:admin creates the admin on an empty slot, without printing the address', async () => {
@@ -114,17 +117,18 @@ test('seed:admin creates the admin on an empty slot, without printing the addres
 });
 
 test('running the seed again does not reset the admin password', async () => {
+  const email = freshAddress();
+  assert.equal(seedAdmin({ email, password: ADMIN_PASSWORD }).code, 0, 'the first run creates the admin');
   const before = await adminRow();
-  assert.ok(before, 'the previous test created the admin');
+  assert.ok(before, 'the first run created no admin');
 
-  const run = seedAdmin({ email: before.email, password: `${ADMIN_PASSWORD}-other` });
+  const run = seedAdmin({ email, password: `${ADMIN_PASSWORD}-other` });
 
   assert.equal(run.code, 1, run.out);
   assert.match(run.stderr, /Admin: refused/);
   const afterRow = await adminRow();
   assert.equal(afterRow.password, before.password);
   assert.equal(afterRow.updated_at, before.updated_at);
-  await deleteAdminSlot();
 });
 
 test('seed:admin without ADMIN_EMAIL or ADMIN_PASSWORD exits 1 naming only the missing settings', async () => {

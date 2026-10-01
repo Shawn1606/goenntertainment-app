@@ -2,7 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Support\OwnedRoutes;
+use App\Http\Controllers\NodeFallbackController;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Support\Facades\Route;
@@ -51,8 +51,14 @@ class RouteThrottleCoverageTest extends TestCase
         'GET|HEAD sanctum/csrf-cookie' => 'Sanctum sets a CSRF cookie; the app signs in with tokens and never calls it',
     ];
 
-    /** The fallback forwards to Node; Node limits its own writes. Recognised as OwnedRoutes does. */
+    /** The fallback forwards to Node; Node limits its own writes. */
     private const FALLBACK_REASON = 'forwards to the Node backend, whose own limits apply there';
+
+    /** The Node fallback, by its controller (as App\Support\OwnedRoutes::isFallback also does). */
+    private static function isFallback(RoutingRoute $route): bool
+    {
+        return $route->getControllerClass() === NodeFallbackController::class;
+    }
 
     private static function signature(RoutingRoute $route): string
     {
@@ -87,7 +93,7 @@ class RouteThrottleCoverageTest extends TestCase
             $signature = self::signature($route);
             $throttles = self::throttles($route);
 
-            if (OwnedRoutes::isFallback($route)) {
+            if (self::isFallback($route)) {
                 $fallbacks++;
                 if ($throttles !== []) {
                     $problems[] = "{$signature}: the Node fallback carries a Laravel limiter (".implode(', ', $throttles).')';
@@ -136,7 +142,7 @@ class RouteThrottleCoverageTest extends TestCase
         $checked = 0;
         $unlimited = [];
         foreach (Route::getRoutes()->getRoutes() as $route) {
-            if (OwnedRoutes::isFallback($route)) {
+            if (self::isFallback($route)) {
                 continue;
             }
             $isAuth = preg_match('#^api/(register|login|logout|forgot-password|reset-password|user|me)(/|$)#', $route->uri()) === 1;
