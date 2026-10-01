@@ -4,7 +4,8 @@
 # keine Domain und kein Zertifikat – also wird Laravel direkt auf Port 8080
 # geöffnet, damit das Prüfskript es ansprechen kann. Caddy startet dort gar nicht.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build --wait db node api
+# Start command and settings for a local run: see the header of deploy/ci.env (the one copy of the
+# command; --env-file ci.env, no --wait - .github/workflows/docker.yml says why).
 
 services:
   api:
@@ -20,9 +21,11 @@ services:
       mailpit:
         condition: service_healthy
 
-  # The development mail catcher (pinned image, 127.0.0.1-only ports), reused so the pin lives in
-  # one place.
+  # The development mail catcher (pinned image), reused so the pin lives in one place. Its host
+  # ports are dropped (!reset needs Compose >= 2.24.4): api reaches Mailpit over the compose
+  # network, so the CI stack publishes no Mailpit port at all.
   mailpit:
     extends:
       file: ../dev/docker-compose.yml
       service: mailpit
+    ports: !reset []

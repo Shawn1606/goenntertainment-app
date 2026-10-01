@@ -6,7 +6,8 @@
 #
 # Ports are bound to 127.0.0.1 only, so the codes are not reachable from the Wi-Fi. No restart
 # policy: it runs only when started. Without Docker, the Mailpit binary does the same (README).
-# deploy/docker-compose.ci.yml reuses this service (extends), so the image is pinned in one place.
+# deploy/docker-compose.ci.yml reuses this service (extends, without the host ports), so the image
+# is pinned in one place.
 name: goenn-dev
 
 services:
