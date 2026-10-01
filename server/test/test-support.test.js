@@ -17,6 +17,7 @@ import { SAFE_DIGITS, STAMP_LENGTH, TEST_PASSWORD, testIdentity, uniqueStamp } f
 import { passwordProblem } from '../src/password-policy.js';
 
 const TEST_DIR = new URL('./', import.meta.url);
+const SMOKE_WORKFLOW = new URL('../../.github/workflows/docker.yml', import.meta.url);
 
 /** The server test files and their text. */
 function testFiles() {
@@ -37,6 +38,25 @@ function usernamePrefixes() {
   }
   return [...prefixes];
 }
+
+/**
+ * The container smoke (.github/workflows/docker.yml) builds its own stamp in shell and registers
+ * `<prefix>$STAMP`. Returns the digit class of its STAMP guard (a named mirror of SAFE_DIGITS),
+ * the `tr` mapping in front of it, and every username prefix it puts before the stamp. A missing
+ * line is null, so a test cannot pass on nothing.
+ */
+function smokeStamp() {
+  const text = fs.readFileSync(SMOKE_WORKFLOW, 'utf8');
+  const guard = text.match(/\[\[ "\$STAMP" =~ \^\[([0-9]+)\]\{[0-9]+\}\$ \]\]/);
+  const tr = text.match(/STAMP=\$\(date \+%s%N \| tr ([0-9]+) ([0-9]+) \|/);
+  return {
+    guardDigits: guard ? guard[1] : null,
+    tr: tr ? { from: tr[1], to: tr[2] } : null,
+    prefixes: [...text.matchAll(/\\"username\\":\\"([A-Za-z0-9]+)\$STAMP\\"/g)].map((m) => m[1]),
+  };
+}
+
+const sortedDigits = (digits) => [...digits].sort().join('');
 
 /**
  * Usernames `<prefix><digits>` that could start a username built from a stamp over `digits` and
@@ -120,6 +140,33 @@ test('control: the same check finds blocked usernames when stamps may use every 
   assert.ok(checked > 0);
   assert.ok(blocked.some((b) => b.startsWith('probe + ')), 'a numeric code after a neutral prefix');
   assert.ok(blocked.some((b) => b.startsWith('zfadel2fa + ')), 'a leet completion after a test prefix');
+});
+
+test('container smoke: the STAMP guard in docker.yml allows exactly SAFE_DIGITS, and its tr mapping passes it', () => {
+  const { guardDigits, tr } = smokeStamp();
+  assert.ok(guardDigits, 'STAMP guard [[ "$STAMP" =~ ^[<digits>]{n}$ ]] not found in .github/workflows/docker.yml');
+  assert.equal(sortedDigits(guardDigits), sortedDigits(SAFE_DIGITS), 'docker.yml STAMP guard digits differ from SAFE_DIGITS');
+  assert.ok(tr, 'STAMP=$(date +%s%N | tr <from> <to> | ...) not found in .github/workflows/docker.yml');
+  // Every digit date can print must come out of tr inside the guard's class, or the smoke fails on
+  // its own stamp. GNU tr: the last mapping of a repeated character wins, a short <to> repeats its
+  // last digit.
+  const mapped = [...'0123456789'].map((d) => {
+    const i = tr.from.lastIndexOf(d);
+    return i === -1 ? d : (tr.to[i] ?? tr.to.at(-1));
+  });
+  assert.deepEqual(mapped.filter((d) => !guardDigits.includes(d)), [], 'tr leaves digits the guard rejects');
+});
+
+test('container smoke: no stamp can make the word filter block the username it registers', () => {
+  const { guardDigits, prefixes } = smokeStamp();
+  assert.ok(guardDigits, 'STAMP guard not found in .github/workflows/docker.yml');
+  // The smoke also registers one username that is blocked by itself, to see the filter answer 422:
+  // that one is the filter probe, not an account, and is left out here.
+  const accounts = prefixes.filter((p) => findBlockedTerm(p, BLOCKED_TERMS, 'username') === null);
+  assert.ok(accounts.length > 0, `no account username prefix found in docker.yml (${prefixes.length} prefixes, all blocked)`);
+  const { blocked, checked, tails } = stampRisks(accounts, guardDigits);
+  assert.ok(checked > 0 && tails > 0, 'no candidate usernames were checked');
+  assert.deepEqual(blocked, [], `${blocked.length} of ${checked} candidate smoke usernames are blocked`);
 });
 
 test('every numeric run in the blocked terms contains a digit that stamps never use', () => {

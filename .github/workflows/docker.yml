@@ -81,12 +81,15 @@ jobs:
           curl -fsS "$BASE/api/health" | tee /dev/stderr | grep -q '"ok":true'
 
           echo "--- Registrierung über Laravel"
-          # Twelve digits without 1, 4 and 8 (mapped to 2, 3 and 5): the word filter rejects
-          # numeric codes inside usernames, and every numeric term in
-          # shared/blocked-terms.json contains one of these digits (same digit set as the
-          # server test fixtures). A plain `date +%s` could form such a code.
-          STAMP=$(date +%s%N | tr 148 235 | cut -c8-19)
-          [[ "$STAMP" =~ ^[0235679]{12}$ ]]
+          # Twelve digits without 1, 4, 8 and 9 (mapped to 2, 3, 5 and 0): the word filter
+          # rejects numeric codes inside usernames, and every numeric term in
+          # shared/blocked-terms.json contains 1, 4 or 8; 9 is left out because its leet
+          # reading (g) can complete a blocked term after a prefix. A plain `date +%s` could
+          # form such a code. The guard's digit class is a named mirror of SAFE_DIGITS in
+          # server/test/support/fixtures.js; server/test/test-support.test.js checks it and
+          # this username prefix.
+          STAMP=$(date +%s%N | tr 1489 2350 | cut -c8-19)
+          [[ "$STAMP" =~ ^[023567]{12}$ ]]
           REG=$(curl -fsS -X POST "$BASE/api/register" \
             -H 'Content-Type: application/json' -H 'Accept: application/json' \
             -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"ci-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"ci\"}")
