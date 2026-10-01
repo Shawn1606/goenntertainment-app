@@ -8,7 +8,7 @@
 import path from 'node:path';
 import express from 'express';
 import { HttpError } from './validate.js';
-import { internalSecret as internalSecretSetting } from './config.js';
+import { internalSecret as internalSecretSetting, trustProxySetting } from './config.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
 import businessRouter from './routes/business.js';
@@ -26,9 +26,11 @@ import { internalRouter } from './routes/internal.js';
 
 /**
  * Options (tests pass them; the server reads its environment, see config.js):
+ *   trustProxy      whose forwarding headers count, Express 'trust proxy' syntax
+ *                   (default NODE_TRUST_PROXY; see trustProxySetting)
  *   internalSecret  shared secret for the internal routes (default NODE_INTERNAL_SECRET)
  */
-export function createApp({ internalSecret = internalSecretSetting() } = {}) {
+export function createApp({ trustProxy = trustProxySetting(), internalSecret = internalSecretSetting() } = {}) {
   const app = express();
 
   // One spelling per path, like the routers (src/router.js explains why). These must be set
@@ -46,8 +48,14 @@ export function createApp({ internalSecret = internalSecretSetting() } = {}) {
    * liest Express `X-Forwarded-Proto` und gibt 'https' zurueck.
    *
    * In der Entwicklung (kein Proxy, kein X-Forwarded-Proto) aendert das nichts.
+   *
+   * Trusted is exactly one hop, Laravel (F-31): `trust proxy 1` used to believe whatever peer
+   * came first, so anyone who reached Node could choose the address in `req.ip`. Now
+   * X-Forwarded-For/-Proto/-Host count only from the configured address (config.js
+   * trustProxySetting), and `req.ip` is the client address Laravel passes on - the key for
+   * per-address rate limits. From any other peer `req.ip` is that peer.
    */
-  app.set('trust proxy', 1);
+  app.set('trust proxy', trustProxy);
 
   /**
    * CORS. Ohne diese Header ist die App im BROWSER komplett blind: Der

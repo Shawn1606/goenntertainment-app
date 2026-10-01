@@ -8,10 +8,13 @@
  * changes exactly one input).
  *
  * Required in production (NODE_ENV=production, set by server/Dockerfile and the compose):
+ *   - NODE_TRUST_PROXY: the address of Laravel (api/), the one hop whose X-Forwarded-For Node
+ *     believes (see trustProxySetting). Outside production the default is 'loopback'.
  *   - NODE_INTERNAL_SECRET: shared with Laravel (api/), which sends it on the internal routes
  *     (routes/internal.js), at least INTERNAL_SECRET_MIN_LENGTH characters. Outside production
  *     it may be empty; the internal routes then refuse every call (fail closed).
  */
+import express from 'express';
 
 /** Shortest accepted NODE_INTERNAL_SECRET (`openssl rand -hex 32` gives 64 characters). */
 export const INTERNAL_SECRET_MIN_LENGTH = 32;
@@ -27,12 +30,55 @@ export function internalSecret(env = process.env) {
 }
 
 /**
+ * Express's 'trust proxy' value: whose X-Forwarded-For (and -Proto, -Host) Node believes (F-31).
+ *
+ * Node sits behind Laravel, and Laravel sends the client address it established itself. So Node
+ * trusts exactly that one hop: NODE_TRUST_PROXY, addresses or ranges in the syntax of Express's
+ * 'trust proxy' (e.g. 172.30.42.20, or 'loopback'). Then `req.ip` is the client's address and
+ * not Laravel's, and per-address rate limits count clients. From any other peer the headers are
+ * ignored and `req.ip` is the peer itself.
+ *
+ * Not set: 'loopback' in development (`php artisan serve` calls Node on 127.0.0.1); in
+ * production nobody (false) - but production does not start without it (startupProblems).
+ */
+export function trustProxySetting(env = process.env) {
+  const value = String(env.NODE_TRUST_PROXY ?? '').trim();
+  if (value !== '') return value;
+  return isProduction(env) ? false : 'loopback';
+}
+
+/** Public documentation addresses: a 'trust proxy' value that trusts them trusts the internet. */
+const PUBLIC_PROBES = ['203.0.113.1', '2001:db8::1'];
+
+/**
+ * Whether a NODE_TRUST_PROXY value is usable: Express accepts it, and it does not trust every
+ * address (such as 0.0.0.0/0), which would let any client choose its own address again. A bare
+ * number is refused too: it reads like a hop count, but from the environment it is a string,
+ * which Express takes as an address.
+ */
+export function trustProxyValid(value) {
+  if (/^\s*\d+\s*$/.test(String(value))) return false;
+  let trust;
+  try {
+    trust = express().set('trust proxy', value).get('trust proxy fn');
+  } catch {
+    return false;
+  }
+  return !PUBLIC_PROBES.some((address) => trust(address, 0));
+}
+
+/**
  * Names (never values) of the settings that keep the server from starting, with a short hint
  * where a name alone would not say what is wrong. An empty list means: start.
  */
 export function startupProblems(env = process.env) {
   const problems = [];
   const production = isProduction(env);
+
+  const trustProxy = String(env.NODE_TRUST_PROXY ?? '').trim();
+  if (trustProxy === '' ? production : !trustProxyValid(trustProxy)) {
+    problems.push("NODE_TRUST_PROXY (required in production: Laravel's address, never all addresses)");
+  }
 
   const secret = internalSecret(env);
   if (secret === '' ? production : secret.length < INTERNAL_SECRET_MIN_LENGTH) {

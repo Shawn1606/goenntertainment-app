@@ -53,10 +53,26 @@ test('the complete test environment starts (positive control)', async () => {
   assert.equal(await startsListening(startupEnv()), true);
 });
 
+test('production refuses to start without NODE_TRUST_PROXY and names it', () => {
+  const r = runToExit(startupEnv({ NODE_TRUST_PROXY: '' }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
+  assert.match(r.stderr, /NODE_TRUST_PROXY/);
+  assert.doesNotMatch(r.stderr, /NODE_INTERNAL_SECRET/, 'only the one missing setting is named');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('a NODE_TRUST_PROXY that trusts every address is refused', () => {
+  const r = runToExit(startupEnv({ NODE_TRUST_PROXY: '0.0.0.0/0' }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
+  assert.match(r.stderr, /NODE_TRUST_PROXY/);
+  assert.ok(!r.stderr.includes('0.0.0.0/0'), 'the value must never be printed');
+});
+
 test('production refuses to start without NODE_INTERNAL_SECRET and names it', () => {
   const r = runToExit(startupEnv({ NODE_INTERNAL_SECRET: '' }));
   assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
   assert.match(r.stderr, /NODE_INTERNAL_SECRET/);
+  assert.doesNotMatch(r.stderr, /NODE_TRUST_PROXY/, 'only the one missing setting is named');
   assert.doesNotMatch(r.stdout, START_LINE);
 });
 
@@ -68,6 +84,7 @@ test('a too short NODE_INTERNAL_SECRET is refused without printing it', () => {
   assert.ok(!r.stderr.includes(tooShort) && !r.stdout.includes(tooShort), 'the value must never be printed');
 });
 
-test('outside production an empty NODE_INTERNAL_SECRET does not stop the start', async () => {
-  assert.equal(await startsListening(startupEnv({ NODE_ENV: 'development', NODE_INTERNAL_SECRET: '' })), true);
+test('outside production empty NODE_TRUST_PROXY and NODE_INTERNAL_SECRET do not stop the start', async () => {
+  const env = startupEnv({ NODE_ENV: 'development', NODE_TRUST_PROXY: '', NODE_INTERNAL_SECRET: '' });
+  assert.equal(await startsListening(env), true);
 });

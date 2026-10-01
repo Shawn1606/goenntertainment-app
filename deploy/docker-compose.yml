@@ -78,6 +78,8 @@ services:
       PORT: '8000'
       # Shared with api: Laravel sends it on Node's internal routes (account deletion).
       NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
+      # The only hop Node takes the client address from: api's fixed address below.
+      NODE_TRUST_PROXY: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
@@ -168,6 +170,10 @@ services:
       # aus (so wie lokal über die Verknüpfung api/public/storage). Nur lesend:
       # Geschrieben wird ausschließlich von Node.
       - ./storage:/var/www/api/public/storage:ro
+    networks:
+      default:
+        # Fixed: node trusts the client address only from this one (NODE_TRUST_PROXY).
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
 
   caddy:
     image: caddy:2-alpine
@@ -196,9 +202,10 @@ volumes:
   caddy-config:
 
 # One network for all services with a subnet the operator chooses (APP_NET_PREFIX: the first
-# three parts of a free private /24 on this host, see deploy/.env.example). caddy gets the fixed
-# address .10: Laravel trusts forwarding headers from caddy only (F-31). Every other container
-# gets an address from the upper half, so nothing else can take a fixed one.
+# three parts of a free private /24 on this host, see deploy/.env.example). caddy (.10) and api
+# (.20) get fixed addresses: Laravel trusts forwarding headers from caddy only, Node from api
+# only (F-31). Every other container gets an address from the upper half, so nothing else can
+# take a fixed one.
 networks:
   default:
     ipam:

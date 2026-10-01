@@ -17,6 +17,8 @@ export function startupEnv(overrides = {}) {
     // Database and PATH from the test process (the harness or CI provide them).
     ...process.env,
     NODE_ENV: 'production',
+    // Test-only address of "Laravel", the one hop whose forwarding headers count.
+    NODE_TRUST_PROXY: '127.0.0.1',
     NODE_INTERNAL_SECRET: TEST_INTERNAL_SECRET,
     // Port 0: the system picks a free one.
     PORT: '0',
