@@ -15,7 +15,7 @@
  * Tests: scripts/ci/check-repo.test.mjs (run with the other tooling tests,
  * `node --test "scripts/ci/*.test.mjs"`).
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,8 +93,117 @@ export function repoContext(root = REPO_ROOT) {
   return { root, paths, files };
 }
 
+/* ------------------------------------------------------------------ ignore rules (F-46) */
+
+/**
+ * Sample paths the repository's own .gitignore files must ignore: env files with real settings,
+ * database dumps, logs, and personal agent settings or nested worktrees. They need not exist.
+ */
+export const MUST_IGNORE = [
+  '.env',
+  'server/.env',
+  'api/.env',
+  'deploy/.env',
+  'backup-2026-01-01.sql',
+  'deploy/backup-2026-01-01.sql',
+  'dump.sql.gz',
+  'server.log',
+  'server/logs/app.log',
+  'logs/app.txt',
+  '.claude/settings.local.json',
+  '.claude/worktrees/some-worktree/file',
+  'CLAUDE.local.md',
+];
+
+/** Sources and templates that no ignore rule may hide. */
+export const MUST_NOT_IGNORE = [
+  'server/schema.sql',
+  '.env.example',
+  'api/.env.example',
+  'server/.env.example',
+  'deploy/.env.example',
+  'deploy/ci.env',
+  '.claude/settings.json',
+  '.claude/commands/wlan.md',
+  'api/storage/logs/.gitignore',
+];
+
+/**
+ * `git check-ignore` verdict per path: { path, source, line, pattern } with source '' when no rule
+ * matches. --no-index: tracked paths are judged by the patterns too.
+ */
+export function ignoreVerdicts(root, paths) {
+  const r = spawnSync('git', ['-C', root, 'check-ignore', '--no-index', '-v', '-n', '-z', '--stdin'], {
+    input: `${paths.join('\0')}\0`,
+    encoding: 'utf8',
+  });
+  // 0 = at least one path ignored, 1 = none; anything else is an error, not a verdict.
+  if (r.status !== 0 && r.status !== 1) throw new Error(`ignore-rules: git check-ignore failed (exit ${r.status})`);
+  const fields = r.stdout.split('\0');
+  const verdicts = [];
+  for (let i = 0; i + 3 < fields.length; i += 4) {
+    verdicts.push({ source: fields[i], line: fields[i + 1], pattern: fields[i + 2], path: fields[i + 3] });
+  }
+  if (verdicts.length !== paths.length) {
+    throw new Error(`ignore-rules: ${verdicts.length} verdicts for ${paths.length} paths`);
+  }
+  return verdicts;
+}
+
+/** Tracked files that a tracked .gitignore matches (clone-local excludes do not count). */
+export function ignoredTrackedFiles(root) {
+  const out = execFileSync('git', ['-C', root, 'ls-files', '-z', '-c', '-i', '--exclude-per-directory=.gitignore'], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return out.split('\0').filter(Boolean);
+}
+
+/**
+ * Findings from the verdicts. A path counts as ignored by the repository only when the rule comes
+ * from a tracked .gitignore and is not a negation: a clone-local .git/info/exclude or a global
+ * excludes file must never make this check pass.
+ */
+export function ignoreFindings({ mustIgnore, mustNotIgnore, verdicts, tracked, ignoredTracked }) {
+  const trackedSet = new Set(tracked);
+  const byPath = new Map(verdicts.map((v) => [v.path, v]));
+  const ignoredByRepo = (p) => {
+    const v = byPath.get(p);
+    return Boolean(
+      v &&
+        v.source !== '' &&
+        trackedSet.has(v.source) &&
+        path.posix.basename(v.source) === '.gitignore' &&
+        !v.pattern.startsWith('!'),
+    );
+  };
+  const findings = [];
+  for (const p of mustIgnore) {
+    if (!ignoredByRepo(p)) findings.push({ cls: 'gitignore-gap', location: p });
+  }
+  for (const p of mustNotIgnore) {
+    if (ignoredByRepo(p)) findings.push({ cls: 'gitignore-hides-source', location: p });
+  }
+  for (const p of ignoredTracked) findings.push({ cls: 'tracked-file-ignored', location: p });
+  return findings;
+}
+
+export function checkIgnoreRules(ctx) {
+  const samples = [...MUST_IGNORE, ...MUST_NOT_IGNORE];
+  const findings = ignoreFindings({
+    mustIgnore: MUST_IGNORE,
+    mustNotIgnore: MUST_NOT_IGNORE,
+    verdicts: ignoreVerdicts(ctx.root, samples),
+    tracked: ctx.paths,
+    ignoredTracked: ignoredTrackedFiles(ctx.root),
+  });
+  return report('ignore-rules', samples.length + ctx.paths.length, findings);
+}
+
+/* ------------------------------------------------------------------------------ checks */
+
 /** The checks the CLI runs, in order. Each takes a context and returns report(...). */
-export const CHECKS = [];
+export const CHECKS = [checkIgnoreRules];
 
 export function formatReport(r) {
   const head = `${r.check}\texamined ${r.examined}\tfindings ${r.findings.length}`;
