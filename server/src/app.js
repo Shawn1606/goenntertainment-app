@@ -13,7 +13,6 @@ import interestsRouter from './routes/interests.js';
 import authRouter from './routes/auth.js';
 import accountRouter from './routes/account.js';
 import passwordRouter from './routes/password.js';
-import googleRouter from './routes/google.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
 import progressRouter from './routes/progress.js';
@@ -91,7 +90,6 @@ export function createApp() {
   app.use('/api', accountRouter); // DELETE /me – eigenes Konto loeschen
   app.use('/api', passwordRouter); // /forgot-password, /reset-password
   app.use('/api', progressRouter); // /me/progress, /leaderboard
-  app.use('/api/auth', googleRouter); // /auth/google
   app.use('/api/interests', interestsRouter);
   app.use('/api/activities', activitiesRouter);
   app.use('/api/admin', adminRouter); // /stats, /users, /stories, /upgrade-requests, /evidence, /moderation (nur Admin)

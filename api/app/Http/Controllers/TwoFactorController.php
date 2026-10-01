@@ -355,9 +355,7 @@ class TwoFactorController extends Controller
 
     /**
      * Dasselbe Format wie nach POST /login (AuthController::tokenResponse):
-     * `user` mit Kategorien, `token`, `profile_complete`. Auch nach einer
-     * Google-Anmeldung - die Kategorien sind dort nur ein Mehr, das die App
-     * ohnehin kennt.
+     * `user` mit Kategorien, `token`, `profile_complete`.
      */
     private function tokenResponse(Request $request, User $user): JsonResponse
     {

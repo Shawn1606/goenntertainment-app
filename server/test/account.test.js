@@ -115,26 +115,6 @@ async function uploadAvatar(token) {
   return relative;
 }
 
-/**
- * Google-Anmeldung ohne Google: `fetch` auf googleapis.com liefert das
- * uebergebene Profil. Alles andere (die Aufrufe dieses Tests an die App) geht
- * unveraendert raus.
- */
-async function withGoogleStub(profile, fn) {
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, init) => {
-    if (String(url).startsWith('https://www.googleapis.com/')) {
-      return new Response(JSON.stringify(profile), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    }
-    return realFetch(url, init);
-  };
-  try {
-    return await fn();
-  } finally {
-    globalThis.fetch = realFetch;
-  }
-}
-
 before(async () => {
   await ensureSchema();
   server = createApp().listen(0);
@@ -185,36 +165,6 @@ test('POST /api/login: ein falsches Passwort verraet nicht, ob 2FA an ist', asyn
 test('POST /api/login: ohne 2FA wie bisher mit Token', async () => {
   const { user } = await registerUser('zfaloginplain', 'standard');
   const res = await login(user.email, PASSWORD);
-  assert.equal(res.status, 200);
-  assert.ok((await res.json()).token);
-});
-
-test('POST /api/auth/google: bei aktiver 2FA gibt Node keinen Token heraus', async () => {
-  const { user } = await registerUser('zfagoogle', 'standard');
-  await setTwoFactor(user.id, 'email');
-
-  const res = await withGoogleStub({ sub: `zfa-sub-${stamp()}`, email: user.email, name: 'G' }, () =>
-    fetch(`${base}/api/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: 'egal' }),
-    }),
-  );
-  assert.equal(res.status, 403);
-  const body = await res.json();
-  assert.equal(body.message, 'Bitte melde dich über die App an.');
-  assert.equal(body.token, undefined);
-});
-
-test('POST /api/auth/google: ohne 2FA weiterhin mit Token', async () => {
-  const { user } = await registerUser('zfagoogleok', 'standard');
-  const res = await withGoogleStub({ sub: `zfa-sub-${stamp()}`, email: user.email, name: 'G' }, () =>
-    fetch(`${base}/api/auth/google`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ access_token: 'egal' }),
-    }),
-  );
   assert.equal(res.status, 200);
   assert.ok((await res.json()).token);
 });

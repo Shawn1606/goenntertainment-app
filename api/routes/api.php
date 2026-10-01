@@ -2,7 +2,6 @@
 
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\GoogleController;
 use App\Http\Controllers\InterestController;
 use App\Http\Controllers\NodeFallbackController;
 use App\Http\Controllers\PasswordController;
@@ -53,13 +52,12 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 Route::post('/forgot-password', [PasswordController::class, 'forgot']);
 Route::post('/reset-password', [PasswordController::class, 'reset']);
-Route::post('/auth/google', [GoogleController::class, 'store']);
 Route::get('/interests', [InterestController::class, 'index']);
 
 /*
 | Zwei-Faktor-Anmeldung, zweiter Schritt. OHNE `auth:sanctum` - genau hier gibt
 | es noch keinen Token; was die Anfrage traegt, ist der Vorgang (`challenge`)
-| aus der Antwort von /login bzw. /auth/google. Siehe TwoFactorController.
+| aus der Antwort von /login. Siehe TwoFactorController.
 */
 Route::post('/login/two-factor', [TwoFactorController::class, 'verifyLogin'])->middleware('throttle:two-factor');
 Route::post('/login/two-factor/resend', [TwoFactorController::class, 'resendLogin'])->middleware('throttle:two-factor-resend');

@@ -132,6 +132,7 @@ export function serializeUser(row, req = null) {
   // wie im #[Hidden] von api/app/Models/User.php. Secret und Codes sind zwar
   // verschluesselt, aber verschluesselt ist nicht dasselbe wie „darf raus":
   // Jede Kopie ausserhalb der DB ist eine, die man nicht mehr zurueckholt.
+  // `google_id` too (same list): Google sign-in was removed; the column is inert.
   const {
     password,
     remember_token,
@@ -139,6 +140,7 @@ export function serializeUser(row, req = null) {
     two_factor_recovery_codes,
     two_factor_confirmed_at,
     two_factor_last_step,
+    google_id,
     ...safe
   } = row;
   // is_admin kommt aus der DB als 0/1 (oder fehlt bei alten DBs) -> echter Boolean.

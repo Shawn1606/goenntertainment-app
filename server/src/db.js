@@ -696,7 +696,7 @@ export async function ensureSchema() {
    * Bedient wird sie von Laravel (api/app/Support/TwoFactor.php) – das Schema
    * liegt trotzdem hier, weil dieses Backend das Schema besitzt. Node selbst
    * liest nur `two_factor_method`: Ist sie gesetzt, gibt es hier keinen Token
-   * (siehe routes/auth.js und routes/google.js).
+   * (siehe routes/auth.js).
    *
    * In einer Schleife und einzeln geprueft, damit eine halb nachgeruestete DB
    * (Abbruch mitten im Start) beim naechsten Start einfach weitermacht. Die

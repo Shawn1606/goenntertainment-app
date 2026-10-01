@@ -31,7 +31,9 @@ class AccountController extends Controller
      *
      * ## Konten ohne Passwort
      *
-     * GoogleController legt neue Konten OHNE Passwort an - die Spalte bleibt
+     * (Accounts without a password were created by Google sign-in, which has
+     * been removed; existing ones keep this path.)
+     * Die Google-Anmeldung legte Konten OHNE Passwort an - die Spalte bleibt
      * NULL, und NULL ist dort genau das: „dieses Konto hat keins" (siehe auch
      * Passwords::check, das dafuer immer false liefert). Fuer diese Konten gibt
      * es kein aktuelles Passwort, das man abfragen koennte; sie duerfen eines
