@@ -42,7 +42,8 @@ import { clearSavedEmail } from '@/lib/credential-store';
 import { previewSound } from '@/lib/feedback';
 import { useThemePreference } from '@/lib/theme-preference';
 
-type EditableField = 'email' | 'username';
+// The e-mail address is changed on its own screen, with the password (security/email.tsx).
+type EditableField = 'username';
 
 const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0';
 
@@ -177,15 +178,15 @@ export default function SettingsScreen() {
 
   async function saveEdit(field: EditableField) {
     // Benutzername ohne führendes @ speichern.
-    const value = field === 'username' ? draft.trim().replace(/^@+/, '') : draft.trim();
+    const value = draft.trim().replace(/^@+/, '');
 
     if (!value) {
-      setFieldError(field === 'email' ? 'Bitte eine E-Mail angeben.' : 'Bitte einen Benutzernamen angeben.');
+      setFieldError('Bitte einen Benutzernamen angeben.');
       return;
     }
 
     // Gleiche Liste wie am Server – so steht die Meldung sofort da, ohne Umweg.
-    const blocked = field === 'username' ? blockedTermMessage(value, 'username') : null;
+    const blocked = blockedTermMessage(value, 'username');
     if (blocked) {
       setFieldError(blocked);
       return;
@@ -287,22 +288,11 @@ export default function SettingsScreen() {
             label="Konto"
             hint="E-Mail, Benutzername und Passwort ändern."
             defaultOpen>
-            <EditableRow
-              field="email"
+            <LinkRow
               icon="mail"
-              label="E-Mail"
-              displayValue={user?.email ?? '—'}
-              editValue={user?.email ?? ''}
-              keyboardType="email-address"
-              colors={colors}
-              editing={editing}
-              draft={draft}
-              onChangeDraft={setDraft}
-              error={fieldError}
-              saving={saving}
-              onStart={startEdit}
-              onCancel={cancelEdit}
-              onSave={saveEdit}
+              title="E-Mail-Adresse ändern"
+              hint={user?.email ?? '—'}
+              onPress={() => router.push('/security/email')}
             />
 
             <RowDivider />

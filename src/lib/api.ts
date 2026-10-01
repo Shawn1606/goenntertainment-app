@@ -922,10 +922,13 @@ function localDate(): string {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+/**
+ * Profil bearbeiten. Die E-Mail-Adresse gehört nicht dazu: Sie ändert sich nur mit dem Passwort
+ * (und dem Code bei Zwei-Faktor) über `api.changeEmail`.
+ */
 export type UpdateProfileInput = {
   name?: string;
   username?: string;
-  email?: string;
   /** Kontotyp umstellen – serverseitig nur für Admins erlaubt (sonst 403). */
   account_type?: AccountType;
   /** Vollständige neue Interessen-Liste (IDs); ersetzt die bisherigen. */
@@ -1108,6 +1111,13 @@ export const api = {
       token,
     }),
 
+  /**
+   * E-Mail-Adresse ändern (angemeldet): mit dem aktuellen Passwort, bei Zwei-Faktor dazu mit dem
+   * aktuellen Code. Meldet alle anderen Geräte ab; an die bisherige Adresse geht ein Hinweis.
+   */
+  changeEmail: (token: string, input: { email: string; current_password: string; code?: string }) =>
+    request<{ user: User; profile_complete: boolean }>('/user/email', { method: 'PUT', body: input, token }),
+
   /** Passwort ändern (angemeldet). Meldet alle anderen Geräte ab. */
   changePassword: (token: string, currentPassword: string, password: string) =>
     request<{ message: string }>('/user/password', {
@@ -1127,7 +1137,7 @@ export const api = {
 
   me: (token: string) => request<{ user: User; profile_complete: boolean }>('/user', { token }),
 
-  /** Profil bearbeiten (Name/Benutzername/E-Mail/Kontotyp). Nur gesetzte Felder werden geändert. */
+  /** Profil bearbeiten (Name/Benutzername/Kontotyp). Nur gesetzte Felder werden geändert. */
   updateProfile: (token: string, input: UpdateProfileInput) =>
     request<{ user: User; profile_complete: boolean }>('/user', {
       method: 'PATCH',

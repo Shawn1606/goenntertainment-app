@@ -77,6 +77,8 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     // Node (AccountController::destroy erklaert, warum). One shared budget: each checks the password.
     Route::middleware('throttle:account-sensitive')->group(function () {
         Route::put('/user/password', [AccountController::class, 'updatePassword']);
+        // E-Mail-Adresse aendern: only here, with the password (and code); F-04.
+        Route::put('/user/email', [AccountController::class, 'updateEmail']);
         Route::delete('/me', [AccountController::class, 'destroy']);
     });
 

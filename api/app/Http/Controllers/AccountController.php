@@ -2,20 +2,29 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Resources\UserResource;
+use App\Mail\AccountSecurityNotice;
+use App\Models\TwoFactorChallenge;
 use App\Models\User;
+use App\Rules\ValidEmail;
 use App\Support\NodeInternal;
 use App\Support\PasswordPolicy;
 use App\Support\Passwords;
 use App\Support\Sessions;
+use App\Support\StepUp;
 use App\Support\TwoFactor;
 use Closure;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\Mailer\Exception\TransportExceptionInterface;
 
 /**
  * Das eigene Konto: Passwort aendern und Konto loeschen.
@@ -26,6 +35,12 @@ class AccountController extends Controller
     private const CONFIRM_WORDS = ['LÖSCHEN', 'LOESCHEN'];
 
     private const MSG_LAST_ADMIN = 'Du bist der letzte Admin – ernenne erst jemand anderen, bevor du dein Konto löschst.';
+
+    private const MSG_SAME_EMAIL = 'Das ist bereits deine E-Mail-Adresse.';
+
+    private const MSG_EMAIL_TAKEN = 'Diese E-Mail-Adresse ist bereits registriert.';
+
+    private const MSG_NOTICE_FAILED = 'Wir konnten gerade keinen Hinweis an deine bisherige Adresse schicken – deine E-Mail-Adresse bleibt unverändert. Probier es gleich noch mal.';
 
     /**
      * PUT /api/user/password {current_password, password}
@@ -97,6 +112,95 @@ class AccountController extends Controller
         DB::table('password_reset_tokens')->where('email', $user->email)->delete();
 
         return response()->json(['message' => 'Passwort geändert.']);
+    }
+
+    /**
+     * PUT /api/user/email {email, current_password}, bei aktiver 2FA dazu {code}
+     *
+     * The only way to change the address (F-04): it is where password-reset mails and e-mail
+     * codes go, so whoever controls it can take the account over. A session alone is therefore
+     * not enough - the current password is, and with two-factor sign-in the current code too
+     * (for the e-mail method mailed to the CURRENT address, POST /user/two-factor/code).
+     *
+     * Order of the checks: the new address (format, unchanged, reserved), the password, the
+     * address being free, the code last - a code is used up when it is checked (a recovery code
+     * for good), so it must not be lost to a typo or a taken address.
+     *
+     * Then, in one transaction: the new address (not verified), every other session signed out,
+     * open reset links and e-mail codes of the old address dropped, and a notice to the OLD
+     * address. If that notice cannot be sent, nothing changes (503): it is the owner's only
+     * signal that the recovery channel moved.
+     */
+    public function updateEmail(Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+        $old = (string) $user->email;
+
+        Validator::make($request->all(), [
+            'email' => [
+                'bail',
+                'required',
+                new ValidEmail,
+                static function (string $attribute, mixed $value, Closure $fail) use ($old): void {
+                    if ($value === $old) {
+                        $fail(self::MSG_SAME_EMAIL);
+                    }
+                },
+                AuthController::notReservedEmail(),
+            ],
+        ], [
+            'email.required' => ValidEmail::MESSAGE,
+        ])->validate();
+
+        $new = (string) $request->input('email');
+
+        StepUp::assertPassword($user, $request->input('current_password'), 'current_password');
+
+        if (User::where('email', $new)->whereKeyNot($user->getKey())->exists()) {
+            throw ValidationException::withMessages(['email' => [self::MSG_EMAIL_TAKEN]]);
+        }
+
+        if (TwoFactor::isEnabled($user)) {
+            TwoFactor::assertCode($user, $request->input('code'));
+        }
+
+        try {
+            DB::transaction(function () use ($user, $old, $new) {
+                $locked = User::whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+                $locked->forceFill(['email' => $new, 'email_verified_at' => null])->save();
+                $user->forceFill(['email' => $new, 'email_verified_at' => null])->syncOriginal();
+
+                Sessions::revokeOthers($user);
+                DB::table('password_reset_tokens')->where('email', $old)->delete();
+                TwoFactorChallenge::where('user_id', $user->getKey())
+                    ->whereIn('purpose', [TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM])
+                    ->delete();
+
+                Mail::to($old)->send(new AccountSecurityNotice(AccountSecurityNotice::EMAIL_CHANGED, TwoFactor::maskEmail($new)));
+            });
+        } catch (TransportExceptionInterface $e) {
+            // Rolled back. The user id and the exception class only: no address, no message.
+            Log::error('[account] e-mail change notice not sent; nothing changed', [
+                'user_id' => $user->getKey(),
+                'exception' => $e::class,
+            ]);
+            $user->refresh();
+
+            return response()->json(['message' => self::MSG_NOTICE_FAILED], 503);
+        } catch (UniqueConstraintViolationException) {
+            // Someone registered the address between the check and the update.
+            $user->refresh();
+
+            throw ValidationException::withMessages(['email' => [self::MSG_EMAIL_TAKEN]]);
+        }
+
+        $user->refresh();
+
+        return response()->json([
+            'user' => (new UserResource($user))->withInterests()->toArray($request),
+            'profile_complete' => $user->profileComplete(),
+        ]);
     }
 
     /**

@@ -51,6 +51,8 @@ class AuthController extends Controller
 
     private const MSG_PASSWORD = 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.';
 
+    private const MSG_EMAIL_NEEDS_STEP_UP = 'Die E-Mail-Adresse lässt sich nur mit deinem Passwort ändern – nutze „E-Mail-Adresse ändern" in den Einstellungen.';
+
     /** POST /api/register */
     public function register(Request $request): JsonResponse
     {
@@ -262,9 +264,17 @@ class AuthController extends Controller
             $messages['username.regex'] = self::MSG_USERNAME_FORMAT;
         }
 
+        /**
+         * The e-mail address is no longer changed here (F-04): it takes the current password, and
+         * the code with two-factor sign-in, at PUT /user/email (AccountController::updateEmail).
+         * Sending the unchanged address stays valid: profile forms send the whole profile.
+         */
         if ($request->has('email')) {
-            $rules['email'] = ['bail', 'required', new ValidEmail];
-            $messages['email.required'] = self::MSG_EMAIL;
+            $rules['email'] = ['bail', static function (string $attribute, mixed $value, Closure $fail) use ($user): void {
+                if ($value !== $user->email) {
+                    $fail(self::MSG_EMAIL_NEEDS_STEP_UP);
+                }
+            }];
         }
 
         /**
@@ -306,14 +316,6 @@ class AuthController extends Controller
                 }
             }
 
-            $email = $request->input('email');
-            if (! $v->errors()->has('email') && is_string($email) && $email !== $user->email
-                && EmailAddress::isValid($email)) {
-                if (User::where('email', $email)->where('id', '<>', $user->id)->exists()) {
-                    $v->errors()->add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
-                }
-            }
-
             if ($interestsGiven) {
                 if (! is_array($rawInterests)) {
                     $v->errors()->add('interests', 'Interessen muessen als Liste uebergeben werden.');
@@ -339,7 +341,7 @@ class AuthController extends Controller
             $touched = true;
         }
         if ($request->has('email')) {
-            $user->email = $request->input('email');
+            // Unchanged (checked above); counts as a sent field, as before.
             $touched = true;
         }
         if ($request->has('account_type')) {

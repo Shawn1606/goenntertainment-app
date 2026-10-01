@@ -29,6 +29,27 @@ test('no source file outside src/domain/email.ts keeps its own e-mail pattern', 
   assert.deepEqual(copies, [], `${files.length} files scanned`);
 });
 
+test('the e-mail address changes only on its own screen, with the password (F-04)', () => {
+  const read = (file: string) => readFileSync(path.join(SRC, file), 'utf8');
+  const api = read('lib/api.ts');
+  const profileInput = api.slice(api.indexOf('export type UpdateProfileInput'), api.indexOf('};', api.indexOf('export type UpdateProfileInput')));
+  assert.doesNotMatch(profileInput, /\bemail\??:/, 'UpdateProfileInput still carries the e-mail address');
+  assert.match(api, /changeEmail: \(token: string, input: \{ email: string; current_password: string; code\?: string \}\)/);
+  assert.match(api, /'\/user\/email', \{ method: 'PUT'/);
+
+  const settings = read('app/settings.tsx');
+  assert.doesNotMatch(settings, /field="email"/, 'the settings still edit the e-mail address inline');
+  assert.match(settings, /router\.push\('\/security\/email'\)/);
+
+  const screen = read('app/security/email.tsx');
+  assert.match(screen, /api\.changeEmail\(/);
+  assert.match(screen, /current_password: password/);
+
+  const layout = read('app/_layout.tsx');
+  const guarded = layout.slice(layout.indexOf('<Stack.Protected guard={!!token}>'), layout.indexOf('</Stack.Protected>'));
+  assert.match(guarded, /<Stack\.Screen name="security\/email" \/>/);
+});
+
 test('the sign-up and forgot-password screens use the shared check', () => {
   for (const screen of ['app/(auth)/register.tsx', 'app/(auth)/forgot-password.tsx']) {
     const text = readFileSync(path.join(SRC, screen), 'utf8');

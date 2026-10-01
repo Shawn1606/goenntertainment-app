@@ -77,6 +77,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
         {/* Sicherheit: Passwort ändern, Zwei-Faktor, Konto löschen – aus den
             Einstellungen erreichbar. */}
         <Stack.Screen name="security/password" />
+        <Stack.Screen name="security/email" />
         <Stack.Screen name="security/two-factor" />
         <Stack.Screen name="security/delete-account" />
         {/* Blockierte Konten. Braucht einen eigenen Screen, weil eine blockierte
