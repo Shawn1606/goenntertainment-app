@@ -143,6 +143,8 @@ services:
       NODE_FALLBACK_URL: http://node:8000
       # Laravel sends it on Node's internal routes (account deletion); the same value as node's.
       NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
+      # The only proxy Laravel takes the client address from: caddy's fixed address below.
+      TRUSTED_PROXIES: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
       # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
       # Standard-Tabellen für Cache/Sitzungen/Warteschlange gibt es dort nicht.
       # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche) im Container
@@ -177,6 +179,10 @@ services:
       - '443:443'
     environment:
       DOMAIN: ${DOMAIN:?}
+    networks:
+      default:
+        # Fixed: api trusts the client address only from this one (TRUSTED_PROXIES).
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
@@ -188,3 +194,14 @@ volumes:
   db-data:
   caddy-data:
   caddy-config:
+
+# One network for all services with a subnet the operator chooses (APP_NET_PREFIX: the first
+# three parts of a free private /24 on this host, see deploy/.env.example). caddy gets the fixed
+# address .10: Laravel trusts forwarding headers from caddy only (F-31). Every other container
+# gets an address from the upper half, so nothing else can take a fixed one.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.0/24
+          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.128/25

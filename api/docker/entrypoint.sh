@@ -20,6 +20,11 @@ missing=""
 if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then
   missing="$missing NODE_INTERNAL_SECRET(at least 32 characters)"
 fi
+# The reverse proxy's address (the compose sets it from APP_NET_PREFIX). Without it Laravel would
+# see every client as the proxy; '*' would let every client choose its own address (F-31).
+case "$TRUSTED_PROXIES" in
+  ''|'*'|'**') missing="$missing TRUSTED_PROXIES(the reverse proxy's address, never *)" ;;
+esac
 if [ -n "$missing" ]; then
   echo "ERROR: required settings missing or invalid:$missing (see deploy/.env.example)" >&2
   exit 1

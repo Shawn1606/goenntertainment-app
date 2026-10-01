@@ -7,6 +7,11 @@
 		# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
 		# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
 		header_up X-Forwarded-Proto {scheme}
+		# The client address: always the TCP peer Caddy sees, never a value the client sent
+		# (overwrite, not append). Laravel trusts this header from Caddy only (TRUSTED_PROXIES)
+		# and its rate limits count this address. Caddy's default does the same today; this
+		# line keeps it so whatever the default becomes.
+		header_up X-Forwarded-For {remote_host}
 	}
 
 	# Etwas über dem 5-MB-Limit des Node-Backends und unter post_max_size von PHP

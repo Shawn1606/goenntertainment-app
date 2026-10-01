@@ -64,12 +64,29 @@ class NodeFallbackController extends Controller
     ];
 
     /**
-     * Headers a client may never send on to Node: only Laravel sets them, on its internal calls
-     * (App\Support\NodeInternal). A copy from the client is dropped, never forwarded.
+     * Headers a client may never send on to Node; a copy from the client is dropped.
+     *
+     * - The internal ones: only Laravel sets them, on its internal calls (App\Support\NodeInternal).
+     * - Every header that names a client address, host or scheme (F-31): Node trusts the
+     *   forwarding headers of exactly one peer, this server, so they must say what Laravel
+     *   itself established. The fallback sets X-Forwarded-For/-Host/-Proto below.
      */
     private const NEVER_FORWARD = [
         'x-internal-secret',
         'x-account-deletion-grant',
+        'x-forwarded-for',
+        'x-forwarded-host',
+        'x-forwarded-proto',
+        'x-forwarded-port',
+        'x-forwarded-prefix',
+        'x-forwarded-aws-elb',
+        'forwarded',
+        'x-real-ip',
+        'x-client-ip',
+        'x-cluster-client-ip',
+        'true-client-ip',
+        'cf-connecting-ip',
+        'fastly-client-ip',
     ];
 
     public function __invoke(Request $request, OwnedRoutes $owned): Response
@@ -126,6 +143,11 @@ class NodeFallbackController extends Controller
          */
         $headers['X-Forwarded-Host'] = $request->getHttpHost();
         $headers['X-Forwarded-Proto'] = $request->getScheme();
+
+        // The client address as Laravel established it (only Caddy may name it, see
+        // config/trustedproxy.php): one value, written here, never a client's list. Node's rate
+        // limits key on it; Node trusts this header from this server only (NODE_TRUST_PROXY).
+        $headers['X-Forwarded-For'] = (string) $request->ip();
 
         /**
          * Zu große Datei – laut ablehnen statt still weglassen.

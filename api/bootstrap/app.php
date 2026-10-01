@@ -28,8 +28,16 @@ return Application::configure(basePath: dirname(__DIR__))
          *
          * In der Entwicklung (kein Proxy, kein X-Forwarded-Proto) aendert das
          * nichts.
+         *
+         * Trusted is only the proxy named in config/trustedproxy.php (TRUSTED_PROXIES; in
+         * production Caddy's fixed address), never '*' (F-31): with '*' every client could set
+         * X-Forwarded-For itself and so choose the address that the rate limits count and that
+         * the Node fallback receives. No `at:` here, so the middleware reads the addresses from
+         * the config on each request. Only these three headers are read.
          */
-        $middleware->trustProxies(at: '*');
+        $middleware->trustProxies(
+            headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_HOST | Request::HEADER_X_FORWARDED_PROTO,
+        );
 
         $middleware->alias([
             'banned' => EnsureNotBanned::class,
