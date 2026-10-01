@@ -76,7 +76,7 @@ CI together.
 | Expo SDK versions | | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo install --check` | |
 | Server tests | `server/test/*.test.js` | `npm --prefix server test` | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
 | `composer.lock` matches `composer.json` | | `cd api && composer validate --no-check-publish --strict` | PHP 8.4, Composer 2 |
-| API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` | PHP 8.4, `composer install`, `api/.env` with a key |
+| API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` (see [API tests and MySQL](#api-tests-and-mysql)) | PHP 8.4 with `pdo_mysql`, `composer install`, `api/.env` with a key; MySQL 8.4 with `server/schema.sql` loaded and `DB_CONNECTION=mysql` plus `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` in the environment |
 | CI tooling tests | `scripts/ci/*.test.mjs` | `npm run test:tooling` | |
 | Repository guardrails | | `node scripts/ci/check-repo.mjs` | |
 | Schema drift tool tests | `scripts/schema-drift/*.test.mjs` | `node --test "scripts/schema-drift/*.test.mjs"` | Node >= 22.18, `npm --prefix server ci` |
@@ -99,6 +99,30 @@ EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo customize tsconfig.json
 
 The Expo CLI always runs with `EXPO_NO_TELEMETRY=1` and `EXPO_OFFLINE=1`, so it sends nothing
 to Expo. In PowerShell set them first: `$env:EXPO_NO_TELEMETRY=1; $env:EXPO_OFFLINE=1`.
+
+### API tests and MySQL
+
+The app's tables exist only in `server/schema.sql`, so the API feature tests that use the
+database (they extend `api/tests/AppFeatureTestCase.php`) run against MySQL 8.4 loaded from that
+file, each test inside a transaction that is rolled back. Give the connection as environment
+variables, as below; they win over `api/.env` and `api/phpunit.xml`. Without them those tests
+fail with a message that says what is missing (they are never skipped). The unit tests need no
+database
+(`php artisan test --testsuite=Unit`). A throw-away MySQL in Docker (the password is a local-only
+value, not a secret):
+
+```bash
+docker run -d --rm --name goenn-api-tests -p 127.0.0.1:3307:3306 --tmpfs /var/lib/mysql \
+  -e MYSQL_DATABASE=goenntertainment -e MYSQL_USER=goenn \
+  -e MYSQL_PASSWORD=local-only-not-a-secret -e MYSQL_RANDOM_ROOT_PASSWORD=yes mysql:8.4
+# When `docker logs goenn-api-tests` says "ready for connections" (port 3306), load the schema:
+docker exec -i -e MYSQL_PWD=local-only-not-a-secret goenn-api-tests mysql -u goenn goenntertainment < server/schema.sql
+(cd api && DB_CONNECTION=mysql DB_HOST=127.0.0.1 DB_PORT=3307 DB_DATABASE=goenntertainment \
+  DB_USERNAME=goenn DB_PASSWORD=local-only-not-a-secret php artisan test)
+docker stop goenn-api-tests   # removes the container and its data
+```
+
+Point the tests at a database of their own, not at a development database.
 
 ## Get a fresh project
 

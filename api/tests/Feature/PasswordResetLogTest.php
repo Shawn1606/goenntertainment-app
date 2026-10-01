@@ -2,41 +2,24 @@
 
 namespace Tests\Feature;
 
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
-use Tests\TestCase;
+use Tests\AppFeatureTestCase;
 
 /**
  * POST /api/forgot-password must never write the reset token to a log: whoever can read the log
  * could reset the password and take over the account.
  *
- * Runs on the test suite's sqlite database. The controller stores the token with a MySQL-only
- * upsert, so that one statement is captured instead of executed; everything else runs for real.
+ * Runs against MySQL with the app schema (AppFeatureTestCase), so the controller's MySQL upsert of
+ * the token runs for real; the test reads the stored hash back from password_reset_tokens.
  */
-class PasswordResetLogTest extends TestCase
+class PasswordResetLogTest extends AppFeatureTestCase
 {
-    use RefreshDatabase;
-
     public function test_forgot_password_never_logs_the_reset_token(): void
     {
-        $email = 'reset-log-test@example.invalid';
-        DB::table('users')->insert([
-            'name' => 'Reset Log Test',
-            'email' => $email,
-            'password' => Hash::make('Fixture-Only-Pass-2468'),
-        ]);
-
-        $stored = [];
-        DB::partialMock()
-            ->shouldReceive('statement')
-            ->andReturnUsing(function (string $query, array $bindings = []) use (&$stored) {
-                $stored[] = $bindings;
-
-                return true;
-            });
+        $email = $this->makeUser()->email;
 
         // Every log call still raises MessageLogged; the null channel only keeps a leaked test
         // token out of storage/logs when this test fails.
@@ -50,10 +33,9 @@ class PasswordResetLogTest extends TestCase
             ->assertOk()
             ->assertJson(['status' => 'sent']);
 
-        // Denominator: a token was issued (its hash went to the database), so there was one to leak.
-        $this->assertCount(1, $stored, 'no reset token was issued');
-        [$storedEmail, $hash] = $stored[0];
-        $this->assertSame($email, $storedEmail);
+        // Denominator: a token was issued (its hash is in the database), so there was one to leak.
+        $hash = DB::table('password_reset_tokens')->where('email', $email)->value('token');
+        $this->assertNotNull($hash, 'no reset token was issued');
 
         foreach ($logged as $message) {
             preg_match_all('/[A-Za-z0-9_-]{32,}/', $message, $candidates);

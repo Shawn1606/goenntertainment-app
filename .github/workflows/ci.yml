@@ -1,7 +1,7 @@
 # CI for every pull request (any base branch, so stacked pull requests are checked too) and
-# every push to main: client tests, typecheck and lint; server tests against MySQL 8.4; API
-# tests; the schema drift check; the workflow policy, version mirrors, repository guardrails
-# and actionlint; a dependency audit. README.md "Tests and checks" lists the same commands for
+# every push to main: client tests, typecheck and lint; server and API tests against MySQL 8.4;
+# the schema drift check; the workflow policy, version mirrors, repository guardrails and
+# actionlint; a dependency audit. README.md "Tests and checks" lists the same commands for
 # a local run.
 #
 # Security: read-only token, every action pinned by commit SHA (Dependabot keeps the pins
@@ -165,12 +165,41 @@ jobs:
         run: node scripts/ci/test-report.mjs tap server "$RUNNER_TEMP/server.tap"
 
   api:
-    name: API tests (Laravel, PHP 8.4)
+    name: API tests (Laravel, PHP 8.4, MySQL 8.4)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
         working-directory: api
+    services:
+      mysql:
+        # Same tag as the server job and deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs).
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: goenntertainment
+          MYSQL_USER: goenn
+          MYSQL_PASSWORD: ci-only-not-a-secret-db
+          MYSQL_ROOT_PASSWORD: ci-only-not-a-secret-root
+        ports:
+          - 3306
+        # No password on the health-check command line: mysqladmin ping reports a running
+        # server even when it refuses the login.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --tmpfs /var/lib/mysql
+    # The database feature tests (api/tests/AppFeatureTestCase.php) run against this MySQL,
+    # loaded from server/schema.sql below. Values from the environment win over phpunit.xml and
+    # api/.env; without them those tests fail (they are never skipped).
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      # Must equal MYSQL_PASSWORD above; a mismatch fails loudly (access denied).
+      DB_PASSWORD: ci-only-not-a-secret-db
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -181,7 +210,9 @@ jobs:
       - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: ${{ env.PHP_VERSION }}
-          extensions: intl, mbstring, pdo_sqlite, sqlite3, bcmath
+          # pdo_mysql for the database feature tests; pdo_sqlite for the unit test that shows
+          # what those tests do without MySQL.
+          extensions: intl, mbstring, pdo_mysql, pdo_sqlite, sqlite3, bcmath
           coverage: none
           tools: composer:v2
       - name: composer.lock matches composer.json
@@ -189,8 +220,21 @@ jobs:
       - name: Install
         id: install
         run: composer install --no-interaction --no-progress --prefer-dist
-      # The tests use their own settings from phpunit.xml (sqlite in memory, array mailer);
-      # Laravel still needs an application key, generated fresh for this run.
+      - name: Load server/schema.sql and count its tables
+        id: schema
+        working-directory: .
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+          MYSQL_PWD: ci-only-not-a-secret-db
+        run: |
+          docker exec -i -e MYSQL_PWD "$MYSQL_CONTAINER" mysql -u goenn goenntertainment < server/schema.sql
+          expected=$(grep -ciE '^CREATE TABLE' server/schema.sql)
+          actual=$(docker exec -e MYSQL_PWD "$MYSQL_CONTAINER" mysql -N -u goenn -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()" goenntertainment)
+          echo "server/schema.sql declares $expected tables; the test database has $actual."
+          test "$expected" -gt 0
+          test "$actual" -eq "$expected"
+      # Mail goes to the array mailer (phpunit.xml); Laravel still needs an application key,
+      # generated fresh for this run.
       - name: Test environment
         id: test-env
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -198,10 +242,12 @@ jobs:
           cp .env.example .env
           php artisan key:generate --no-interaction
       - name: Tests (php artisan test)
-        if: ${{ !cancelled() && steps.test-env.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.test-env.outcome == 'success' && steps.schema.outcome == 'success' }}
+        env:
+          DB_PORT: ${{ job.services.mysql.ports['3306'] }}
         run: php artisan test --log-junit "$RUNNER_TEMP/api-junit.xml"
       - name: Test count
-        if: ${{ !cancelled() && steps.test-env.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.test-env.outcome == 'success' && steps.schema.outcome == 'success' }}
         working-directory: .
         run: node scripts/ci/test-report.mjs junit api "$RUNNER_TEMP/api-junit.xml"
 
