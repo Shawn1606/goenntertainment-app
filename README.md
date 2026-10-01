@@ -107,14 +107,14 @@ database (they extend `api/tests/AppFeatureTestCase.php`) run against MySQL 8.4 
 file, each test inside a transaction that is rolled back. Give the connection as environment
 variables, as below; they win over `api/.env` and `api/phpunit.xml`. Without them those tests
 fail with a message that says what is missing (they are never skipped). The unit tests need no
-database
-(`php artisan test --testsuite=Unit`). A throw-away MySQL in Docker (the password is a local-only
-value, not a secret):
+database (`php artisan test --testsuite=Unit`). A throw-away MySQL in Docker (the password is a
+local-only value, not a secret):
 
 ```bash
 docker run -d --rm --name goenn-api-tests -p 127.0.0.1:3307:3306 --tmpfs /var/lib/mysql \
   -e MYSQL_DATABASE=goenntertainment -e MYSQL_USER=goenn \
-  -e MYSQL_PASSWORD=local-only-not-a-secret -e MYSQL_RANDOM_ROOT_PASSWORD=yes mysql:8.4
+  -e MYSQL_PASSWORD=local-only-not-a-secret -e MYSQL_ROOT_PASSWORD=local-only-not-a-secret-root \
+  mysql:8.4
 # When `docker logs goenn-api-tests` says "ready for connections" (port 3306), load the schema:
 docker exec -i -e MYSQL_PWD=local-only-not-a-secret goenn-api-tests mysql -u goenn goenntertainment < server/schema.sql
 (cd api && DB_CONNECTION=mysql DB_HOST=127.0.0.1 DB_PORT=3307 DB_DATABASE=goenntertainment \
@@ -123,6 +123,8 @@ docker stop goenn-api-tests   # removes the container and its data
 ```
 
 Point the tests at a database of their own, not at a development database.
+`api/tests/Probes/` is not a suite: tests of `AppFeatureTestCase` run the probe there in a
+child PHPUnit process.
 
 ## Get a fresh project
 
