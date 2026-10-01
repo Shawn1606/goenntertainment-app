@@ -2,7 +2,6 @@ import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEvidence } from '../auth.js';
 import { Validator, HttpError, isAlphaDash } from '../validate.js';
@@ -11,6 +10,7 @@ import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
 import { transformRequest } from './upgrades.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { deleteUserAccount } from '../account-deletion.js';
+import { singleUpload } from '../uploads.js';
 
 const router = createRouter();
 
@@ -19,7 +19,8 @@ const router = createRouter();
 const EVIDENCE_DIR = path.join(process.cwd(), 'storage', 'evidence');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+// Evidence image (5 MB, uploads.js) plus the fields `reason` and `minutes`, with some headroom.
+const uploadEvidence = singleUpload('evidence', { maxFields: 4 });
 
 /** Speichert ein hochgeladenes Beweis-Bild und gibt den relativen Pfad zurueck (oder null). */
 function saveEvidenceImage(file) {
@@ -225,7 +226,7 @@ function requireReason(req) {
 
 // POST /api/admin/users/:id/ban  (nur Admin) – dauerhaft sperren.
 // multipart: Feld `reason` (Pflicht) + optionales Beweis-Bild `evidence`.
-router.post('/users/:id/ban', requireAuth, requireAdmin, upload.single('evidence'), async (req, res, next) => {
+router.post('/users/:id/ban', requireAuth, requireAdmin, uploadEvidence, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);
@@ -240,7 +241,7 @@ router.post('/users/:id/ban', requireAuth, requireAdmin, upload.single('evidence
 
 // POST /api/admin/users/:id/timeout  (nur Admin) – zeitlich sperren.
 // multipart: Felder `minutes` + `reason` (Pflicht) + optionales Beweis-Bild `evidence`.
-router.post('/users/:id/timeout', requireAuth, requireAdmin, upload.single('evidence'), async (req, res, next) => {
+router.post('/users/:id/timeout', requireAuth, requireAdmin, uploadEvidence, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);

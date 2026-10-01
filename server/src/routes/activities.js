@@ -2,7 +2,6 @@ import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { Validator, HttpError, missingIds } from '../validate.js';
@@ -15,15 +14,26 @@ import { mediaUrl, publicBase } from '../media.js';
 import { notifyFollowers } from '../notifications.js';
 import { blockExistsBetween, transformUser } from '../people.js';
 import { logError } from '../log.js';
+import { singleUpload } from '../uploads.js';
 
 const router = createRouter();
 
 const BANNER_DIR = path.join(process.cwd(), 'storage', 'banners');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB, wie Laravel (max:5120 KB)
+
+/**
+ * The banner (5 MB, uploads.js) and the form's text fields: title, description, location,
+ * starts_at, max_participants and at most 5 each of `interests[]` and `custom_interests[]`
+ * (src/lib/api.ts createActivity), with some headroom.
+ */
+const uploadBanner = singleUpload('banner', {
+  maxFields: 20,
+  sizeMessage: 'Das Banner-Bild darf hoechstens 5 MB gross sein.',
 });
+
+/** Interests per event (chosen plus typed ones): the app's MAX_INTERESTS in create-activity.tsx. */
+const MAX_INTERESTS = 5;
+const MSG_TOO_MANY_INTERESTS = 'Du kannst hoechstens 5 Interessen auswaehlen.';
 
 /** Laenge eines Kommentars – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_COMMENT = 500;
@@ -409,7 +419,7 @@ router.get('/saved', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/activities  (geschuetzt, multipart wegen Banner)
-router.post('/', requireAuth, upload.single('banner'), async (req, res, next) => {
+router.post('/', requireAuth, uploadBanner, async (req, res, next) => {
   try {
     // Events erstellen gibt es erst ab Creator. Die App blendet den ＋-Knopf
     // bei Standard-Konten aus – hier steht der Riegel, der auch dann haelt,
@@ -452,24 +462,29 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
       }
     }
 
-    // interests[] kommt bei multipart als String oder Array
+    // interests[] kommt bei multipart als String oder Array.
+    // The list length is checked BEFORE anything loops over it (F-02): a list longer than the
+    // app can send is refused as a whole, never mapped or looked up entry by entry.
     let interests = [];
-    if (Array.isArray(b.interests)) interests = b.interests.map(Number);
+    if (Array.isArray(b.interests) && b.interests.length > MAX_INTERESTS) v.add('interests', MSG_TOO_MANY_INTERESTS);
+    else if (Array.isArray(b.interests)) interests = b.interests.map(Number);
     else if (b.interests !== undefined) interests = [Number(b.interests)];
-    if (interests.length > 5) v.add('interests', 'Du kannst hoechstens 5 Interessen auswaehlen.');
     if (interests.length > 0 && (await missingIds('interests', interests)).length > 0) {
       v.add('interests', 'Mindestens ein Interesse existiert nicht.');
     }
 
     // Selbst eingetippte Interessen: gehen NICHT in die DB, werden aber
     // mitgeprueft – sie sind freier Text und damit der eigentliche Risiko-Teil.
+    // Same length check first: the app sends at most MAX_INTERESTS in total.
     let customInterests = [];
-    if (Array.isArray(b.custom_interests)) customInterests = b.custom_interests;
+    if (Array.isArray(b.custom_interests) && b.custom_interests.length > MAX_INTERESTS) {
+      v.add('interests', MSG_TOO_MANY_INTERESTS);
+    } else if (Array.isArray(b.custom_interests)) customInterests = b.custom_interests;
     else if (b.custom_interests !== undefined) customInterests = [b.custom_interests];
     customInterests = customInterests
       .map((name) => String(name).trim())
       .filter(Boolean)
-      .slice(0, 5);
+      .slice(0, MAX_INTERESTS);
 
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
       v.add('banner', 'Das Banner muss ein Bild sein (jpeg, png, webp).');

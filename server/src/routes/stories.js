@@ -27,7 +27,6 @@ import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { HttpError, Validator } from '../validate.js';
@@ -36,6 +35,7 @@ import { abilitiesFor } from '../accounts.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { notifyFollowers } from '../notifications.js';
 import { loadUser } from '../people.js';
+import { singleUpload } from '../uploads.js';
 // Spalten, Umwandlung und Filter wohnen in `../stories.js`: Profilseite und
 // Personenlisten fragen dasselbe, und vier Abschriften derselben Abfrage sind
 // vier Wahrheiten darueber, was „laufende Story" heisst (siehe dort).
@@ -53,27 +53,12 @@ const router = createRouter();
 const STORY_DIR = path.join(process.cwd(), 'storage', 'stories');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** Laenge der Bildunterschrift – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_CAPTION = 200;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
-
-/** Multer mit eigener Fehlermeldung – der allgemeine Handler spricht von Bannern. */
-function uploadImage(req, res, next) {
-  upload.single('image')(req, res, (err) => {
-    if (!err) return next();
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(
-        new HttpError(422, 'Das Bild darf hoechstens 5 MB gross sein.', {
-          image: ['Das Bild darf hoechstens 5 MB gross sein.'],
-        }),
-      );
-    }
-    return next(err);
-  });
-}
+/** Image in the field `image` (5 MB with its own message, uploads.js) plus the caption, with some headroom. */
+const uploadImage = singleUpload('image', { maxFields: 3 });
 
 /** Verlangt ein Konto, das veroeffentlichen darf. Laeuft NACH requireAuth. */
 function requirePublisher(req, res, next) {

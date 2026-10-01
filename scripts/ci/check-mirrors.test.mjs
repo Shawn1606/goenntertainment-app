@@ -32,6 +32,10 @@ const FILES = {
   'api/docker/entrypoint.sh': 'if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then\n  exit 1\nfi\n',
   'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n',
   'server/.env.example': 'PORT=8001\r\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\r\n',
+  'server/src/uploads.js': '/** Largest image. */\nexport const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;\n',
+  'api/app/Http/Controllers/NodeFallbackController.php': '<?php\n        $nodeLimit = 5 * 1024 ** 2;\n',
+  'src/app/create-activity.tsx': "import x from 'y';\nconst MAX_INTERESTS = 5;\n",
+  'server/src/routes/activities.js': '/** Interests. */\nconst MAX_INTERESTS = 5;\n',
 };
 
 function withTree(overrides, fn) {
@@ -52,9 +56,30 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 5);
-    assert.equal(r.places, 12);
-    assert.equal(r.occurrences, 13, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 7);
+    assert.equal(r.places, 16);
+    assert.equal(r.occurrences, 17, 'two mysql services in ci.yml count separately');
+  });
+});
+
+test('detects an upload size limit that differs between Node and Laravel', () => {
+  withTree({ 'api/app/Http/Controllers/NodeFallbackController.php': '<?php\n        $nodeLimit = 8 * 1024 ** 2;\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Upload size limit \(MB\) differs: 5 \(server\/src\/uploads\.js MAX_UPLOAD_BYTES\), 8 \(api\/app\/Http\/Controllers\/NodeFallbackController\.php \$nodeLimit\)$/);
+  });
+  withTree({ 'server/src/uploads.js': 'export const MAX_UPLOAD_BYTES = 5242880;\n' }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      'Upload size limit (MB): cannot find MAX_UPLOAD_BYTES in server/src/uploads.js',
+    ]);
+  });
+});
+
+test('detects an interests-per-event maximum that differs between the app and the server', () => {
+  withTree({ 'server/src/routes/activities.js': 'const MAX_INTERESTS = 6;\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Interests per event differs: 5 \(src\/app\/create-activity\.tsx MAX_INTERESTS\), 6 /);
   });
 });
 

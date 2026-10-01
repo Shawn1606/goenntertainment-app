@@ -7,7 +7,9 @@
 //                  deploy/docker-compose.yml;
 //   - the minimum length of NODE_INTERNAL_SECRET: server/src/config.js, api/app/Support/
 //                  NodeInternal.php and api/docker/entrypoint.sh;
-//   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example.
+//   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example;
+//   - the upload size limit: server/src/uploads.js and Laravel's NodeFallbackController;
+//   - the interests per event: the app's create-activity screen and server/src/routes/activities.js.
 // CI tests what production runs only while these agree. A Dependabot update of a base image
 // that moves Node or PHP fails here until CI (and composer.json) move with it, on purpose.
 //
@@ -72,6 +74,24 @@ export const MIRRORS = [
     sources: [
       { file: 'api/.env.example', what: 'NODE_INTERNAL_SECRET', extract: all(/^NODE_INTERNAL_SECRET=(\S+)\s*$/gm) },
       { file: 'server/.env.example', what: 'NODE_INTERNAL_SECRET', extract: all(/^NODE_INTERNAL_SECRET=(\S+)\s*$/gm) },
+    ],
+  },
+  {
+    // Node refuses larger images (uploads.js); Laravel names the same limit to the app when PHP
+    // refuses a file before Node sees it (NodeFallbackController::uploadLimitMb).
+    name: 'Upload size limit (MB)',
+    sources: [
+      { file: 'server/src/uploads.js', what: 'MAX_UPLOAD_BYTES', extract: all(/^export const MAX_UPLOAD_BYTES = (\d+) \* 1024 \* 1024;/gm) },
+      { file: 'api/app/Http/Controllers/NodeFallbackController.php', what: '$nodeLimit', extract: all(/\$nodeLimit = (\d+) \* 1024 \*\* 2;/g) },
+    ],
+  },
+  {
+    // The app lets a host pick at most this many interests per event; the server refuses longer
+    // lists before it loops over them.
+    name: 'Interests per event',
+    sources: [
+      { file: 'src/app/create-activity.tsx', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
+      { file: 'server/src/routes/activities.js', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
     ],
   },
 ];

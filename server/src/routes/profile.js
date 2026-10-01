@@ -15,7 +15,6 @@ import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
 import { HttpError, Validator } from '../validate.js';
@@ -28,6 +27,7 @@ import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
 import { notifyFollowers, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
+import { singleUpload } from '../uploads.js';
 
 const router = createRouter();
 
@@ -37,7 +37,6 @@ const AVATAR_DIR = path.join(process.cwd(), 'storage', 'avatars');
 const USER_BANNER_DIR = path.join(process.cwd(), 'storage', 'user-banners');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** So viele Beitraege liefert ein Profil hoechstens aus. */
 const POST_LIMIT = 50;
@@ -48,30 +47,11 @@ const MAX_COMMENT = 500;
 /** So viele Kommentare liefert ein Beitrag hoechstens aus. */
 const COMMENT_LIMIT = 100;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
-
 /**
- * Multer mit eigener Fehlerbehandlung.
- *
- * Ohne das landet ein zu grosses Bild beim allgemeinen Fehler-Handler in
- * app.js – und der spricht von einem „Banner-Bild", das es bei einem Beitrag
- * gar nicht gibt.
+ * Image in the field `image` (5 MB with its own message, uploads.js) plus at most the text field
+ * `body` (posts), with some headroom.
  */
-function uploadImage(req, res, next) {
-  upload.single('image')(req, res, (err) => {
-    if (!err) {
-      return next();
-    }
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(
-        new HttpError(422, 'Das Bild darf hoechstens 5 MB gross sein.', {
-          image: ['Das Bild darf hoechstens 5 MB gross sein.'],
-        }),
-      );
-    }
-    return next(err);
-  });
-}
+const uploadImage = singleUpload('image', { maxFields: 3 });
 
 /**
  * Beitrag in die API-Form bringen.

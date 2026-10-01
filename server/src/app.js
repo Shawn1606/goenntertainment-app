@@ -162,12 +162,6 @@ export function handleError(err, req, res, next) {
   if (err instanceof HttpError) {
     return res.status(err.status).json({ message: err.message, errors: err.errors });
   }
-  if (err?.code === 'LIMIT_FILE_SIZE') {
-    return res.status(422).json({
-      message: 'Das Banner-Bild darf hoechstens 5 MB gross sein.',
-      errors: { banner: ['Das Banner-Bild darf hoechstens 5 MB gross sein.'] },
-    });
-  }
   const client = clientErrorFor(err);
   if (client) {
     return res.status(client.status).json({ message: client.message });
