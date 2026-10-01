@@ -7,6 +7,7 @@ use App\Http\Controllers\NodeFallbackController;
 use App\Http\Controllers\PasswordController;
 use App\Http\Controllers\ProgressController;
 use App\Http\Controllers\TwoFactorController;
+use App\Support\OwnedRoutes;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
@@ -106,5 +107,11 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
  * statt weiterzuleiten. Die App bekaeme einen Fehler fuer eine Funktion, die
  * es laengst gibt. `Route::any` mit `.*` fasst dagegen jede Methode auf jeder
  * Adresse und laesst nur das durch, was oben ausdruecklich steht.
+ *
+ * It never forwards a path Laravel owns, in any spelling and for any method: the controller
+ * checks the normalised path against Laravel's whole route table (App\Support\OwnedRoutes, which
+ * skips this route by its name). Keep the name.
  */
-Route::any('/{path?}', NodeFallbackController::class)->where('path', '.*');
+Route::any('/{path?}', NodeFallbackController::class)
+    ->where('path', '.*')
+    ->name(OwnedRoutes::FALLBACK_ROUTE);
