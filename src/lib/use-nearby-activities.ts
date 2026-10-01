@@ -3,6 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { distanceKm } from '@/domain/distance';
 import { RADIUS_STEPS_KM, chooseRadius } from '@/domain/nearby';
+import {
+  type RunState,
+  completeRun,
+  initialRunState,
+  isResolving,
+  startRun,
+} from '@/domain/nearby-run';
 import { type Activity } from '@/lib/api';
 import { type Coords, geocode } from '@/lib/geocode';
 
@@ -93,13 +100,16 @@ export function useNearbyActivities(
   const signatureRef = useRef('');
 
   /**
-   * For which position and list the last geocoding run completed. `resolving` is
-   * derived from it while rendering instead of being set at the start of the effect.
+   * For which position and list the current geocoding run is, and for which one a run
+   * completed. Adjusted while rendering like `wasEnabled` above: a new position or list
+   * resets the earlier result before the effect starts the new run, so `resolving` stays
+   * true while any run is in flight, also when the list returns to an earlier one.
    */
-  const [resolvedFor, setResolvedFor] = useState<{ coords: Coords; signature: string } | null>(null);
-  const resolving =
-    userCoords !== null &&
-    (resolvedFor?.coords !== userCoords || resolvedFor.signature !== signature);
+  const runKey = { coords: userCoords, signature };
+  const [run, setRun] = useState<RunState<Coords>>(() => initialRunState(runKey));
+  const currentRun = startRun(run, runKey);
+  if (currentRun !== run) setRun(currentRun);
+  const resolving = isResolving(currentRun, runKey);
 
   useEffect(() => {
     if (!userCoords) return;
@@ -121,7 +131,7 @@ export function useNearbyActivities(
       }
       if (!cancelled) {
         setDistanceById(found);
-        setResolvedFor({ coords: userCoords, signature });
+        setRun((current) => completeRun(current, { coords: userCoords, signature }));
       }
     })();
 
