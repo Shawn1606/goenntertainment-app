@@ -4,8 +4,10 @@ use App\Http\Middleware\EnsureNotBanned;
 use App\Http\Middleware\UnescapedJsonResponses;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
+use Illuminate\Database\QueryException;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -53,6 +55,22 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn (Request $request) => $request->is('api/*'),
         );
+
+        /**
+         * A failed query is logged without request data (F-38): the default report writes the
+         * exception's message, which is the statement with every bound value filled in
+         * (addresses, names, hashes) followed by the driver's message. Logged instead: the class,
+         * the SQLSTATE and the driver's error number - enough to find the failing code path in
+         * the trace of a reproduction, nothing a user typed.
+         */
+        $exceptions->report(function (QueryException $e) {
+            Log::error('Database query failed', [
+                'exception' => $e::class,
+                'connection' => $e->getConnectionName(),
+                'sqlstate' => (string) $e->getCode(),
+                'driver_code' => $e->errorInfo[1] ?? null,
+            ]);
+        })->stop();
 
         /**
          * Fehlerhafte Eingaben im gewohnten Format.

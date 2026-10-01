@@ -346,9 +346,10 @@ final class TwoFactor
         try {
             Mail::to($user->email)->send(new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
         } catch (\Throwable $e) {
+            // The exception class only (F-38): a transport message can name the recipient.
             Log::error('[two-factor] Code-Mail nicht versendet', [
                 'user_id' => $user->getKey(),
-                'fehler' => $e->getMessage(),
+                'exception' => $e::class,
             ]);
 
             if ($challenge->code_hash === null) {
