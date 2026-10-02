@@ -170,10 +170,13 @@ test('F-29: the api image has no upload folder under its docroot and its build r
   assert.ok(run.length > 0, 'the final chain of api/Dockerfile has no RUN instruction');
   const creates = run.filter((i) => /\bmkdir\b[^;&|]*\bpublic\/storage\b/.test(i.args));
   assert.deepEqual(creates.map((i) => `line ${i.line}`), [], 'the final chain creates public/storage');
-  assert.ok(
-    run.some((i) => /\btest ! -e \S*public\/storage\b/.test(i.args)),
-    'the build does not refuse a public/storage that came in with the code',
-  );
+  // -e follows a symbolic link (a dangling one passes it), so -L must be there too.
+  for (const flag of ['-e', '-L']) {
+    assert.ok(
+      run.some((i) => new RegExp(`\\btest ! ${flag} \\S*public/storage\\b`).test(i.args)),
+      `the build does not refuse a public/storage that came in with the code (test ! ${flag})`,
+    );
+  }
 });
 
 test('F-29: Apache in the api image refuses an upload folder mounted under its docroot', (t) => {

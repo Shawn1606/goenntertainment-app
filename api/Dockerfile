@@ -106,13 +106,14 @@ FROM base AS runtime
 #
 # No upload folder under the docroot: uploads are not this image's business (see the header).
 # The build stops if a public/storage came in with the code (api/.dockerignore keeps the local
-# development link out), and docker/apache.conf refuses one mounted there later.
+# development link out), and docker/apache.conf refuses one mounted there later. Two tests:
+# `-e` follows a link and so misses one whose target does not exist in the image; `-L` sees it.
 COPY --from=build /var/www/api /var/www/api
 COPY --from=build /var/www/shared /var/www/shared
 RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views \
                storage/logs bootstrap/cache \
     && chown -R www-data:www-data storage bootstrap/cache \
-    && test ! -e public/storage
+    && test ! -e public/storage && test ! -L public/storage
 
 COPY docker/entrypoint.sh /usr/local/bin/goenn-entrypoint
 RUN chmod 755 /usr/local/bin/goenn-entrypoint
