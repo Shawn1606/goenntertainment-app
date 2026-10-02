@@ -53,6 +53,15 @@ class AuthController extends Controller
 
     private const MSG_EMAIL_NEEDS_STEP_UP = 'Die E-Mail-Adresse lässt sich nur mit deinem Passwort ändern – nutze „E-Mail-Adresse ändern" in den Einstellungen.';
 
+    /**
+     * Longest name: users.name is VARCHAR(255) (server/schema.sql). Laravel's `max` counts a string
+     * in characters (mb_strlen), as MySQL counts a utf8mb4 VARCHAR. Checked before the word filter
+     * (F-02), so a longer name is refused without being scanned and never reaches the database.
+     */
+    private const NAME_MAX = 255;
+
+    private const MSG_NAME_TOO_LONG = 'Der Name fasst hoechstens 255 Zeichen.';
+
     /** POST /api/register */
     public function register(Request $request): JsonResponse
     {
@@ -63,7 +72,7 @@ class AuthController extends Controller
              * Format-Meldung, und dank `bail` steht nie beides da. Die Meldung ist
              * dieselbe, die die App vorab am Feld zeigt.
              */
-            'name' => ['bail', 'required', 'string', new NoBlockedTerms('name')],
+            'name' => ['bail', 'required', 'string', 'max:'.self::NAME_MAX, new NoBlockedTerms('name')],
             // Names and addresses the system creates for itself are refused (F-05,
             // shared/reserved-accounts.json), before anyone can take them ahead of the seed.
             'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, self::notReservedUsername(null), new NoBlockedTerms('username')],
@@ -81,6 +90,7 @@ class AuthController extends Controller
         ], [
             'name.required' => 'Der Name ist erforderlich.',
             'name.string' => 'Der Name ist erforderlich.',
+            'name.max' => self::MSG_NAME_TOO_LONG,
             'username.required' => 'Der Benutzername ist erforderlich.',
             'username.string' => 'Der Benutzername ist erforderlich.',
             'username.min' => self::MSG_USERNAME_FORMAT,
@@ -250,9 +260,10 @@ class AuthController extends Controller
         };
 
         if ($request->has('name')) {
-            $rules['name'] = ['bail', 'required', 'string', $blockedTermsRule('name', $user->name)];
+            $rules['name'] = ['bail', 'required', 'string', 'max:'.self::NAME_MAX, $blockedTermsRule('name', $user->name)];
             $messages['name.required'] = 'Der Name ist erforderlich.';
             $messages['name.string'] = 'Der Name ist erforderlich.';
+            $messages['name.max'] = self::MSG_NAME_TOO_LONG;
         }
 
         if ($request->has('username')) {
