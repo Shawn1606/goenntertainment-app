@@ -564,6 +564,19 @@ export async function ensureSchema() {
     );
   }
 
+  // The minimum-age confirmation at sign-up (F-14), right after the terms columns as in
+  // schema.sql. Accounts from before stay NULL.
+  if (!(await hasColumn('users', 'min_age_confirmed'))) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN min_age_confirmed TINYINT UNSIGNED NULL AFTER terms_accepted_at',
+    );
+  }
+  if (!(await hasColumn('users', 'min_age_confirmed_at'))) {
+    await pool.query(
+      'ALTER TABLE users ADD COLUMN min_age_confirmed_at DATETIME NULL AFTER min_age_confirmed',
+    );
+  }
+
   // Nachtraeglich: unterscheidet Sperren von Hand ('admin') und automatische
   // Sperren der KI-Moderation ('ai'). Bestehende Eintraege bleiben 'admin'.
   if (!(await hasColumn('ban_evidence', 'source'))) {
@@ -704,7 +717,7 @@ export async function ensureSchema() {
    * Tabellen-Reihenfolge aus (siehe api/app/Http/Resources/UserResource.php).
    */
   const twoFactorColumns = [
-    ['two_factor_method', 'VARCHAR(10) NULL', 'terms_accepted_at'],
+    ['two_factor_method', 'VARCHAR(10) NULL', 'min_age_confirmed_at'],
     ['two_factor_secret', 'TEXT NULL', 'two_factor_method'],
     ['two_factor_recovery_codes', 'TEXT NULL', 'two_factor_secret'],
     ['two_factor_confirmed_at', 'DATETIME NULL', 'two_factor_recovery_codes'],

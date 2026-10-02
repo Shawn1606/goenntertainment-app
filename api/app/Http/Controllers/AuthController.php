@@ -8,6 +8,7 @@ use App\Rules\NoBlockedTerms;
 use App\Rules\ValidEmail;
 use App\Support\AccountTypes;
 use App\Support\EmailAddress;
+use App\Support\Legal;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
 use App\Support\ReservedAccounts;
@@ -19,6 +20,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -63,6 +65,15 @@ class AuthController extends Controller
 
     private const MSG_NAME_TOO_LONG = 'Der Name fasst hoechstens 255 Zeichen.';
 
+    /** Sign-up without the current terms version (F-14). */
+    public const MSG_TERMS = 'Bitte stimme den aktuellen Nutzungsbedingungen zu.';
+
+    /** Sign-up without the confirmation of the minimum age (F-14); the age from shared/legal.json. */
+    public static function minAgeMessage(): string
+    {
+        return 'Bitte bestätige, dass du mindestens '.Legal::minAge().' Jahre alt bist.';
+    }
+
     /** POST /api/register */
     public function register(Request $request): JsonResponse
     {
@@ -88,6 +99,16 @@ class AuthController extends Controller
              * und beide bekommen dieselbe Meldung.
              */
             'account_type' => ['bail', 'required', $this->registrableAccountTypeRule()],
+            /**
+             * F-14: the sign-up records on the server that the person accepted the CURRENT terms
+             * and confirmed the minimum age, both from shared/legal.json (App\Support\Legal).
+             * Without them, or with an older version or another age, the sign-up is refused.
+             * Appended after the existing fields, so the first message of every other failure
+             * stays what it was. How age is verified beyond this confirmation is an operator
+             * decision, not made in code.
+             */
+            'terms_version' => ['bail', 'required', 'string', Rule::in([Legal::termsVersion()])],
+            'confirmed_min_age' => ['bail', 'required', 'integer', Rule::in([Legal::minAge()])],
         ], [
             'name.required' => 'Der Name ist erforderlich.',
             'name.string' => 'Der Name ist erforderlich.',
@@ -100,6 +121,12 @@ class AuthController extends Controller
             'email.required' => self::MSG_EMAIL,
             'password.required' => self::MSG_PASSWORD,
             'account_type.required' => 'Ungueltiger Kontotyp.',
+            'terms_version.required' => self::MSG_TERMS,
+            'terms_version.string' => self::MSG_TERMS,
+            'terms_version.in' => self::MSG_TERMS,
+            'confirmed_min_age.required' => self::minAgeMessage(),
+            'confirmed_min_age.integer' => self::minAgeMessage(),
+            'confirmed_min_age.in' => self::minAgeMessage(),
         ]);
 
         /**
@@ -148,22 +175,15 @@ class AuthController extends Controller
         $user->account_type = AccountTypes::normalize($request->input('account_type'));
 
         /**
-         * Stand der Nutzungsbedingungen, dem zugestimmt wurde.
-         *
-         * Kommt aus der App (`LEGAL_VERSION` in src/domain/legal.ts) und wird hier
-         * NICHT geprueft: Der Server kennt den Text nicht und soll ihn nicht kennen -
-         * er haelt fest, WAS bestaetigt wurde, damit sich nach einer Aenderung
-         * erkennen laesst, wer noch dem alten Stand zugestimmt hat. Fehlt die
-         * Angabe (aeltere App-Fassung), bleibt die Spalte NULL, und die App fragt
-         * beim naechsten Start nach.
+         * The confirmations checked above (F-14), each with the time it was given: which terms
+         * version was accepted - so that after a change of the terms it is known who accepted an
+         * older one - and which minimum age was confirmed. Only the current values from
+         * shared/legal.json get this far.
          */
-        $terms = $request->input('terms_version');
-        $termsVersion = (is_string($terms) && trim($terms) !== '')
-            ? mb_substr(trim($terms), 0, 20)
-            : null;
-
-        $user->terms_version = $termsVersion;
-        $user->terms_accepted_at = $termsVersion !== null ? now() : null;
+        $user->terms_version = Legal::termsVersion();
+        $user->terms_accepted_at = now();
+        $user->min_age_confirmed = Legal::minAge();
+        $user->min_age_confirmed_at = now();
         $user->save();
 
         $interests = $this->interestIds($request->input('interests'));

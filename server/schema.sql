@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS users (
   -- Stand zugestimmt hat. NULL = Bestandskonto von vor der Zustimmung.
   terms_version     VARCHAR(20)     NULL,
   terms_accepted_at DATETIME        NULL,
+  -- The minimum age confirmed at sign-up and when (F-14; the age comes from shared/legal.json,
+  -- Laravel's sign-up refuses a registration without it). How age is verified beyond this
+  -- confirmation is an operator decision. NULL = an account from before the confirmation.
+  min_age_confirmed    TINYINT UNSIGNED NULL,
+  min_age_confirmed_at DATETIME         NULL,
   -- Zwei-Faktor-Anmeldung (bedient von Laravel, api/app/Support/TwoFactor.php).
   -- `two_factor_method` ist der EINZIGE Schalter: NULL = aus, 'email' | 'totp' =
   -- an. Ein gesetztes Secret bei NULL-Methode ist eine angefangene, noch nicht

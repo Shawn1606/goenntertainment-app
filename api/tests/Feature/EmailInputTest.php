@@ -42,6 +42,7 @@ class EmailInputTest extends AppFeatureTestCase
                 'email' => $email,
                 'password' => $password,
                 'account_type' => 'standard',
+                ...self::consent(),
             ]],
             'login' => ['/api/login', ['email' => $email, 'password' => $password]],
             'forgot' => ['/api/forgot-password', ['email' => $email]],

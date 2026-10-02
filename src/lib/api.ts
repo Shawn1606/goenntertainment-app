@@ -861,8 +861,12 @@ export type RegisterInput = {
    * Die Version und nicht bloß ein `true`: Nur damit lässt sich nach einer
    * Änderung erkennen, wer noch dem alten Text zugestimmt hat. Der Server
    * schreibt sie mit dem Zeitpunkt ins Konto.
+   *
+   * Required (F-14): the server refuses a sign-up without the current version.
    */
-  terms_version?: string;
+  terms_version: string;
+  /** The minimum age the person confirmed (`MIN_AGE`); required, see `registrationConsent()`. */
+  confirmed_min_age: number;
 };
 
 /**

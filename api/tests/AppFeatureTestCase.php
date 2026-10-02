@@ -4,6 +4,7 @@ namespace Tests;
 
 use App\Models\User;
 use App\Support\BlockedTerms;
+use App\Support\Legal;
 use DateTimeImmutable;
 use DateTimeInterface;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
@@ -164,6 +165,16 @@ abstract class AppFeatureTestCase extends TestCase
         $user->save();
 
         return $user->fresh();
+    }
+
+    /**
+     * The consent fields a sign-up must send (F-14): the current terms version and the confirmed
+     * minimum age, from shared/legal.json as the app sends them (registrationConsent() in
+     * src/domain/legal.ts). Tests of POST /api/register merge them into their payloads.
+     */
+    protected static function consent(): array
+    {
+        return ['terms_version' => Legal::termsVersion(), 'confirmed_min_age' => Legal::minAge()];
     }
 
     /** A random username after $prefix that the word filter accepts. */

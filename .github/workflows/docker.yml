@@ -95,9 +95,13 @@ jobs:
           # this username prefix.
           STAMP=$(date +%s%N | tr 1489 2350 | cut -c8-19)
           [[ "$STAMP" =~ ^[023567]{12}$ ]]
+          # The consent a sign-up must send (F-14): the current terms version and the confirmed
+          # minimum age, from the file Laravel checks them against.
+          TERMS=$(jq -er .terms_version ../shared/legal.json)
+          MIN_AGE=$(jq -er .min_age ../shared/legal.json)
           REG=$(curl -fsS -X POST "$BASE/api/register" \
             -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"ci-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"ci\"}")
+            -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"ci-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"$TERMS\",\"confirmed_min_age\":$MIN_AGE}")
           TOKEN=$(echo "$REG" | jq -r .token)
           test -n "$TOKEN" && test "$TOKEN" != null
 
@@ -123,10 +127,20 @@ jobs:
           curl -fsSI "$BASE${BANNER#"https://$DOMAIN"}" | tr -d '\r' | grep -qi '^x-content-type-options: *nosniff$'
 
           echo "--- Wortfilter greift auch im Container"
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/register" \
+          # With the consent fields, and the 422 must name the username: a refusal for another
+          # reason (such as missing consent) would prove nothing about the word filter.
+          CODE=$(curl -s -o /tmp/badname.json -w '%{http_code}' -X POST "$BASE/api/register" \
             -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\"}")
+            -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"$TERMS\",\"confirmed_min_age\":$MIN_AGE}")
           test "$CODE" = 422
+          jq -e '.errors.username' /tmp/badname.json > /dev/null
+
+          echo "--- A sign-up without the age confirmation is refused (F-14)"
+          CODE=$(curl -s -o /tmp/noconsent.json -w '%{http_code}' -X POST "$BASE/api/register" \
+            -H 'Content-Type: application/json' -H 'Accept: application/json' \
+            -d "{\"name\":\"CI Test\",\"username\":\"cinoage$STAMP\",\"email\":\"ci-noage-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"$TERMS\"}")
+          test "$CODE" = 422
+          jq -e '.errors.confirmed_min_age' /tmp/noconsent.json > /dev/null
 
           echo "--- One owner per path: other spellings of a Laravel route never reach Node"
           # --path-as-is: curl sends the path exactly as written (no dot-segment cleanup).
