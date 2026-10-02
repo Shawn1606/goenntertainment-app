@@ -24,6 +24,7 @@ const FILES = {
     `        image: mysql:8.4@${MYSQL_DIGEST}`,
     '',
   ].join('\n'),
+  '.github/workflows/docker.yml': "env:\n  # Mirror of NODE_VERSION in ci.yml.\n  NODE_VERSION: '22'\njobs:\n",
   'server/Dockerfile': 'FROM node:22-alpine\nWORKDIR /app\n',
   'api/Dockerfile': 'FROM php:8.4-apache\nCOPY --from=composer:2 /usr/bin/composer /usr/bin/composer\n',
   'api/composer.json': JSON.stringify({ require: { php: '^8.4', 'laravel/framework': '^13.0' } }, null, 4),
@@ -126,8 +127,8 @@ test('agrees on a consistent tree and reports its denominator', () => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
     assert.equal(r.values, 20);
-    assert.equal(r.places, 48);
-    assert.equal(r.occurrences, 50, 'two mysql services in ci.yml count separately, for the tag and for the digest');
+    assert.equal(r.places, 49);
+    assert.equal(r.occurrences, 51, 'two mysql services in ci.yml count separately, for the tag and for the digest');
   });
 });
 
@@ -311,7 +312,18 @@ test('detects a Node major that differs between ci.yml and server/Dockerfile', (
   withTree({ 'server/Dockerfile': 'FROM node:24-alpine@sha256:' + 'c'.repeat(64) + '\n' }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0], /^Node major differs: 22 \(\.github\/workflows\/ci\.yml NODE_VERSION\), 24 \(server\/Dockerfile FROM node:\)$/);
+    assert.match(r.problems[0], /^Node major differs: 22 \(\.github\/workflows\/ci\.yml NODE_VERSION\), 22 \(\.github\/workflows\/docker\.yml NODE_VERSION\), 24 \(server\/Dockerfile FROM node:\)$/);
+  });
+});
+
+test('detects a Node major in docker.yml (the deploy tests) that differs from ci.yml, or is missing there', () => {
+  withTree({ '.github/workflows/docker.yml': "env:\n  NODE_VERSION: '24'\n" }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Node major differs: 22 \(\.github\/workflows\/ci\.yml NODE_VERSION\), 24 \(\.github\/workflows\/docker\.yml NODE_VERSION\), 22 \(server\/Dockerfile FROM node:\)$/);
+  });
+  withTree({ '.github/workflows/docker.yml': 'env: {}\n' }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, ['Node major: cannot find NODE_VERSION in .github/workflows/docker.yml']);
   });
 });
 

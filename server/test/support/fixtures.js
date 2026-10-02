@@ -15,9 +15,9 @@
  * The digits left read as o, e, s, t or nothing. test/test-support.test.js checks every prefix the
  * tests use against every term the filter has, and fails as soon as a new term or a new prefix makes
  * a stamp able to trip the filter again.
- * The container smoke (.github/workflows/docker.yml) builds its stamp in shell; the digit class of
- * its STAMP guard is a named mirror of SAFE_DIGITS, and the same test checks that both are equal
- * and checks the smoke's username prefix.
+ * The deploy stack test (deploy/test/stack.test.mjs, run by .github/workflows/docker.yml) registers
+ * its accounts through the running stack with testIdentity() from here, so it has no stamp rule of
+ * its own; the same test checks its username prefixes.
  *
  * ## Password
  *

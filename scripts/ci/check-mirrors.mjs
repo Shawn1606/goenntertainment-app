@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Checks that values written in more than one place still agree ("mirrors"):
-//   - Node major:  CI (NODE_VERSION in ci.yml) and the server image (server/Dockerfile FROM);
+//   - Node major:  CI (NODE_VERSION in ci.yml and in docker.yml, which runs the deploy tests) and
+//                  the server image (server/Dockerfile FROM);
 //   - PHP minor:   CI (PHP_VERSION in ci.yml), the API image (api/Dockerfile FROM) and the
 //                  constraint in api/composer.json ("^8.4" and "^8.4.1" both read as 8.4);
 //   - MySQL minor: every `image: mysql:` in ci.yml (service containers) and in
@@ -90,6 +91,7 @@ export const MIRRORS = [
     name: 'Node major',
     sources: [
       { file: '.github/workflows/ci.yml', what: 'NODE_VERSION', extract: all(/^\s*NODE_VERSION:\s*['"]?(\d+)['"]?\s*(?:#.*)?$/gm) },
+      { file: '.github/workflows/docker.yml', what: 'NODE_VERSION', extract: all(/^\s*NODE_VERSION:\s*['"]?(\d+)['"]?\s*(?:#.*)?$/gm) },
       { file: 'server/Dockerfile', what: 'FROM node:', extract: all(/^FROM\s+(?:--platform=\S+\s+)?node:(\d+)(?=[-.:@\s]|$)/gim) },
     ],
   },
