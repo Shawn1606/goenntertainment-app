@@ -64,8 +64,8 @@ export function resolveStored(value) {
 /** Removes a stored file, best effort: a file that is already gone is no error. Never throws. */
 export async function removeStored(value) {
   const target = resolveStored(value);
-  if (!target) return;
-  await fs.unlink(target).catch(() => {});
+  if (!target) return false;
+  return fs.unlink(target).then(() => true, () => false);
 }
 
 /**

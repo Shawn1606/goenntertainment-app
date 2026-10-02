@@ -13,14 +13,20 @@
  * Fast alles: Jede Tabelle, die an `users` haengt, hat ON DELETE CASCADE bzw.
  * SET NULL (siehe schema.sql). Events, Beitritte, Beitraege, Storys, Chats,
  * Freundschaften, Punkte, Zwei-Faktor-Vorgaenge – das geht mit der einen Zeile.
- * SET NULL steht ABSICHTLICH an drei Stellen, die das Konto ueberdauern sollen:
- * Meldungen (content_reports), KI-Pruefberichte (moderation_reports) und die
- * Admin-Spalten an fremden Zeilen (wer hat entschieden). Das sind Protokolle
- * ueber Vorgaenge, keine Inhalte der Person.
+ * SET NULL steht ABSICHTLICH an Stellen, die das Konto ueberdauern sollen:
+ * Meldungen (content_reports) und die Admin-Spalten an fremden Zeilen (wer hat
+ * entschieden). Das sind Protokolle ueber Vorgaenge, keine Inhalte der Person.
+ *
+ * The AI moderation log (moderation_reports) is NOT one of them any more (F-16): each row copies
+ * the person's own text and image as they were checked, so the rows go with the account, together
+ * with their images. (Its foreign key still says SET NULL; rows of older deletions and rows
+ * without an account are pruned by retention.js.)
  *
  * ## Was von Hand dazukommt
  *
- *   - `personal_access_tokens` (polymorph, ohne Fremdschluessel),
+ *   - `moderation_reports` of the account and their images (see above),
+ *   - `personal_access_tokens` (polymorph, ohne Fremdschluessel; only the account's own tokens,
+ *     TOKENABLE_TYPE, the same filter as setBan in auth.js),
  *   - `password_reset_tokens` (haengt an der E-Mail, nicht an der ID),
  *   - `sessions` von Laravel (ohne Fremdschluessel; die Tabelle gibt es nur,
  *     wo Laravel mitlaeuft),
@@ -37,6 +43,7 @@
  * Woche. Der Verlauf der anderen behaelt Titel, Ort und Datum (das ist ihre
  * Erinnerung, dass sie dort waren) und verliert nur das Bild.
  */
+import { TOKENABLE_TYPE } from './auth.js';
 import { pool } from './db.js';
 import { removeStored } from './storage.js';
 
@@ -44,10 +51,10 @@ import { removeStored } from './storage.js';
  * Alle Stellen, an denen ein Pfad unter storage/ stehen kann.
  *
  * Eine Datei wird nur geloescht, wenn danach KEINE dieser Spalten mehr auf sie
- * zeigt. Beispiel: Das Beweisbild einer KI-Sperre steht zugleich im Pruefbericht
- * (moderation_reports, bleibt) und im Sperr-Beweis (ban_evidence, geht mit dem
- * Konto) – dort muss es bleiben, sonst zeigt das Admin-Panel ein leeres Bild.
- * Neue Upload-Spalten gehoeren hier dazu.
+ * zeigt. Example: the evidence image of an AI ban stands both in the moderation log
+ * (moderation_reports) and in the ban evidence (ban_evidence); the retention prune
+ * (retention.js) may clear one while the other still shows it. Neue Upload-Spalten
+ * gehoeren hier dazu.
  */
 const FILE_REFERENCES = [
   ['users', 'avatar'],
@@ -74,7 +81,21 @@ async function stillReferenced(filePath) {
 }
 
 /**
- * Datei entfernen – best effort.
+ * Removes the stored files among `paths` that no column references any more (FILE_REFERENCES),
+ * best effort; returns how many it removed. Used after an account deletion and by the retention
+ * prune (retention.js), so a file another row still shows stays.
+ */
+export async function removeUnreferencedFiles(paths) {
+  let removed = 0;
+  for (const file of new Set(paths.filter(isStoredFile))) {
+    if (await stillReferenced(file)) continue;
+    if (await removeStoredFile(file)) removed += 1;
+  }
+  return removed;
+}
+
+/**
+ * Datei unter storage/ entfernen – best effort. Returns true when a file was removed.
  *
  * Der Pfad kommt zwar aus der eigenen DB, trotzdem wird geprueft, dass er
  * innerhalb seines Ordners bleibt: Ein `../` in einer Zeile waere sonst ein
@@ -83,7 +104,7 @@ async function stillReferenced(filePath) {
  * and evidence (F-11), so those go with the account too.
  */
 async function removeStoredFile(filePath) {
-  await removeStored(filePath);
+  return removeStored(filePath);
 }
 
 /**
@@ -130,6 +151,12 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
       'SELECT image_path AS p FROM ban_evidence WHERE user_id = ? AND image_path IS NOT NULL',
       [user.id],
     );
+    // The moderation log copies the person's own texts and images; it goes with the account
+    // (F-16). Its images are removed below unless another row still shows them.
+    const [moderation] = await conn.query(
+      'SELECT image_path AS p FROM moderation_reports WHERE user_id = ? AND image_path IS NOT NULL',
+      [user.id],
+    );
     const [activities] = await conn.query('SELECT id, banner_path AS p FROM activities WHERE user_id = ?', [
       user.id,
     ]);
@@ -166,7 +193,11 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
     // The participants' history was updated above, while activity_id was still set.
     await conn.query('DELETE FROM activities WHERE user_id = ?', [user.id]);
 
-    await conn.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [user.id]);
+    await conn.query('DELETE FROM moderation_reports WHERE user_id = ?', [user.id]);
+    await conn.query('DELETE FROM personal_access_tokens WHERE tokenable_type = ? AND tokenable_id = ?', [
+      TOKENABLE_TYPE,
+      user.id,
+    ]);
     await conn.query('DELETE FROM password_reset_tokens WHERE email = ?', [user.email]);
     try {
       await conn.query('DELETE FROM sessions WHERE user_id = ?', [user.id]);
@@ -184,6 +215,7 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
       ...posts.map((row) => row.p),
       ...stories.map((row) => row.p),
       ...evidence.map((row) => row.p),
+      ...moderation.map((row) => row.p),
       ...eventBanners,
     ].filter(isStoredFile);
   } catch (err) {
@@ -196,9 +228,7 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
   // Dateien erst NACH dem Commit: Kippt die Transaktion, zeigt das Konto
   // weiter auf Bilder, die es noch gibt. Umgekehrt (Datei weg, Konto noch da)
   // waere es ein Konto mit kaputten Bildern.
-  for (const file of new Set(files)) {
-    if (!(await stillReferenced(file))) await removeStoredFile(file);
-  }
+  await removeUnreferencedFiles(files);
 
   return 'deleted';
 }

@@ -25,7 +25,7 @@ import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
 import { resolveStored } from '../src/storage.js';
-import { createUser, deleteTestUsers } from './support/fixtures.js';
+import { TOKENABLE_TYPE, createUser, deleteTestUsers } from './support/fixtures.js';
 import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
 // A valid 1x1 PNG (the one written here before was malformed; see test/support/images.js).
 import { PNG_1X1 } from './support/images.js';
@@ -34,6 +34,8 @@ let base;
 let server;
 const createdUserIds = [];
 const createdFiles = [];
+/** moderation_reports rows the tests write; a bystander's rows outlive its account (SET NULL). */
+const createdReportIds = [];
 
 /** Throw-away account with a token, written straight to the database (test/support/fixtures.js). */
 const registerUser = (prefix, accountType = 'creator') =>
@@ -120,6 +122,9 @@ after(async () => {
   // The pool and the server are closed even when the cleanup throws; otherwise their open
   // handles keep this test process alive and `npm test` never exits.
   try {
+    if (createdReportIds.length > 0) {
+      await pool.query('DELETE FROM moderation_reports WHERE id IN (?)', [createdReportIds]);
+    }
     await deleteTestUsers(pool, createdUserIds);
     for (const file of createdFiles) {
       try {
@@ -292,4 +297,78 @@ test('DELETE /api/admin/users/:id raeumt jetzt auch die Dateien weg', async () =
   assert.equal(res.status, 200);
   assert.equal(await first('SELECT id FROM users WHERE id = ?', [victim.user.id]), null);
   assert.equal(fs.existsSync(storagePath(avatar)), false, 'das Profilbild muss mit weg sein');
+});
+
+/* ------------------------------------------- moderation log copies (F-16) */
+
+/**
+ * Two AI moderation reports of `userId` - one with an image file under storage/evidence, one with
+ * text only - and the ids of both. The rows copy the person's own content, as the moderation
+ * writes them (src/moderation.js saveReport).
+ */
+async function moderationReportsOf(userId) {
+  const image = writeStorageFile('evidence');
+  const ids = [];
+  for (const [body, imagePath] of [['eigener Text mit Bild', image], ['eigener Text', null]]) {
+    const [result] = await pool.query(
+      `INSERT INTO moderation_reports (user_id, context, verdict, severity, action, title, body, image_path, created_at)
+       VALUES (?, 'post', 'ok', 0, 'none', NULL, ?, ?, NOW())`,
+      [userId, body, imagePath],
+    );
+    ids.push(result.insertId);
+    createdReportIds.push(result.insertId);
+  }
+  return { ids, image };
+}
+
+const remainingReports = async (ids) =>
+  Number((await first('SELECT COUNT(*) AS c FROM moderation_reports WHERE id IN (?)', [ids])).c);
+
+test("DELETE /internal/accounts/:id removes the account's moderation reports and their images (F-16)", async () => {
+  const { user } = await registerUser('zfadelmod', 'standard');
+  const bystander = await registerUser('zfadelmodother', 'standard');
+  const own = await moderationReportsOf(user.id);
+  const other = await moderationReportsOf(bystander.user.id);
+
+  const res = await deleteInternal(user.id, { grant: await insertGrant(user.id) });
+  assert.equal(res.status, 200);
+
+  // Ids taken before: the old foreign key would only have set user_id to NULL.
+  assert.equal(await remainingReports(own.ids), 0, 'the moderation reports of the deleted account are still there');
+  assert.equal(fs.existsSync(storagePath(own.image)), false, 'the image of the moderation report is still there');
+  assert.equal(await remainingReports(other.ids), 2, "another account's reports must stay");
+  assert.equal(fs.existsSync(storagePath(other.image)), true);
+});
+
+test("DELETE /api/admin/users/:id removes the account's moderation reports and their images too (F-16)", async () => {
+  const admin = await registerUser('zfaadmmod', 'standard');
+  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [admin.user.id]);
+  const victim = await registerUser('zfaadmmodvictim', 'standard');
+  const own = await moderationReportsOf(victim.user.id);
+
+  const res = await fetch(`${base}/api/admin/users/${victim.user.id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${admin.token}` },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(await remainingReports(own.ids), 0, 'the moderation reports of the deleted account are still there');
+  assert.equal(fs.existsSync(storagePath(own.image)), false, 'the image of the moderation report is still there');
+});
+
+test('account deletion removes only the tokens of the account, not a token of another type with the same id', async () => {
+  const { user } = await registerUser('zfadeltype', 'standard');
+  // A token row of another owner type that happens to carry the same tokenable_id (Sanctum's
+  // tokens are polymorphic): it is not this account's and must stay.
+  const [foreign] = await pool.query(
+    `INSERT INTO personal_access_tokens (tokenable_type, tokenable_id, name, token, abilities, expires_at, created_at, updated_at)
+     VALUES (?, ?, 'test', ?, '["*"]', NOW() + INTERVAL 1 DAY, NOW(), NOW())`,
+    ['App\\Models\\Other', user.id, crypto.randomBytes(32).toString('hex')],
+  );
+  try {
+    assert.equal((await deleteInternal(user.id, { grant: await insertGrant(user.id) })).status, 200);
+    assert.ok(await first('SELECT id FROM personal_access_tokens WHERE id = ?', [foreign.insertId]), 'a token of another type was deleted');
+    assert.equal(await first('SELECT id FROM personal_access_tokens WHERE tokenable_type = ? AND tokenable_id = ?', [TOKENABLE_TYPE, user.id]), null);
+  } finally {
+    await pool.query('DELETE FROM personal_access_tokens WHERE id = ?', [foreign.insertId]);
+  }
 });
