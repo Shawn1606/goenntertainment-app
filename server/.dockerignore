@@ -10,8 +10,8 @@
 # unnoetig gross, sondern teilweise die falsche Architektur.
 node_modules/
 
-# Nutzer-Uploads. Liegen auf dem Server in benannten Volumes (uploads, private-media)
-# und gehoeren nicht in ein Abbild, das man weitergibt.
+# Nutzer-Uploads: gehoeren nicht in ein Abbild, das man weitergibt. On the server they
+# live in named volumes (uploads, private-media).
 storage/
 storage-private/
 

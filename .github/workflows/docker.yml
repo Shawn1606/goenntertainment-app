@@ -3,8 +3,8 @@
 # Warum es das gibt: Die Container werden auf einem Linux-Server betrieben, und am
 # Entwicklungs-PC ist Docker nicht installiert. Ohne diese Prüfung merkte man einen
 # kaputten Bauplan erst beim Ausrollen. Hier läuft bei jedem Push dasselbe wie auf
-# dem Server, Caddy eingeschlossen, nur in einem nach außen geschlossenen Netz, und
-# dann ein echter Durchgang durch Caddy.
+# dem Server: Caddy included, but on networks closed to the outside, and then a real
+# pass through Caddy.
 #
 # Two steps; README.md "Tests and checks" lists the same commands for a local run:
 #   - the static deploy checks (npm run test:deploy): the compose files as docker compose

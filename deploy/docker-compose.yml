@@ -4,7 +4,7 @@
 #                 ├─► media (public uploads as plain files, read-only; holds no secrets)
 #                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
 #                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
-#                 db  (MySQL)  ◄── beide Backends, die nächtliche Sicherung (backup)
+#                 db  (MySQL)  ◄── beide Backends; the nightly backup (backup)
 #
 # Genau die Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node dahinter), nur
 # dass niemand außer Caddy von außen erreichbar ist.
@@ -84,11 +84,12 @@ services:
     security_opt: ['no-new-privileges:true']
     logging: *logging
 
-  # Bereitet die Upload-Volumes vor und beendet sich dann wieder.
+  # Prepares the upload volumes (uploads, private-media), then exits.
   #
-  # Ein neues Volume gehört root. Das Node-Backend läuft aber absichtlich NICHT als
-  # root (Benutzer `node`, UID 1000) und könnte dort nichts speichern – jeder Upload
-  # scheiterte mit „Serverfehler". Dieser Einmal-Container gibt die Ordner dem Benutzer `node`.
+  # A new volume belongs to root. Das Node-Backend läuft aber absichtlich NICHT als root
+  # (Benutzer `node`, UID 1000) und könnte dort nichts speichern – jeder Upload scheiterte
+  # mit „Serverfehler". This one-off container gives the folders in both volumes to the user
+  # `node`.
   #
   # Als Liste und in EINER Zeile: Als gefalteter Block (`>`) mit tiefer
   # eingerückten Folgezeilen behält YAML die Zeilenumbrüche – die Shell las

@@ -32,9 +32,9 @@ COPY . .
 #   docker build --build-context shared=../shared .
 COPY --from=shared . /shared/
 
-# storage/ und storage-private/ liegen im Compose als benannte Volumes (uploads,
-# private-media) darueber. Das Anlegen hier ist fuer den Fall, dass jemand das
-# Abbild ohne Mount startet – sonst wirft express.static beim ersten Bild-Aufruf.
+# In the compose, the named volumes uploads and private-media lie over storage/ and
+# storage-private/. Das Anlegen hier ist fuer den Fall, dass jemand das Abbild ohne
+# Mount startet – sonst wirft express.static beim ersten Bild-Aufruf.
 # storage-private/ holds evidence and story images (F-11, src/storage.js): never served as static
 # files, never mounted into a web server.
 RUN mkdir -p storage/avatars storage/banners storage/posts storage/user-banners \

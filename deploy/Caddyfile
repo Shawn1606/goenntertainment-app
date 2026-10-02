@@ -59,8 +59,9 @@
 	}
 
 	handle {
-		# Alles andere geht an Laravel (Container `api`). Laravel beantwortet, was es kann,
-		# und reicht den Rest an das Node-Backend weiter – genau wie am PC.
+		# Everything else goes to Laravel (container `api`).
+		# Laravel beantwortet, was es kann, und reicht den Rest an das Node-Backend weiter –
+		# genau wie am PC.
 		reverse_proxy api:8080 {
 			# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
 			# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
