@@ -173,10 +173,13 @@ test('runbook: deploy/README.md is a runbook with every section an operator need
 
 test('runbook: every pointer to a runbook section names one that exists', () => {
   const titles = new Set([...sections(runbook()).keys(), ...sections(runbook(), 3).keys()].map((t) => t.toLowerCase()));
-  const scripts = path.join(REPO_ROOT, 'deploy', 'scripts');
+  const folder = (name) => {
+    const dir = path.join(REPO_ROOT, 'deploy', name);
+    return fs.existsSync(dir) ? fs.readdirSync(dir).map((f) => `deploy/${name}/${f}`) : [];
+  };
   const files = [
     'deploy/docker-compose.yml', 'deploy/.env.example', 'deploy/Caddyfile', 'api/docker/entrypoint.sh',
-    ...(fs.existsSync(scripts) ? fs.readdirSync(scripts).map((f) => `deploy/scripts/${f}`) : []),
+    ...folder('scripts'), ...folder('mysql'),
   ].filter((f) => fs.existsSync(path.join(REPO_ROOT, f)));
   const pointers = [];
   for (const file of files) {
@@ -396,6 +399,18 @@ test('runbook: no stale or guessed facts', () => {
   if (/deploy\/storage/.test(outside)) problems.push('deploy/storage outside "Moving from the old upload folders"');
   console.log(`stale-fact rules: ${rules.length + 1}`);
   assert.deepEqual(problems, []);
+});
+
+test('F-45: the runbook creates the binary-log rotation on a database volume older than it, from the file the db service mounts', () => {
+  const db = renderConfig({ profiles: ['tools'] }).services.db;
+  const rotate = (db.volumes ?? []).find((v) => v.type === 'bind' && /binlog-rotate\.sql$/.test(v.target));
+  assert.ok(rotate, 'the db service mounts no binary-log rotation');
+  const logs = commands(section('Logs'));
+  const create = logs.filter((c) => c.includes(`< ${rotate.target}`));
+  console.log(`Logs: ${logs.length} commands, ${create.length} load ${rotate.target}`);
+  assert.equal(create.length, 1, 'the Logs section has no command that creates the rotation in an existing database');
+  assert.match(create[0], /^docker compose exec -T db sh -c 'MYSQL_PWD="\$MYSQL_ROOT_PASSWORD" mysql -uroot < \S+'$/);
+  assert.ok(logs.some((c) => /@@event_scheduler/.test(c) && /information_schema\.EVENTS/.test(c)), 'no command shows the scheduler and the event');
 });
 
 test('api entrypoint: an empty APP_KEY prints the runbook\'s openssl command, not a compose command that cannot run', () => {

@@ -31,7 +31,7 @@ Internet ─► caddy :80/:443   HTTPS, security headers, the upload allow-list
 | `media` | `caddy:2-alpine` (pinned) | serves the public uploads as plain files, for caddy only (`deploy/Caddyfile.media`); runs as `nobody`, read-only, without settings or keys | media | `uploads` (read-only), `deploy/Caddyfile.media` | long-running |
 | `api` | built from `api/Dockerfile` | Laravel on port 8080 as the user `www-data`; answers its own routes and forwards the rest to Node; sends mail over SMTP | edge, app | none | long-running |
 | `node` | built from `server/Dockerfile` | the Node backend on port 8000 as the user `node` (uid 1000); applies its schema step before it listens; stores uploads; calls the moderation provider | app, outbound | `uploads`, `private-media` | long-running |
-| `db` | `mysql:8.4` (pinned) | the database `goenntertainment`; on the very first start (empty volume) it loads `server/schema.sql` | app, data | `db-data` | long-running |
+| `db` | `mysql:8.4` (pinned) | the database `goenntertainment`; on the very first start (empty volume) it loads `server/schema.sql` and creates the daily rotation of its binary log (`deploy/mysql/02-binlog-rotate.sql`) | app, data | `db-data` | long-running |
 | `backup` | `mysql:8.4` (pinned) | a database dump and an uploads archive every night at 02:30 UTC and once at start, then pruning (`deploy/scripts/backup.sh`) | data | `uploads` and `private-media` (read-only), `<BACKUP_DIR>` (host folder) | long-running |
 | `storage-init` | `busybox:1.37` (pinned) | creates the upload folders and gives them to uid 1000 | none | `uploads`, `private-media` | one-shot on every `up` |
 | `admin-gate` | `mysql:8.4` (pinned) | refuses to let `caddy` start while no admin account exists (`deploy/scripts/admin-gate.sh`) | data | none | one-shot on every `up` |
@@ -91,6 +91,7 @@ The mobile app is not a container: it is built with EAS and carries the server a
 | `deploy/.env.example` | the template for `deploy/.env`, with who decides each setting |
 | `deploy/scripts/preflight.sh` | checks `deploy/.env` and `<BACKUP_DIR>` before a start |
 | `deploy/scripts/backup.sh`, `deploy/scripts/admin-gate.sh`, `deploy/scripts/db-entrypoint.sh` | the scripts of the backup, admin-gate and db services |
+| `deploy/mysql/02-binlog-rotate.sql` | the event that rotates MySQL's binary log every day, created on the db service's first start |
 | `api/Dockerfile`, `server/Dockerfile` | the two images built on the server |
 | `deploy/docker-compose.ci.yml`, `deploy/ci.env` | CI and local tests only, never on a server |
 
@@ -151,7 +152,7 @@ missing one. `deploy/.env.example` carries the same list with longer comments.
 | `BACKUP_RETENTION_DAYS` | days a backup set is kept | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
 | `LOG_MAX_SIZE` | the size of one container log file | `______` (the operator, with whoever answers for data protection) | a whole number with the unit `k`, `m` or `g` |
 | `LOG_MAX_FILES` | how many log files each container keeps | `______` (the operator, with whoever answers for data protection) | a whole number, at least 1 |
-| `MYSQL_BINLOG_RETENTION_DAYS` | days MySQL keeps its binary log, which records every change, also the rows of deleted accounts | `______` (the operator, with whoever answers for data protection) | whole days from 1 to 9999, or `off` (no binary log); 0 is refused |
+| `MYSQL_BINLOG_RETENTION_DAYS` | days MySQL keeps its binary log, which records every change, also the rows of deleted accounts; the log is rotated daily, so a change stays at most two days longer ([Logs](#logs)) | `______` (the operator, with whoever answers for data protection) | whole days from 1 to 9999, or `off` (no binary log); 0 is refused |
 
 Generating the secrets: each command prints the value once, in your own terminal, so you can put it
 into `deploy/.env` and into the password manager. Never paste a value into a chat, a ticket or a
@@ -484,11 +485,25 @@ the status, the response size and duration, and the response headers. Laravel lo
 `LOG_LEVEL` up (default `warning`), Node its start and error lines; the project's rule is that no
 password, token or code is ever logged (`AGENTS.md`).
 
-MySQL's binary log is not a container log: it lives in the `db-data` volume and is kept for
-`MYSQL_BINLOG_RETENTION_DAYS` days. To see the value in effect:
+MySQL's binary log is not a container log: it lives in the `db-data` volume. MySQL deletes a
+binary-log file only when the log rotates, once the file's last write is more than
+`MYSQL_BINLOG_RETENTION_DAYS` days old. The db service turns on MySQL's event scheduler, and an
+event (`deploy/mysql/02-binlog-rotate.sql`, created as root on the first start of an empty volume)
+rotates the log once a day. So a change, including the rows of a deleted account, stays in the
+binary log at least `MYSQL_BINLOG_RETENTION_DAYS` days and at most two days longer; the backups
+keep their own copy for `BACKUP_RETENTION_DAYS` days. To see the values in effect and the event:
 
 ```bash
-docker compose exec db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -N -e "SELECT @@log_bin, @@binlog_expire_logs_seconds"'
+docker compose exec db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -N -e "SELECT @@log_bin, @@binlog_expire_logs_seconds, @@event_scheduler; SELECT EVENT_NAME, STATUS, INTERVAL_VALUE, INTERVAL_FIELD, LAST_EXECUTED FROM information_schema.EVENTS"'
+```
+
+Expected: `1`, the retention in seconds and `ON` (with `off`: `0`, MySQL's unused default and
+`ON`), then `binlog_rotate ENABLED 1 DAY` and the time of the last rotation (`NULL` during the
+first day). A `db-data` volume whose first start ran before this event existed does not have it:
+create it once (nothing changes when it exists):
+
+```bash
+docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot < /docker-entrypoint-initdb.d/02-binlog-rotate.sql'
 ```
 
 Whether the access log keeps full client addresses and query strings or masks them, and who may

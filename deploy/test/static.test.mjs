@@ -8,14 +8,14 @@
 // DEPLOY_DIR=<folder> runs the same checks against another deploy/ folder (lib.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import {
   CI_ENV, CI_OVERRIDE, COMPOSE_FILE, DEPLOY_DIR, ENV_EXAMPLE, REPO_ROOT, RUNBOOK,
   caddyAdapt, caddyHandlers, composeAsync, dockerRun, envFileValues, inCidr, interpolations,
-  ipToInt, mounts, parseEnvFile, readText, removeTemp, renderConfig, requiredSettings,
+  ipToInt, minimalEnv, mounts, parseEnvFile, readText, removeTemp, renderConfig, requiredSettings,
   serviceImage, variantEnvFile,
 } from './lib.mjs';
 
@@ -91,6 +91,39 @@ const healthTest = (s) => {
   const t = s.healthcheck?.test;
   return Array.isArray(t) ? t : t ? [t] : [];
 };
+
+/**
+ * `docker run --rm --network none ...` like lib.mjs's dockerRun, without blocking: for the checks
+ * that start a database server, so two of them can run side by side.
+ */
+function dockerRunAsync(image, { mounts: binds = [], env = {}, entrypoint, args = [] } = {}) {
+  const argv = ['run', '--rm', '--network', 'none'];
+  for (const m of binds) argv.push('--mount', `type=bind,src=${m.src},dst=${m.dst}${m.readonly === false ? '' : ',readonly'}`);
+  for (const [k, v] of Object.entries(env)) argv.push('-e', `${k}=${v}`);
+  if (entrypoint) argv.push('--entrypoint', entrypoint);
+  argv.push(image, ...args);
+  return new Promise((resolve, reject) => {
+    const child = spawn('docker', argv, { env: minimalEnv() });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (c) => { stdout += c; });
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+/** `key: value` lines of a check script's output: { key: value } (the last line of a key wins). */
+function reported(stdout) {
+  return Object.fromEntries(String(stdout).split(/\r?\n/).map((line) => /^([a-z][a-z ]*): ?(.*)$/.exec(line)).filter(Boolean).map((m) => [m[1], m[2]]));
+}
+
+/** The db service's bind mounts into the image's first-start folder, in the order MySQL runs them. */
+function initFiles(config = base()) {
+  return (config.services.db.volumes ?? [])
+    .filter((v) => v.type === 'bind' && String(v.target).startsWith('/docker-entrypoint-initdb.d/'))
+    .sort((a, b) => path.posix.basename(a.target).localeCompare(path.posix.basename(b.target)));
+}
 
 // ------------------------------------------------------------------------------ settings
 
@@ -521,11 +554,13 @@ test('F-45: the MySQL binary log keeps the required retention, never the MySQL d
   assert.deepEqual(db.entrypoint, ['bash', '/opt/deploy/db-entrypoint.sh']);
   assert.deepEqual(db.command, ['mysqld']);
   assert.equal(db.environment.MYSQL_BINLOG_RETENTION_DAYS, ciValues().MYSQL_BINLOG_RETENTION_DAYS);
+  // The event scheduler runs in every case: it rotates the binary log every day
+  // (deploy/mysql/02-binlog-rotate.sql), and with `off` the event changes nothing.
   const cases = [
-    ['1', 0, '--binlog-expire-logs-seconds=86400'],
-    ['30', 0, '--binlog-expire-logs-seconds=2592000'],
-    ['9999', 0, '--binlog-expire-logs-seconds=863913600'],
-    ['off', 0, '--disable-log-bin'],
+    ['1', 0, '--binlog-expire-logs-seconds=86400 --event-scheduler=ON'],
+    ['30', 0, '--binlog-expire-logs-seconds=2592000 --event-scheduler=ON'],
+    ['9999', 0, '--binlog-expire-logs-seconds=863913600 --event-scheduler=ON'],
+    ['off', 0, '--disable-log-bin --event-scheduler=ON'],
     ...['', '0', '00', '-1', '1.5', 'abc', '10000', 'OFF', '7d', ' 7'].map((v) => [v, 2, null]),
   ];
   const script = cases.map(([v], i) => `MYSQL_BINLOG_RETENTION_DAYS=${JSON.stringify(v)} bash /opt/deploy/db-entrypoint.sh --print-command mysqld > /tmp/out 2>&1; echo "case ${i} exit $?: $(tr '\\n' ' ' < /tmp/out)"`).join('\n');
@@ -545,6 +580,93 @@ test('F-45: the MySQL binary log keeps the required retention, never the MySQL d
     if (flag) assert.equal(m[2].trim(), `docker-entrypoint.sh mysqld ${flag}`);
     else assert.match(m[2], /MYSQL_BINLOG_RETENTION_DAYS must be/);
   });
+});
+
+test('F-45: the db service creates a daily binary-log rotation on its first start, and grants nothing', () => {
+  const config = base();
+  const db = config.services.db;
+  const files = initFiles(config);
+  console.log(`first-start files of db: ${files.length} (${files.map((f) => path.posix.basename(f.target)).join(', ')})`);
+  assert.ok(files.length > 0, 'the db service mounts nothing into /docker-entrypoint-initdb.d: refusing to report clean');
+  assert.deepEqual(files.filter((f) => f.read_only !== true).map((f) => f.target), [], 'first-start files mounted writable');
+  const rotate = files.find((f) => /binlog-rotate\.sql$/.test(f.target));
+  assert.ok(rotate, 'the db service mounts no binary-log rotation into /docker-entrypoint-initdb.d');
+  assert.equal(posix(path.relative(DEPLOY_DIR, rotate.source)), `mysql/${path.posix.basename(rotate.target)}`, 'the rotation comes from deploy/mysql/');
+  // MySQL runs these files as root, once, on an empty volume: the event runs as root, so neither
+  // the app user nor the backup needs the right to flush logs.
+  const sql = readText(rotate.source).split(/\r?\n/).filter((l) => !/^\s*--/.test(l)).join('\n');
+  const event = /^CREATE EVENT IF NOT EXISTS (\w+)\.binlog_rotate\s+ON SCHEDULE EVERY 1 DAY\b[^;]*\bDO FLUSH BINARY LOGS;\s*$/.exec(sql.trim());
+  assert.ok(event, `not one daily FLUSH BINARY LOGS event:\n${sql}`);
+  assert.equal(event[1], db.environment.MYSQL_DATABASE, "the event lives in the app's database");
+  assert.doesNotMatch(sql, /\b(GRANT|CREATE USER|ALTER USER|SET PASSWORD)\b/i, 'the first-start file changes rights');
+});
+
+// Runs inside the pinned db image with the compose's own entrypoint and first-start files: starts
+// MySQL, checks the event and the scheduler, then shortens the event to seconds (rotate every 2 s,
+// delete binary-log files older than 4 s), writes and deletes a row, and waits until no
+// binary-log file holds it any more. Prints `key: value` lines.
+const BINLOG_ROTATION_CHECK = String.raw`set -u
+bash /opt/deploy/db-entrypoint.sh mysqld > /tmp/mysqld.log 2>&1 &
+ready=0
+for i in $(seq 1 180); do
+  if mysqladmin ping -h 127.0.0.1 --silent > /dev/null 2>&1; then ready=1; break; fi
+  sleep 1
+done
+echo "ready: $ready"
+q() { MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -uroot -h127.0.0.1 -N -B -e "$1" 2>&1 | tr '\t\n' '  ' | sed 's/ *$//'; }
+echo "settings: $(q 'SELECT @@event_scheduler, @@log_bin, @@binlog_expire_logs_seconds')"
+echo "events: $(q 'SELECT COUNT(*) FROM information_schema.EVENTS')"
+echo "event: $(q "SELECT CONCAT_WS('|', EVENT_SCHEMA, EVENT_NAME, STATUS, INTERVAL_VALUE, INTERVAL_FIELD, DEFINER, EVENT_DEFINITION) FROM information_schema.EVENTS")"
+echo "shortened: $(q "SET GLOBAL binlog_expire_logs_seconds = 4; ALTER EVENT $MYSQL_DATABASE.binlog_rotate ON SCHEDULE EVERY 2 SECOND")"
+marker="binlog-marker-$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')"
+echo "row: $(q "CREATE TABLE $MYSQL_DATABASE.binlog_marker (v VARCHAR(64)); INSERT INTO $MYSQL_DATABASE.binlog_marker VALUES ('$marker'); DELETE FROM $MYSQL_DATABASE.binlog_marker")"
+holding() { grep -l -F "$marker" /var/lib/mysql/binlog.[0-9]* 2>/dev/null | wc -l; }
+echo "files with the row: $(holding)"
+gone=never
+for i in $(seq 1 45); do
+  sleep 1
+  if [ "$(holding)" = 0 ]; then gone=$i; break; fi
+done
+echo "gone after: $gone"
+echo "executed: $(q 'SELECT COUNT(*) FROM information_schema.EVENTS WHERE LAST_EXECUTED IS NOT NULL')"
+echo "event errors: $(grep -c -E '\[ERROR\].*binlog_rotate' /tmp/mysqld.log)"
+`;
+
+test('F-45: on a real MySQL the rotation removes a deleted row from the binary log once the retention passed (seconds for days), and runs cleanly with the log off', async () => {
+  const config = base();
+  const db = config.services.db;
+  const entrypoint = (db.volumes ?? []).find((v) => v.type === 'bind' && v.target === '/opt/deploy/db-entrypoint.sh');
+  assert.ok(entrypoint, 'the db service does not mount scripts/db-entrypoint.sh');
+  const files = initFiles(config);
+  assert.ok(files.some((f) => /binlog-rotate\.sql$/.test(f.target)), 'the db service mounts no binary-log rotation into /docker-entrypoint-initdb.d');
+  const start = (days) => dockerRunAsync(serviceImage('db'), {
+    mounts: [entrypoint, ...files].map((v) => ({ src: v.source, dst: v.target })),
+    env: { MYSQL_DATABASE: db.environment.MYSQL_DATABASE, MYSQL_ROOT_PASSWORD: 'test-only-not-a-secret-root', MYSQL_BINLOG_RETENTION_DAYS: days },
+    entrypoint: 'bash',
+    args: ['-c', BINLOG_ROTATION_CHECK],
+  });
+  const [on, off] = await Promise.all([start('1'), start('off')]);
+  const event = `${db.environment.MYSQL_DATABASE}|binlog_rotate|ENABLED|1|DAY|root@localhost|FLUSH BINARY LOGS`;
+  for (const [label, r] of [['1 day', on], ['off', off]]) {
+    assert.equal(r.status, 0, `${label}: ${r.stderr}`);
+    const got = reported(r.stdout);
+    console.log(`binary log ${label}: ${['settings', 'events', 'files with the row', 'gone after', 'executed', 'event errors'].map((k) => `${k} ${got[k]}`).join('; ')}`);
+    assert.equal(got.ready, '1', `${label}: MySQL did not start:\n${r.stdout}`);
+    assert.equal(got.events, '1', `${label}: one event`);
+    assert.equal(got.event, event, `${label}: the daily rotation`);
+    assert.equal(got.shortened, '', `${label}: shortening the event failed`);
+    assert.equal(got.row, '', `${label}: writing the row failed`);
+    assert.equal(got.executed, '1', `${label}: the event never ran`);
+    assert.equal(got['event errors'], '0', `${label}: MySQL logged errors of the event`);
+    if (label === 'off') {
+      assert.match(got.settings, /^ON 0 \d+$/, 'off: the event scheduler runs and the binary log is off');
+      assert.equal(got['files with the row'], '0');
+    } else {
+      assert.equal(got.settings, 'ON 1 86400', '1 day: the event scheduler runs and the binary log keeps 1 day');
+      assert.ok(Number(got['files with the row']) >= 1, '1 day: the row never reached the binary log, so its removal proves nothing');
+      assert.match(got['gone after'], /^\d+$/, '1 day: the deleted row stayed in the binary log for 45 s with a 4 s retention');
+    }
+  }
 });
 
 test('F-17: backups go to the required BACKUP_DIR bind, never created implicitly, and to a volume in CI', () => {
@@ -677,8 +799,11 @@ test('settings checked in two places use the same patterns (preflight and the se
 
 test('scripts the containers read from the working tree keep LF line ends', () => {
   assert.ok(fs.existsSync(path.join(DEPLOY_DIR, 'scripts')), 'no deploy/scripts folder');
+  const folder = (name) => (fs.existsSync(path.join(DEPLOY_DIR, name))
+    ? fs.readdirSync(path.join(DEPLOY_DIR, name)).map((f) => path.join(DEPLOY_DIR, name, f)) : []);
   const files = [
-    ...fs.readdirSync(path.join(DEPLOY_DIR, 'scripts')).map((f) => path.join(DEPLOY_DIR, 'scripts', f)),
+    ...folder('scripts'),
+    ...folder('mysql'),
     ...fs.readdirSync(DEPLOY_DIR).filter((f) => /^Caddyfile/.test(f)).map((f) => path.join(DEPLOY_DIR, f)),
   ];
   assert.ok(files.length > 1);

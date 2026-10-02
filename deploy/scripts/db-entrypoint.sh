@@ -9,6 +9,11 @@
 #   MYSQL_BINLOG_RETENTION_DAYS=<1..9999>   keep the binary log this many days
 #   MYSQL_BINLOG_RETENTION_DAYS=off         no binary log at all (no point-in-time restore)
 #
+# MySQL deletes a binary-log file only when the log rotates, once the file's last write is older
+# than the retention. The event in deploy/mysql/02-binlog-rotate.sql rotates the log every day, so
+# a change stays in it at least that many days and at most two days longer. The event needs the
+# event scheduler, which this script turns on whatever MySQL's default.
+#
 # Anything else stops the start with exit code 2 and a message that names the setting (never a
 # value of another setting).
 #
@@ -37,6 +42,8 @@ if [[ "$days" == 'off' ]]; then
 else
   binlog=("--binlog-expire-logs-seconds=$((days * 86400))")
 fi
+# The daily rotation is an event (deploy/mysql/02-binlog-rotate.sql); with `off` it changes nothing.
+binlog+=('--event-scheduler=ON')
 
 if [[ "$print_only" == 1 ]]; then
   printf '%s\n' "docker-entrypoint.sh $* ${binlog[*]}"

@@ -56,13 +56,18 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       # How many days MySQL keeps its binary log (every change, also of deleted accounts), or
-      # `off`. A retention decision (F-45) without a default; MySQL's own would be 30 days.
+      # `off`. A retention decision (F-45) without a default; MySQL's own would be 30 days. The
+      # log is rotated every day (mysql/02-binlog-rotate.sql), so a change leaves it at most two
+      # days after that many days.
       MYSQL_BINLOG_RETENTION_DAYS: ${MYSQL_BINLOG_RETENTION_DAYS:?MYSQL_BINLOG_RETENTION_DAYS is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
     volumes:
       - db-data:/var/lib/mysql
       # Legt beim ALLERERSTEN Start (leeres Volume) alle Tabellen an. Spätere
       # Ergänzungen macht das Node-Backend beim Start selbst (ensureSchema).
       - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # On the same first start, as root: the daily rotation of the binary log (an event; F-45).
+      # A volume created before this file needs it once: deploy/README.md, Logs.
+      - ./mysql/02-binlog-rotate.sql:/docker-entrypoint-initdb.d/02-binlog-rotate.sql:ro
       - ./scripts/db-entrypoint.sh:/opt/deploy/db-entrypoint.sh:ro
     healthcheck:
       # No credentials (F-18): mysqladmin ping exits 0 as soon as the server answers, even when it
