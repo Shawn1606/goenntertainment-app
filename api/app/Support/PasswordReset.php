@@ -141,7 +141,8 @@ final class PasswordReset
      * wrong code is counted.
      *
      * On success: the new password, every open reset code gone, and every session ended
-     * (Sessions::revokeAll: all tokens and every sign-in waiting for its second factor). Whoever
+     * (Sessions::revokeAll: all tokens and every sign-in waiting for its second factor), a
+     * sign-in under way at this moment included (Sessions, "Sign-ins under way"). Whoever
      * resets a password may be locking out someone who knew the old one.
      *
      * The username rule is checked only after the code matched (before, its message would tell a

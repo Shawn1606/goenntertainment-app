@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use Laravel\Sanctum\PersonalAccessToken;
 use RuntimeException;
@@ -24,9 +25,46 @@ use RuntimeException;
  * Both also end every sign-in that has passed the password and still waits for its second factor
  * (a 'login' challenge): it is a session in the making, and whoever changes a credential to lock
  * someone out must not leave them a way in by the code.
+ *
+ * ## Sign-ins under way while a credential changes
+ *
+ * A sign-in checks a credential first and writes its token afterwards; a change that commits in
+ * between must not leave a token behind that its revocation never saw. So no sign-in writes a
+ * token outside the transaction that holds the account's row lock:
+ *
+ *   - the password sign-in (issueIfUnchanged) reads the account again under its row lock and
+ *     writes the token in that transaction only if the columns in CREDENTIAL_COLUMNS still hold
+ *     what the password check saw;
+ *   - the two-factor sign-in writes its token in the transaction that locks the account's row,
+ *     then the challenge's, and deletes the challenge (TwoFactor::attempt).
+ *
+ * Every change that revokes sessions writes the account's row before it revokes (that write
+ * waits for the sign-in's lock), and a revocation deletes the open sign-ins before the tokens.
+ * Against the password sign-in the comparison decides: a change whose write committed before the
+ * sign-in's lock shows as a changed column, and one that waited for the lock writes, and revokes,
+ * after the token exists. Against the two-factor sign-in the challenge decides: the revocation
+ * either deletes it before the sign-in's transaction locks it (the sign-in finds it gone), or
+ * waits for that transaction and then deletes the tokens, the new one included.
+ * The changes, each with the column it writes before it revokes (pinned by
+ * tests/Unit/SessionRevocationSitesTest.php):
+ *
+ *   - password reset and password change: `password`;
+ *   - e-mail change: `email`;
+ *   - two-factor switched on or off: `two_factor_method`; new recovery codes change only the
+ *     codes, on an account whose sign-ins go through a challenge, which the revocation ends.
+ *
+ * Compared columns rather than a version number: every one of these changes writes one of them
+ * already, so no new column is needed in the five copies of the schema (F-33).
  */
 final class Sessions
 {
+    /**
+     * The columns a password sign-in's check depends on: the hash it checked, the address it
+     * found the account by, and two-factor sign-in being off (with it on, no token comes from
+     * the password alone).
+     */
+    public const CREDENTIAL_COLUMNS = ['password', 'email', 'two_factor_method'];
+
     /** Default token lifetime: 30 days, absolute from sign-in; SANCTUM_EXPIRATION overrides it. */
     public const DEFAULT_LIFETIME_MINUTES = 43200;
 
@@ -66,7 +104,48 @@ final class Sessions
         return $minutes;
     }
 
-    /** A new token for $user that expires after the lifetime; returns the bearer value. */
+    /**
+     * A new token for an account whose password the caller has just checked against $checked
+     * (the account as the caller read it), written only if the account still has those
+     * credentials: read again under its row lock, compared column by column (CREDENTIAL_COLUMNS),
+     * and the token written in the same transaction. Returns null, and writes nothing, when the
+     * account is gone or one of the columns changed after the caller read it; the caller then
+     * answers as for a wrong password.
+     */
+    public static function issueIfUnchanged(User $checked, mixed $deviceName): ?string
+    {
+        return DB::transaction(static function () use ($checked, $deviceName): ?string {
+            $locked = User::whereKey($checked->getKey())->lockForUpdate()->first();
+            if ($locked === null || ! self::sameCredentials($checked, $locked)) {
+                return null;
+            }
+
+            return self::issue($locked, $deviceName);
+        });
+    }
+
+    /** Do $a and $b hold the same stored values in every column of CREDENTIAL_COLUMNS? */
+    private static function sameCredentials(User $a, User $b): bool
+    {
+        foreach (self::CREDENTIAL_COLUMNS as $column) {
+            $left = $a->getRawOriginal($column);
+            $right = $b->getRawOriginal($column);
+
+            $same = $left === null || $right === null
+                ? $left === $right
+                : hash_equals((string) $left, (string) $right);
+            if (! $same) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * A new token for $user that expires after the lifetime; returns the bearer value. A sign-in
+     * calls it only inside the transaction that holds the account's row lock (class comment).
+     */
     public static function issue(User $user, mixed $deviceName): string
     {
         $name = is_string($deviceName) && trim($deviceName) !== ''
@@ -103,8 +182,11 @@ final class Sessions
     }
 
     /**
-     * Deletes the sign-ins of $user that wait for their second factor. First, so that a sign-in
-     * finished at this moment yields a token that the deletion of the tokens still catches.
+     * Deletes the sign-ins of $user that wait for their second factor. Before the tokens: a
+     * two-factor sign-in deletes its challenge and writes its token in one transaction, holding
+     * the challenge's row lock (TwoFactor::attempt). This deletion either removes the challenge
+     * first, and the sign-in finds it gone, or waits for that transaction, and the deletion of
+     * the tokens that follows catches the token it wrote.
      */
     private static function endOpenSignIns(User $user): void
     {

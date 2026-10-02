@@ -208,9 +208,7 @@ class AuthController extends Controller
         $user = User::where('email', $request->input('email'))->first();
 
         if ($user === null || ! Passwords::check((string) $request->input('password'), $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.'],
-            ]);
+            throw self::wrongCredentials();
         }
 
         // Gesperrte Konten kommen nicht rein - mit Details (Grund/Dauer) fuer das Popup.
@@ -231,7 +229,26 @@ class AuthController extends Controller
             return TwoFactor::startLogin($user);
         }
 
-        return $this->tokenResponse($request, $user);
+        /**
+         * The token only for the credentials just checked (F-09, F-20): a password reset or
+         * change, an e-mail change or switching two-factor sign-in on may have committed while
+         * the password was being checked. Then the account no longer has what was checked, and
+         * the answer is the one for a wrong password (App\Support\Sessions, "Sign-ins under way").
+         */
+        $token = Sessions::issueIfUnchanged($user, $request->input('device_name'));
+        if ($token === null) {
+            throw self::wrongCredentials();
+        }
+
+        return $this->tokenPayload($request, $user, $token);
+    }
+
+    /** Unknown address or wrong password: one answer for both. */
+    private static function wrongCredentials(): ValidationException
+    {
+        return ValidationException::withMessages([
+            'email' => ['Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.'],
+        ]);
     }
 
     /** POST /api/logout (geschuetzt) */
@@ -417,8 +434,12 @@ class AuthController extends Controller
     private function tokenResponse(Request $request, User $user, int $status = 200): JsonResponse
     {
         // With an expiry date (App\Support\Sessions, the one place that issues tokens).
-        $token = Sessions::issue($user, $request->input('device_name'));
+        return $this->tokenPayload($request, $user, Sessions::issue($user, $request->input('device_name')), $status);
+    }
 
+    /** The answer that carries a token already issued for $user. */
+    private function tokenPayload(Request $request, User $user, string $token, int $status = 200): JsonResponse
+    {
         return response()->json([
             'user' => (new UserResource($user))->withInterests()->toArray($request),
             'token' => $token,

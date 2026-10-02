@@ -227,18 +227,34 @@ final class TwoFactor
      * Der fuenfte Fehlversuch liefert schon TOO_MANY (nicht erst der sechste):
      * Die App soll in dem Moment sagen koennen „neu anmelden", in dem es
      * stimmt - nicht einen Versuch spaeter.
+     *
+     * `$onSuccess` (the sign-in: it writes the token) runs in the same transaction, right after
+     * the challenge is deleted, with the account's row as its argument. That row is then locked
+     * first, before the challenge, in the order of every other lock on both (password reset,
+     * e-mail change). A credential change that revokes sessions thus either ends the challenge
+     * before this transaction, or waits for it and revokes the token written here
+     * (App\Support\Sessions, "Sign-ins under way"). Without it, a reset could commit between
+     * the deletion of the challenge and a token written afterwards, and the token survived it.
      */
-    public static function attempt(TwoFactorChallenge $challenge, Closure $verify): string
+    public static function attempt(TwoFactorChallenge $challenge, Closure $verify, ?Closure $onSuccess = null): string
     {
         // Cap, check and count as one step per account (see withAccountLock).
-        return self::withAccountLock($challenge->user_id, function () use ($challenge, $verify): string {
+        return self::withAccountLock($challenge->user_id, function () use ($challenge, $verify, $onSuccess): string {
             // The account's cap first: at the cap no code is even looked at.
             if (self::accountLocked($challenge->user_id)) {
                 return self::LOCKED;
             }
 
             $guessed = false;
-            $result = DB::transaction(function () use ($challenge, $verify, &$guessed) {
+            $result = DB::transaction(function () use ($challenge, $verify, $onSuccess, &$guessed) {
+                $account = null;
+                if ($onSuccess !== null) {
+                    $account = User::whereKey($challenge->user_id)->lockForUpdate()->first();
+                    if ($account === null) {
+                        return self::EXPIRED;
+                    }
+                }
+
                 $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
 
                 if ($locked === null) {
@@ -253,6 +269,9 @@ final class TwoFactor
 
                 if ($verify($locked) === true) {
                     $locked->delete();
+                    if ($onSuccess !== null) {
+                        $onSuccess($account);
+                    }
 
                     return self::OK;
                 }
