@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   REPO_ROOT,
+  allowEntry,
   audit,
   composerIgnoreProblem,
   evaluate,
@@ -25,21 +26,41 @@ const npmReport = {
     'fixture-lib': {
       name: 'fixture-lib',
       severity: 'moderate',
+      isDirect: false,
       via: [
         { source: 1001, name: 'fixture-lib', title: 'Fixture prototype pollution', url: 'https://github.com/advisories/GHSA-aaaa-bbbb-cccc', severity: 'moderate' },
         { source: 1002, name: 'fixture-lib', title: 'Fixture advisory without GHSA url', url: '', severity: 'low' },
       ],
+      effects: ['fixture-parent'],
+      nodes: ['node_modules/fixture-lib'],
     },
-    'fixture-parent': { name: 'fixture-parent', severity: 'moderate', via: ['fixture-lib'] },
+    'fixture-parent': {
+      name: 'fixture-parent', severity: 'moderate', isDirect: true, via: ['fixture-lib'], effects: [], nodes: ['node_modules/fixture-parent'],
+    },
   },
   metadata: { dependencies: { prod: 10, dev: 5, optional: 0, peer: 0, peerOptional: 0, total: 15 } },
 };
+/** Allow-list entries for both advisories of npmReport, with the dependent npm reports. */
+const npmAllow = (reason = 'not reachable: fixture reason') => ({
+  'GHSA-aaaa-bbbb-cccc': { reason, via: ['fixture-parent'] },
+  'npm-1002': { reason: 'dev-only build tool, never shipped', via: ['fixture-parent'] },
+});
 
 test('npm: GHSA ids come from via[].url; string via entries (transitive paths) are not advisories', () => {
   const r = parseNpmAudit(npmReport);
   assert.equal(r.examined, 15);
   assert.deepEqual([...r.advisories.keys()].sort(), ['GHSA-aaaa-bbbb-cccc', 'npm-1002']);
   assert.equal(r.advisories.get('GHSA-aaaa-bbbb-cccc').pkg, 'fixture-lib');
+});
+
+test("npm: an advisory keeps its dependents: the vulnerable package's effects, and (direct) for the project's own manifest", () => {
+  assert.deepEqual(parseNpmAudit(npmReport).advisories.get('GHSA-aaaa-bbbb-cccc').dependents, ['fixture-parent']);
+  const direct = structuredClone(npmReport);
+  direct.vulnerabilities['fixture-lib'].isDirect = true;
+  assert.deepEqual(parseNpmAudit(direct).advisories.get('GHSA-aaaa-bbbb-cccc').dependents, ['(direct)', 'fixture-parent']);
+  const none = structuredClone(npmReport);
+  delete none.vulnerabilities['fixture-lib'].effects;
+  assert.deepEqual(parseNpmAudit(none).advisories.get('GHSA-aaaa-bbbb-cccc').dependents, []);
 });
 
 test('npm: an error object from npm is "could not run", never clean', () => {
@@ -55,22 +76,83 @@ test('evaluate: refuses to report clean when 0 packages were examined', () => {
 
 test('evaluate: fails on an advisory that is not allow-listed', () => {
   const { advisories } = parseNpmAudit(npmReport);
-  const r = evaluate({ examined: 15, advisories, allow: { 'npm-1002': 'dev-only build tool, never shipped' } });
+  const r = evaluate({ examined: 15, advisories, allow: { 'npm-1002': npmAllow()['npm-1002'] } });
   assert.equal(r.open, 1);
   assert.equal(r.allowListed, 1);
   assert.deepEqual(r.problems, ['GHSA-aaaa-bbbb-cccc fixture-lib (moderate): Fixture prototype pollution']);
 });
 
-test('evaluate: passes when every advisory is allow-listed with a reason', () => {
+test('evaluate: passes when every advisory is allow-listed with a reason and the dependents npm reports', () => {
   const { advisories } = parseNpmAudit(npmReport);
-  const allow = { 'GHSA-aaaa-bbbb-cccc': 'not reachable: fixture reason', 'npm-1002': 'dev-only build tool, never shipped' };
-  assert.deepEqual(evaluate({ examined: 15, advisories, allow }).problems, []);
+  assert.deepEqual(evaluate({ examined: 15, advisories, allow: npmAllow() }).problems, []);
 });
 
 test('evaluate: rejects an allow-list entry without a reason', () => {
   const { advisories } = parseNpmAudit(npmReport);
-  const allow = { 'GHSA-aaaa-bbbb-cccc': '  ', 'npm-1002': 'dev-only build tool, never shipped' };
-  assert.deepEqual(evaluate({ examined: 15, advisories, allow }).problems, ['allow-list entry GHSA-aaaa-bbbb-cccc has no reason']);
+  assert.deepEqual(evaluate({ examined: 15, advisories, allow: npmAllow('  ') }).problems, ['allow-list entry GHSA-aaaa-bbbb-cccc has no reason']);
+  const bare = { ...npmAllow(), 'GHSA-aaaa-bbbb-cccc': { via: ['fixture-parent'] } };
+  assert.deepEqual(evaluate({ examined: 15, advisories, allow: bare }).problems, ['allow-list entry GHSA-aaaa-bbbb-cccc has no reason']);
+});
+
+/*
+ * An allow-listed advisory that reaches new code. The fixture copies the shape of a real case: a
+ * build tool's dependency with an advisory (reached via a CLI and a signing helper), which a
+ * runtime package starts to use as well. npm dedupes it onto the same copy, so `nodes` stays the
+ * same and only `effects` grows.
+ */
+const spreadReport = (effects, { isDirect = false } = {}) => ({
+  auditReportVersion: 2,
+  vulnerabilities: {
+    'fixture-forge': {
+      name: 'fixture-forge',
+      severity: 'high',
+      isDirect,
+      via: [{ source: 2001, name: 'fixture-forge', title: 'Fixture signature forgery', url: 'https://github.com/advisories/GHSA-ffff-gggg-hhhh', severity: 'high' }],
+      effects,
+      nodes: ['node_modules/fixture-forge'],
+    },
+  },
+  metadata: { dependencies: { total: 40 } },
+});
+const TOOLING = ['fixture-cli', 'fixture-signing'];
+const forgeEntry = (via) => ({ reason: 'build tool only: fixture reason', ...(via ? { via } : {}) });
+
+test('evaluate: an allow-listed advisory reported through a dependent its entry does not list fails, although its copy is the same', () => {
+  const at = (report, entry) => evaluate({ examined: 40, ...parseNpmAudit(report), allow: { 'GHSA-ffff-gggg-hhhh': entry } }).problems;
+  assert.deepEqual(at(spreadReport(TOOLING), forgeEntry(TOOLING)), [], 'the dependents the reason assumes');
+  assert.deepEqual(at(spreadReport([...TOOLING, 'fixture-runtime']), forgeEntry(TOOLING)), [
+    'GHSA-ffff-gggg-hhhh fixture-forge (high) is now also reached via fixture-runtime, which allow-list entry GHSA-ffff-gggg-hhhh does not list; '
+      + 'check whether its reason still holds, then add them to "via" or fix the advisory',
+  ]);
+  // The project starts to depend on it itself.
+  assert.match(at(spreadReport(TOOLING, { isDirect: true }), forgeEntry(TOOLING)).join('\n'), /is now also reached via \(direct\), which/);
+  // An entry that records no dependents, or no list of names, cannot be checked.
+  assert.deepEqual(at(spreadReport(TOOLING), forgeEntry(null)), [
+    'allow-list entry GHSA-ffff-gggg-hhhh does not record the dependents its reason assumes; check the reason against them, then add "via" (npm reports: fixture-cli, fixture-signing)',
+  ]);
+  assert.deepEqual(at(spreadReport(TOOLING), 'build tool only: fixture reason'), at(spreadReport(TOOLING), forgeEntry(null)), 'a plain reason records no dependents');
+  assert.match(at(spreadReport(TOOLING), forgeEntry('fixture-cli')).join('\n'), /"via" must be a list of package names/);
+  assert.match(at(spreadReport(TOOLING), forgeEntry([''])).join('\n'), /"via" must be a list of package names/);
+  // A listed dependent npm no longer reports, and a key that is neither reason nor via.
+  assert.deepEqual(at(spreadReport(['fixture-cli']), forgeEntry(TOOLING)), [
+    'allow-list entry GHSA-ffff-gggg-hhhh lists via fixture-signing, which npm no longer reports; remove them (the list may only shrink)',
+  ]);
+  assert.deepEqual(at(spreadReport(TOOLING), { ...forgeEntry(TOOLING), vias: ['x'] }), [
+    'allow-list entry GHSA-ffff-gggg-hhhh has unknown keys (vias); only reason and via',
+  ]);
+  // No dependents at all is a list too: an empty one.
+  assert.deepEqual(at(spreadReport([]), forgeEntry([])), []);
+});
+
+test('evaluate: composer names no dependents, so its entries carry a reason only', () => {
+  const report = { advisories: { 'a/one': [{ packageName: 'a/one', title: 'Fixture XSS', severity: 'medium', sources: [{ remoteId: 'GHSA-1111-2222-3333' }] }] } };
+  const { advisories } = parseComposerAudit(report, { packages: [{ name: 'a/one' }] });
+  const at = (entry) => evaluate({ examined: 1, advisories, allow: { 'GHSA-1111-2222-3333': entry } }).problems;
+  assert.deepEqual(at('not reachable: fixture reason'), []);
+  assert.deepEqual(at({ reason: 'not reachable: fixture reason' }), []);
+  assert.deepEqual(at({ reason: 'not reachable: fixture reason', via: ['a/two'] }), [
+    'allow-list entry GHSA-1111-2222-3333: this audit names no dependents, so "via" cannot be checked; remove it',
+  ]);
 });
 
 test('evaluate: a stale allow-list entry fails (the list may only shrink)', () => {
@@ -210,7 +292,7 @@ test('audit: a clean npm report is exit 0 with the denominator line', () => {
 });
 
 test('audit: an advisory that is not allow-listed is exit 1 and is named', () => {
-  const allow = { 'npm:app': { 'npm-1002': 'fixture reason: dev-only tool' }, 'composer:api': {} };
+  const allow = { 'npm:app': { 'npm-1002': { reason: 'fixture reason: dev-only tool', via: ['fixture-parent'] } }, 'composer:api': {} };
   withRoot(
     NPM_FILES,
     ({ root, allowlist }) => {
@@ -226,6 +308,35 @@ test('audit: an advisory that is not allow-listed is exit 1 and is named', () =>
     },
     allow,
   );
+});
+
+test('audit: an allow-listed advisory that npm now reports through another dependent is exit 1, not clean', () => {
+  const spread = spreadReport([...TOOLING, 'fixture-runtime']);
+  const header = 'npm app: examined 40 packages, 1 advisories (1 allow-listed, 0 open)';
+  // An entry with a reason only, as the allow-list had them: the new dependent must not pass unseen.
+  withRoot(NPM_FILES, ({ root, allowlist }) => {
+    const { run } = fakeRun({ json: spread });
+    const r = audit('npm', 'app', { root, allowlist, run });
+    assert.equal(r.code, 1, `an allow-listed advisory reached through a new dependent was reported clean: ${r.lines.join(' | ')}`);
+    assert.deepEqual(r.lines, [
+      header,
+      '  - allow-list entry GHSA-ffff-gggg-hhhh does not record the dependents its reason assumes; check the reason against them, then add "via" (npm reports: fixture-cli, fixture-runtime, fixture-signing)',
+      'FAIL: 1 problem(s)',
+    ]);
+  }, { 'npm:app': { 'GHSA-ffff-gggg-hhhh': 'build tool only: fixture reason' } });
+  // An entry that records the dependents its reason assumes.
+  withRoot(NPM_FILES, ({ root, allowlist }) => {
+    assert.deepEqual(audit('npm', 'app', { root, allowlist, run: fakeRun({ json: spread }).run }), {
+      code: 1,
+      lines: [
+        header,
+        '  - GHSA-ffff-gggg-hhhh fixture-forge (high) is now also reached via fixture-runtime, which allow-list entry GHSA-ffff-gggg-hhhh does not list; '
+          + 'check whether its reason still holds, then add them to "via" or fix the advisory',
+        'FAIL: 1 problem(s)',
+      ],
+    });
+    assert.deepEqual(audit('npm', 'app', { root, allowlist, run: fakeRun({ json: spreadReport(TOOLING) }).run }), { code: 0, lines: [header, 'OK'] });
+  }, { 'npm:app': { 'GHSA-ffff-gggg-hhhh': forgeEntry(TOOLING) } });
 });
 
 test("audit: composer.json's own config.audit.ignore fails a clean composer report (exit 1)", () => {
@@ -306,12 +417,22 @@ test('runTool: empty output, output that is not JSON and a command that does not
   }
 });
 
-test('the repository allow-list has one section per audited lock file and reasons for every entry', () => {
+test('the repository allow-list has one section per audited lock file, reasons for every entry and the dependents of every npm entry', () => {
   const data = JSON.parse(readFileSync(join(REPO_ROOT, '.github', 'audit-allowlist.json'), 'utf8'));
+  let entries = 0;
   for (const section of ['npm:.', 'npm:server', 'composer:api']) {
     assert.equal(typeof data[section], 'object', section);
-    for (const [id, reason] of Object.entries(data[section])) {
+    for (const [id, value] of Object.entries(data[section])) {
+      entries += 1;
+      const { reason, via, unknown } = allowEntry(value);
       assert.ok(typeof reason === 'string' && reason.trim().length > 0, `${section} ${id} needs a reason`);
+      assert.deepEqual(unknown, [], `${section} ${id}: only reason and via`);
+      if (section.startsWith('npm:')) {
+        assert.ok(Array.isArray(via) && via.every((d) => typeof d === 'string' && d.trim() !== ''), `${section} ${id} needs "via": the dependents its reason assumes`);
+      } else {
+        assert.equal(via, undefined, `${section} ${id}: composer names no dependents`);
+      }
     }
   }
+  console.log(`allow-list: ${entries} entries in 3 sections`);
 });
