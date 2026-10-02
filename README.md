@@ -78,7 +78,8 @@ Without Docker, the Mailpit binary does the same: download it from the
 ## Tests and checks
 
 This is the one list of test suites and checks. CI runs all of them on every pull request
-([`.github/workflows/ci.yml`](.github/workflows/ci.yml)); run them locally before you commit.
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml); the two deploy rows in
+[`.github/workflows/docker.yml`](.github/workflows/docker.yml)); run them locally before you commit.
 Every test file belongs to exactly one of these globs; a new suite or glob is added here and in
 CI together.
 
@@ -98,8 +99,9 @@ CI together.
 | Workflow policy | | `node scripts/ci/check-workflows.mjs .github/workflows --ci-env deploy/ci.env` | |
 | Values written in several places (CI and Dockerfile versions, the internal secret rules, the request body limits) | | `node scripts/ci/check-mirrors.mjs` | |
 | Workflow lint | | actionlint, see [`.github/actionlint/Dockerfile`](.github/actionlint/Dockerfile) | Docker |
-| Dependency audit | | `node scripts/ci/audit.mjs npm .`, `… npm server`, `… composer api` | network (registry); not blocking yet |
-| Container smoke test | | [`.github/workflows/docker.yml`](.github/workflows/docker.yml) with [`deploy/ci.env`](deploy/ci.env) | Docker |
+| Dependency audit | | `node scripts/ci/audit.mjs npm .`, `… npm server`, `… composer api` | network (registry); blocking (advisories fixed or listed in `.github/audit-allowlist.json`) |
+| Deploy static checks | `deploy/test/*.test.mjs` except `stack.test.mjs` | `npm run test:deploy` (the compose files as Compose renders them with [`deploy/ci.env`](deploy/ci.env), the Caddyfile as Caddy adapts it, the scripts and the Dockerfiles; starts no stack) | Docker: the CLI and the pinned `mysql` and `caddy` images |
+| Deploy stack test | `deploy/test/stack.test.mjs` | `COMPOSE_PROJECT_NAME=<a name of its own> npm run test:deploy:stack` (PowerShell: set `$env:COMPOSE_PROJECT_NAME` first). It builds the images, starts the whole stack with `deploy/docker-compose.ci.yml` and `deploy/ci.env` on internal networks, checks it through Caddy from a probe container, and removes it with its volumes and built images | Docker with Compose >= 2.24.4; registry access for the image builds; the subnet of `APP_NET_PREFIX` (`deploy/ci.env`) free on this host |
 
 One-time setup per clone:
 
