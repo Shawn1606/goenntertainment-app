@@ -171,6 +171,51 @@ test('the host is notified of a comment on their event, but not of their own (F-
   assert.equal(later.length, 1, 'the host was notified of their own comment');
 });
 
+test('a deleted comment takes its text out of the notification it left (F-08)', async () => {
+  const host = await createUser('crephost', { accountType: 'creator' });
+  const guest = await createUser('crepguest');
+  const admin = await createUser('crepadmin', { isAdmin: true });
+  const activityId = await event(host.user.id);
+  const postId = await postOf(host.user.id);
+
+  // Through the routes, so every comment leaves its notification as it does in the app. The same
+  // text twice under the event: deleting one of them may take only one notification with it.
+  const sent = {};
+  for (const [key, path_, body] of [
+    ['event', `/api/activities/${activityId}/comments`, 'weg vom Event'],
+    ['eventTwin', `/api/activities/${activityId}/comments`, 'weg vom Event'],
+    ['eventStays', `/api/activities/${activityId}/comments`, 'bleibt am Event'],
+    ['post', `/api/posts/${postId}/comments`, 'weg vom Beitrag'],
+    ['postStays', `/api/posts/${postId}/comments`, 'bleibt am Beitrag'],
+  ]) {
+    const res = await call('POST', path_, guest.token, { body });
+    assert.equal(res.status, 201, `${key}: the comment was not written`);
+    sent[key] = res.body.data.id;
+  }
+  const bodiesFor = async () => (await notificationsOf(host.user.id)).map((n) => n.body);
+  assert.equal((await bodiesFor()).length, 5, 'control: every comment left a notification');
+
+  // An admin removes the event comment (the moderation action), the author their post comment.
+  assert.equal((await call('DELETE', `/api/activities/${activityId}/comments/${sent.event}`, admin.token)).status, 200);
+  assert.equal((await call('DELETE', `/api/comments/${sent.post}`, guest.token)).status, 200);
+
+  const left = await bodiesFor();
+  assert.deepEqual(
+    left.filter((body) => body === 'weg vom Event'),
+    ['weg vom Event'],
+    'the notification of the deleted event comment is still there (or its twin went too)',
+  );
+  assert.ok(!left.includes('weg vom Beitrag'), 'the notification of the deleted post comment is still there');
+  assert.ok(left.includes('bleibt am Event') && left.includes('bleibt am Beitrag'), 'a notification of a comment that still exists went');
+
+  // The twin goes once its own comment goes, through the API too.
+  assert.equal((await call('DELETE', `/api/activities/${activityId}/comments/${sent.eventTwin}`, guest.token)).status, 200);
+  const listed = await call('GET', '/api/notifications', host.token);
+  assert.equal(listed.status, 200);
+  assert.ok(!JSON.stringify(listed.body).includes('weg vom'), 'a deleted comment text is still in the notifications');
+  assert.equal(listed.body.data.length, 2);
+});
+
 test('an admin in a block relation with the post owner can still remove a comment (F-13)', async () => {
   const author = await createUser('crepauthor', { accountType: 'creator' });
   const writer = await createUser('crepwriter');

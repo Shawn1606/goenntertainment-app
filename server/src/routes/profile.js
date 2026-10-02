@@ -23,7 +23,7 @@ import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl } from '../media.js';
 import { blockExistsBetween, hiddenByBlock, notBlockedWith, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
-import { notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
+import { forgetCommentNotification, notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
 import { singleUpload } from '../uploads.js';
 import { ALLOWED_MIME, processImageOr422 } from '../images.js';
@@ -974,7 +974,7 @@ router.post('/posts/:id/comments', requireAuth, rateLimit('comment'), async (req
 router.delete('/comments/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const row = await first(
-      `SELECT c.id, c.user_id, c.post_id, p.user_id AS post_user_id
+      `SELECT c.id, c.user_id, c.post_id, c.body, c.created_at, p.user_id AS post_user_id
          FROM post_comments c JOIN posts p ON p.id = c.post_id WHERE c.id = ?`,
       [req.params.id],
     );
@@ -988,7 +988,16 @@ router.delete('/comments/:id', requireAuth, rateLimit('content'), async (req, re
 
     // Deleting one's own comment always works, also after a block (F-13) ...
     await pool.query('DELETE FROM post_comments WHERE id = ?', [row.id]);
-    // ... but the answer shows the post only to someone it is not hidden from, like DELETE
+    // ... and the post owner's notification, which copied the text, goes with it (F-08).
+    await forgetCommentNotification({
+      userId: row.post_user_id,
+      actorId: row.user_id,
+      type: 'comment',
+      refId: row.post_id,
+      body: row.body,
+      createdAt: row.created_at,
+    });
+    // The answer shows the post only to someone it is not hidden from, like DELETE
     // /posts/:id/like. Admins are left out: removing a reported comment is moderation, and the
     // admin panel goes on to close the report after this answer.
     if (!req.user.is_admin && (await hiddenByBlock(req.user.id, row.post_user_id))) {

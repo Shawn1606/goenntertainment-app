@@ -8,7 +8,7 @@ import { abilitiesFor } from '../accounts.js';
 import { accountTiersEnabled, hideImportedSql } from '../features.js';
 import { awardActivityPoints } from '../rewards.js';
 import { mediaUrl, publicBase } from '../media.js';
-import { notifyFollowers, notifyQuietly } from '../notifications.js';
+import { forgetCommentNotification, notifyFollowers, notifyQuietly } from '../notifications.js';
 import { blockExistsBetween, notBlockedWith, transformUser } from '../people.js';
 import { logError } from '../log.js';
 import { singleUpload } from '../uploads.js';
@@ -987,7 +987,7 @@ router.delete('/:id/comments/:commentId', requireAuth, rateLimit('content'), asy
     // Nur Kommentare DIESES Events: Eine fremde Kommentar-ID unter der eigenen
     // Event-ID darf den Host-Status nicht auf ein anderes Event uebertragen.
     const comment = await first(
-      'SELECT id, user_id FROM activity_comments WHERE id = ? AND activity_id = ?',
+      'SELECT id, user_id, body, created_at FROM activity_comments WHERE id = ? AND activity_id = ?',
       [Number(req.params.commentId) || 0, activity.id],
     );
     if (!comment) throw new HttpError(404, 'Diesen Kommentar gibt es nicht.');
@@ -999,6 +999,15 @@ router.delete('/:id/comments/:commentId', requireAuth, rateLimit('content'), asy
     if (!mayDelete) throw new HttpError(403, 'Das darfst du nicht.');
 
     await pool.query('DELETE FROM activity_comments WHERE id = ?', [comment.id]);
+    // The host's notification copied the text (F-08): it goes with the comment.
+    await forgetCommentNotification({
+      userId: activity.user_id,
+      actorId: comment.user_id,
+      type: 'activity_comment',
+      refId: activity.id,
+      body: comment.body,
+      createdAt: comment.created_at,
+    });
     res.json({
       message: 'Kommentar geloescht.',
       activity: await loadSingle(req, activity.id, req.user.id),

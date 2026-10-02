@@ -200,6 +200,34 @@ export async function notifyQuietly(input) {
   }
 }
 
+/**
+ * Removes the notification a comment left (types 'comment' and 'activity_comment') once the
+ * comment is deleted (F-08): the row copies the comment's text (see the head of this file), and a
+ * comment removed by its author, the host or a moderator must not stay readable there.
+ *
+ * The row has no comment id (`ref_id` is the post or event the app opens), so it is found by
+ * recipient, author, type, target and the exact stored text (clamped as notify() stored it, compared
+ * byte for byte). Exactly one row goes: of two comments with the same text the other one still
+ * exists, so its notification stays; the one written closest to the comment's own time is taken.
+ * Never throws, like notifyQuietly: the comment is deleted either way.
+ */
+export async function forgetCommentNotification({ userId, actorId, type, refId, body, createdAt = null }) {
+  if (!userId || Number(userId) === Number(actorId)) return; // notify() wrote nothing then
+  const stored = clamp(body, MAX_BODY);
+  if (stored === null) return;
+  try {
+    await pool.query(
+      `DELETE FROM notifications
+        WHERE user_id = ? AND actor_id = ? AND type = ? AND ref_id = ? AND body COLLATE utf8mb4_bin = ?
+        ORDER BY ABS(TIMESTAMPDIFF(SECOND, created_at, COALESCE(?, created_at))), id
+        LIMIT 1`,
+      [userId, actorId, type, refId, stored, createdAt],
+    );
+  } catch (err) {
+    logError("Could not remove a deleted comment's notification", err);
+  }
+}
+
 /** Eine Benachrichtigung in die API-Form bringen. */
 export function transformNotification(req, row) {
   return {
