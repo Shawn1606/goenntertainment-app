@@ -119,6 +119,9 @@ jobs:
           echo "--- Bild abrufen: Node hat es gespeichert, Laravel liefert es aus"
           curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' "$BASE${BANNER#"https://$DOMAIN"}"
 
+          echo "--- Gespeicherte Dateien kommen mit nosniff (F-11)"
+          curl -fsSI "$BASE${BANNER#"https://$DOMAIN"}" | tr -d '\r' | grep -qi '^x-content-type-options: *nosniff$'
+
           echo "--- Wortfilter greift auch im Container"
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/register" \
             -H 'Content-Type: application/json' -H 'Accept: application/json' \

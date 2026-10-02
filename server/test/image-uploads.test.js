@@ -276,6 +276,21 @@ test('the stored extension and type follow the bytes, not the declared type', as
   assert.match(String(stored.type), /^image\/png/);
 });
 
+test('stored files are served with nosniff at every upload route', async () => {
+  // Public files (avatar, banners, post image) through /storage, private ones (story image,
+  // evidence) through their checked routes: every stored file tells the browser not to guess.
+  const routes = uploadRoutes();
+  assert.equal(routes.length, 7, 'denominator: every upload route');
+  for (const route of routes) {
+    const sent = await send(route, PNG_1X1, 'image/png');
+    assert.ok([200, 201].includes(sent.status), `${route.name}: ${sent.status} ${JSON.stringify(sent.json)}`);
+    const url = await route.url(sent.json, sent.before);
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${route.token}` } });
+    assert.equal(res.status, 200, `${route.name}: fetching ${url}`);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', `${route.name}: ${url}`);
+  }
+});
+
 test('a declared type that is not an image is still refused first (regression)', async () => {
   const route = uploadRoutes().find((r) => r.name === 'POST /api/posts');
   const sent = await send(route, PNG_1X1, 'application/pdf', 'datei.pdf');

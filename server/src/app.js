@@ -11,7 +11,7 @@ import { clientErrorFor } from './client-errors.js';
 import { logError } from './log.js';
 import { createLimitStore, resolveWriteLimits } from './rate-limit.js';
 import { internalSecret as internalSecretSetting, trustProxySetting } from './config.js';
-import { isPrivateStoragePath, PUBLIC_ROOT } from './storage.js';
+import { isPrivateStoragePath, PUBLIC_ROOT, setStoredFileHeaders } from './storage.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
 import businessRouter from './routes/business.js';
@@ -123,7 +123,9 @@ export function createApp({
   app.use('/storage', (req, res, next) =>
     isPrivateStoragePath(req.path) ? res.status(404).json({ message: 'Nicht gefunden.' }) : next(),
   );
-  app.use('/storage', express.static(PUBLIC_ROOT));
+  // nosniff and a restrictive CSP on every stored file (storage.js setStoredFileHeaders): the browser
+  // takes the type as sent, and a file opened on its own runs nothing (F-11).
+  app.use('/storage', express.static(PUBLIC_ROOT, { setHeaders: setStoredFileHeaders }));
 
   // Internal routes for Laravel and the container health check (GET /internal/health); never
   // forwarded from outside (Laravel forwards only /api paths). Unknown internal paths get the
