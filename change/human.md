@@ -250,6 +250,25 @@ ANTHROPIC_API_KEY=sk-ant-...
 Alles Weitere (Sperr-Dauer, ab welcher Stufe gesperrt wird, Aus-Schalter) steht mit Erklärung
 in `server/.env.example`.
 
+> **Nachtrag (Sicherheits-Update: Inhalte und Datenschutz):** Die Prüfung ist jetzt streng. Was
+> oben unter „Fällt die KI aus" und hier in Schritt 3 steht, gilt so nicht mehr:
+>
+> - Kann die KI nicht gefragt werden (kein Schlüssel, Ausfall, Zeitüberschreitung, unlesbare
+>   Antwort), wird der Inhalt **abgelehnt**: Events, Beiträge, Kommentare, Profilbilder und
+>   Storys. Wer etwas hochlädt, liest dann „Die Inhaltspruefung ist gerade nicht erreichbar";
+>   gesperrt wird dabei niemand, und du siehst den Fall weiter in der Liste.
+> - `MODERATION_FAIL_OPEN=true` lässt Inhalte bei einem Ausfall ungeprüft durch. Das ist nur ein
+>   Notschalter für einen Ausfall: bewusst setzen und danach wieder entfernen.
+> - Auf dem Server startet das Backend ohne `ANTHROPIC_API_KEY` nicht, und
+>   `MODERATION_ENABLED=false` wird dort abgelehnt.
+> - Steht im Terminal **„KI-Moderation: AN ohne ANTHROPIC_API_KEY"**, wird alles abgelehnt, was
+>   geprüft wird (außer der Notschalter `MODERATION_FAIL_OPEN=true` ist gesetzt).
+> - **„KI-Moderation: AUS"** heißt jetzt nur noch `MODERATION_ENABLED=false`: absichtlich
+>   ausgeschaltet, nur am PC zum Entwickeln. Die Vorlage `server/.env.example` enthält diese
+>   Zeile, damit du ohne Schlüssel arbeiten kannst.
+> - Wenn du den Schlüssel in `server/.env` einträgst, dort `MODERATION_ENABLED` auf `true`
+>   setzen oder die Zeile löschen – sonst bleibt die Prüfung aus.
+
 **Was ich ehrlich dazusagen muss:**
 - Ich hatte hier **keinen Zugangsschlüssel**, konnte also keinen echten KI-Aufruf machen.
   Ich habe stattdessen einen Test-Server gebaut, der so antwortet wie die echte KI, und damit
@@ -1456,6 +1475,8 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
   dort die `MAIL_*`-Zeilen aus `api/.env.example` übernehmen (`MAIL_MAILER=smtp`,
   `MAIL_HOST=127.0.0.1`, `MAIL_PORT=1025`). Danach die alte `api/storage/logs/laravel.log`
   löschen (sie kann Codes enthalten). Ab dann stehen Codes nie mehr in einem Log.
+  „Passwort vergessen" schickt jetzt einen 6-stelligen Code per E-Mail statt eines Links: Ohne
+  Mail-Zugang kann also auch niemand sein Passwort zurücksetzen.
 - Node beantwortet keine Laravel-Pfade mehr (Anmelden, Registrieren, eigenes Konto,
   Fortschritt, Rangliste): Die App muss mit Laravel auf Port 8000 sprechen, Node läuft dahinter
   auf 8001. Konto löschen geht von Laravel über einen internen Node-Pfad mit gemeinsamem
@@ -1465,6 +1486,27 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
   `api/.env.example`. Node prüft seine Gesundheit jetzt unter `/internal/health` statt
   `/api/health`. Auf dem Server sind `NODE_INTERNAL_SECRET` und `APP_NET_PREFIX` in
   `deploy/.env` Pflicht (siehe `deploy/.env.example`).
+- Sicherheits-Update für Inhalte und Datenschutz:
+  - Auf dem Server sind in `deploy/.env` außerdem Pflicht: `ANTHROPIC_API_KEY` (der Schlüssel
+    für die KI-Prüfung) und die vier Aufbewahrungsfristen `EVIDENCE_RETENTION_DAYS`,
+    `MODERATION_REPORT_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS` und `USAGE_RETENTION_DAYS`, in
+    ganzen Tagen (`USAGE_RETENTION_DAYS` mindestens 120). Wessen Anbieter-Konto und Schlüssel
+    das ist und wie lange was aufbewahrt wird, entscheidest du; Vorgaben gibt es absichtlich
+    keine. Ohne diese Werte startet der Server nicht (siehe `deploy/.env.example` und
+    `deploy/README.md`, Schritt 4).
+  - Einmal `npm --prefix server ci` ausführen: Der Server braucht jetzt das Paket `sharp` (es
+    rechnet jedes hochgeladene Bild neu und entfernt dabei Standort- und Kameradaten). Ohne das
+    Paket startet das Backend nicht.
+  - Ein vorhandenes `server/.env` aus der alten Vorlage enthält noch `MODERATION_FAIL_OPEN=true`:
+    die Zeile löschen oder auf `false` setzen, damit es am PC so streng zugeht wie auf dem
+    Server. Ohne Schlüssel dann außerdem `MODERATION_ENABLED=false` setzen (nur am PC), sonst
+    wird jeder geprüfte Inhalt abgelehnt (siehe Abschnitt 14, Nachtrag).
+  - Beweisbilder und Story-Bilder liegen jetzt getrennt in `deploy/storage-private/` (am PC
+    `server/storage-private/`). Der Ordner gehört ins Backup, darf aber nie über einen
+    Webserver erreichbar sein.
+  - Ein älterer App-Stand passt nicht mehr zum Server: Registrieren (Alters- und
+    Nutzungsbedingungen-Bestätigung), „Passwort vergessen" (Code statt Link) und Story-Bilder
+    (nur noch angemeldet) gehen damit nicht. Am Handy die App neu laden bzw. neu bauen.
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.
