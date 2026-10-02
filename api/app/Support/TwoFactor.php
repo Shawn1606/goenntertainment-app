@@ -15,7 +15,6 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -386,14 +385,15 @@ final class TwoFactor
      * die zum erneuten Versuchen einlaedt - und `last_sent_at` blockiert ihn
      * nicht, denn es wurde ja nichts gesendet.
      *
-     * Der Code selbst taucht in KEINER Antwort auf, nur in der Mail.
+     * Der Code selbst taucht in KEINER Antwort auf, nur in der Mail - and never in a log: CodeMail
+     * refuses the log mailer, which then counts as a failed mail.
      */
     public static function sendCode(TwoFactorChallenge $challenge, User $user): void
     {
         $code = sprintf('%06d', random_int(0, 999999));
 
         try {
-            Mail::to($user->email)->send(new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
+            CodeMail::send((string) $user->email, new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
         } catch (\Throwable $e) {
             // The exception class only (F-38): a transport message can name the recipient.
             Log::error('[two-factor] Code-Mail nicht versendet', [

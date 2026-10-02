@@ -65,7 +65,10 @@ docker compose -f dev/docker-compose.yml up -d
 The inbox is at http://127.0.0.1:8025 (SMTP on 127.0.0.1:1025, both reachable only
 from this PC). `api/.env.example` already points there. An older `api/.env` that
 still uses the log mailer must take the `MAIL_*` lines from `api/.env.example`, and
-an old `api/storage/logs/laravel.log` should be deleted: it can contain codes.
+an old `api/storage/logs/laravel.log` should be deleted: it can contain codes. Mails
+with a code refuse the log mailer ([`api/app/Support/CodeMail.php`](api/app/Support/CodeMail.php)):
+when `MAIL_MAILER` names it, or names a failover chain that contains it, they are not sent at
+all.
 
 Without Docker, the Mailpit binary does the same: download it from the
 [Mailpit releases](https://github.com/axllent/mailpit/releases) and run
