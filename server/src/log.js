@@ -10,7 +10,8 @@
  *     carries the raw text in `err.body` - only its name and type are printed;
  *   - SQL text, bound values and driver messages: mysql2 errors carry the statement in `sql` and
  *     the server's message (which quotes values, e.g. a duplicate entry) in `message` and
- *     `sqlMessage` - only the error code, errno and SQLSTATE are printed;
+ *     `sqlMessage` - only the error code, errno and SQLSTATE are printed; any other error with a
+ *     numeric errno (file system, network, zlib) is printed as its code and errno only;
  *   - snippets of parsed input: JSON.parse errors (SyntaxError) quote the text they failed on -
  *     only the name is printed;
  *   - the error object's own properties: it is never handed to console.* as an object, which
@@ -40,8 +41,15 @@ function shorten(text) {
   return line.length > MAX_MESSAGE ? `${line.slice(0, MAX_MESSAGE)}...` : line;
 }
 
-const isDriverError = (err) =>
-  err.sqlState !== undefined || err.sqlMessage !== undefined || err.sql !== undefined || typeof err.errno === 'number';
+/** A database error from mysql2: it carries the statement, or the server's SQLSTATE and message. */
+const isDriverError = (err) => err.sqlState !== undefined || err.sqlMessage !== undefined || err.sql !== undefined;
+
+/**
+ * Any other error with a numeric errno: a system error (file system, network, zlib) or a driver
+ * error without SQL fields. Its message can quote a path or an address, so it is described by code
+ * and errno only - without the SQLSTATE label, which would point the reader at the database.
+ */
+const isSystemError = (err) => typeof err.errno === 'number';
 
 const isBodyParserError = (err) => typeof err.type === 'string' && (err.body !== undefined || 'expose' in err);
 
@@ -57,6 +65,7 @@ export function describeError(err) {
   if (isDriverError(err)) {
     return `${name} code=${oneLine(err.code ?? '?')} errno=${oneLine(err.errno ?? '?')} sqlState=${oneLine(err.sqlState ?? '?')}`;
   }
+  if (isSystemError(err)) return `${name} code=${oneLine(err.code ?? '?')} errno=${oneLine(err.errno)}`;
   if (isBodyParserError(err)) {
     return `${name} type=${oneLine(err.type)} status=${oneLine(err.status ?? err.statusCode ?? '?')}`;
   }

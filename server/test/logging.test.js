@@ -112,6 +112,25 @@ test('logError prints code, errno and SQLSTATE of a driver error - not its SQL o
   assert.match(out, /\[error\] query failed: Error code=ER_DUP_ENTRY errno=1062 sqlState=23000/);
 });
 
+test('logError describes a system error (file system, zlib) by code and errno, without a database label or its message', async () => {
+  const { logError } = await import('../src/log.js');
+  const fsError = Object.assign(new Error(`ENOENT: no such file or directory, open '/tmp/${CANARY}'`), {
+    errno: -2,
+    code: 'ENOENT',
+    syscall: 'open',
+    path: `/tmp/${CANARY}`,
+  });
+  const zlibError = Object.assign(new Error(`incorrect header check ${CANARY}`), { errno: -3, code: 'Z_DATA_ERROR' });
+  const out = captured(() => {
+    logError('read failed', fsError);
+    logError('unpack failed', zlibError);
+  });
+  assert.ok(!out.includes(CANARY), out);
+  assert.match(out, /^\[error\] read failed: Error code=ENOENT errno=-2$/m);
+  assert.match(out, /^\[error\] unpack failed: Error code=Z_DATA_ERROR errno=-3$/m);
+  assert.doesNotMatch(out, /sqlState/, 'a system error was labelled as a database error');
+});
+
 test('logError never prints a body-parser error body or a JSON.parse snippet', async () => {
   const { logError, logWarn } = await import('../src/log.js');
   let syntax;
