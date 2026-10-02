@@ -51,7 +51,9 @@ Route::get('/health', function () {
 
 // Every route that takes a password, a code or an e-mail address has a named limiter with a
 // per-account cap across client addresses (config/ratelimits.php). The route table and its
-// limits are pinned in tests/Feature/RouteThrottleCoverageTest.php.
+// limits are pinned in tests/Feature/RouteThrottleCoverageTest.php. `throttle` is
+// App\Http\Middleware\ThrottleRequestsExactly (bootstrap/app.php): it checks and counts each
+// counter under a lock, so a cap also holds for requests that arrive at the same time.
 Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:register');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 Route::post('/forgot-password', [PasswordController::class, 'forgot'])->middleware('throttle:password-forgot');

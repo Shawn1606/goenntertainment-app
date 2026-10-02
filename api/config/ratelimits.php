@@ -43,7 +43,9 @@
 | their defaults; the production compose passes them all to the api service). Unset or empty
 | means the default; a malformed value stops the application while it boots
 | (App\Support\RateLimitRules). The counters live in the database cache store
-| (CACHE_STORE=database).
+| (CACHE_STORE=database). Each is checked and counted under a lock
+| (App\Http\Middleware\ThrottleRequestsExactly), so a limit is exact for requests that arrive at
+| the same time as well.
 */
 
 use App\Support\RateLimitRules;
@@ -87,9 +89,11 @@ return [
 
     // Not a route limiter: wrong second-factor codes per account, across every sign-in challenge
     // and step-up (App\Support\TwoFactor). At the cap no code is accepted and none is mailed
-    // until the window has passed. A code check accepts 3 of a million codes (one time step
-    // either side), so 10 guesses per 15 minutes hit about once in 33,000 windows: one hit in
-    // roughly a year of non-stop guessing.
+    // until the window has passed. The cap is exact: looking at it, checking a code and counting
+    // it run under one lock per account, so requests at the same time cannot all slip in below
+    // it. A code check accepts 3 of a million codes (one time step either side), so 10 guesses
+    // per 15 minutes hit about once in 33,000 windows: one hit in roughly a year of non-stop
+    // guessing.
     'two-factor-failures' => [
         'account' => RateLimitRules::env('AUTH_LIMIT_2FA_FAILURES', '10/900'),
     ],

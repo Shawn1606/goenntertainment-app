@@ -5,11 +5,14 @@ namespace App\Support;
 use App\Mail\TwoFactorCode;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
+use App\Providers\AppServiceProvider;
 use Closure;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -60,6 +63,10 @@ use RuntimeException;
  * passed. The count lives in the cache store (the database in the deploy) and is not reset by a
  * right code. A known password can therefore lock the second factor for the window: that is
  * the price of the cap.
+ *
+ * Looking at the count, checking a code and counting it run under one lock per account
+ * (withAccountLock): requests at the same time take turns, so the cap is exact, not "the cap
+ * plus the number of PHP workers".
  */
 final class TwoFactor
 {
@@ -84,6 +91,15 @@ final class TwoFactor
 
     /** Ab so vielen Fehlversuchen ist ein Vorgang verbraucht. */
     public const MAX_ATTEMPTS = 5;
+
+    /** The account's lock ends by itself after this long if its holder dies (seconds). */
+    private const ACCOUNT_LOCK_SECONDS = 10;
+
+    /** How long a request waits for the account's lock before it gets a 429 (seconds). */
+    public const ACCOUNT_LOCK_WAIT = 5;
+
+    /** Pause between two tries to get the account's lock (milliseconds). */
+    private const ACCOUNT_LOCK_RETRY_MS = 50;
 
     /**
      * Hoechstalter eines Anmelde-Vorgangs fuer neue Codes. Jede neue Mail gibt
@@ -205,46 +221,82 @@ final class TwoFactor
      */
     public static function attempt(TwoFactorChallenge $challenge, Closure $verify): string
     {
-        // The account's cap first: at the cap no code is even looked at.
-        if (self::accountLocked($challenge->user_id)) {
-            return self::LOCKED;
-        }
-
-        $guessed = false;
-        $result = DB::transaction(function () use ($challenge, $verify, &$guessed) {
-            $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
-
-            if ($locked === null) {
-                return self::EXPIRED;
-            }
-            if ($locked->attempts >= self::MAX_ATTEMPTS) {
-                return self::TOO_MANY;
-            }
-            if ($locked->isExpired()) {
-                return self::EXPIRED;
+        // Cap, check and count as one step per account (see withAccountLock).
+        return self::withAccountLock($challenge->user_id, function () use ($challenge, $verify): string {
+            // The account's cap first: at the cap no code is even looked at.
+            if (self::accountLocked($challenge->user_id)) {
+                return self::LOCKED;
             }
 
-            if ($verify($locked) === true) {
-                $locked->delete();
+            $guessed = false;
+            $result = DB::transaction(function () use ($challenge, $verify, &$guessed) {
+                $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
 
-                return self::OK;
+                if ($locked === null) {
+                    return self::EXPIRED;
+                }
+                if ($locked->attempts >= self::MAX_ATTEMPTS) {
+                    return self::TOO_MANY;
+                }
+                if ($locked->isExpired()) {
+                    return self::EXPIRED;
+                }
+
+                if ($verify($locked) === true) {
+                    $locked->delete();
+
+                    return self::OK;
+                }
+
+                $locked->increment('attempts');
+                $guessed = true;
+
+                return $locked->attempts >= self::MAX_ATTEMPTS ? self::TOO_MANY : self::WRONG;
+            });
+
+            // Counted after the transaction, in the cache store: a rollback must not undo it.
+            if ($guessed) {
+                self::recordFailure($challenge->user_id);
             }
 
-            $locked->increment('attempts');
-            $guessed = true;
-
-            return $locked->attempts >= self::MAX_ATTEMPTS ? self::TOO_MANY : self::WRONG;
+            return $result;
         });
-
-        // Counted after the transaction, in the cache store: a rollback must not undo it.
-        if ($guessed) {
-            self::recordFailure($challenge->user_id);
-        }
-
-        return $result;
     }
 
     /* --------------------------------------------- Fehlversuche je Konto (F-19) */
+
+    /**
+     * Runs $callback - look at the account's cap, check a code, count it if it was wrong - while
+     * holding the account's lock. Without the lock, requests that arrive at the same time all read
+     * a count below the cap before any of them is counted, and a burst gets about as many codes
+     * checked as there are PHP workers. With it they take turns, so the cap is exact. Every place
+     * that checks a second-factor code goes through here: attempt() (sign-in, e-mail setup,
+     * mailed step-up codes), assertCode() (app and recovery codes) and the app setup
+     * (TwoFactorController::confirmTotp).
+     *
+     * The lock lives in the cache store next to the counters (the database in the deploy: table
+     * cache_locks), so it holds across PHP processes and containers. It is taken outside any
+     * database transaction: inside one, its row would reach the other connections only at the
+     * commit. A request that cannot get it within ACCOUNT_LOCK_WAIT seconds gets the limiters'
+     * 429 answer, and nothing was checked or counted.
+     *
+     * @template T
+     *
+     * @param  Closure(): T  $callback
+     * @return T
+     */
+    public static function withAccountLock(int|string $userId, Closure $callback): mixed
+    {
+        try {
+            return Cache::lock("two-factor-account:{$userId}", self::ACCOUNT_LOCK_SECONDS)
+                ->betweenBlockedAttemptsSleepFor(self::ACCOUNT_LOCK_RETRY_MS)
+                ->block(self::ACCOUNT_LOCK_WAIT, $callback);
+        } catch (LockTimeoutException) {
+            throw new HttpResponseException(
+                response()->json(['message' => AppServiceProvider::MSG_TOO_MANY], 429)->header('Retry-After', '1'),
+            );
+        }
+    }
 
     /** @return list<array{max: int, seconds: int}> */
     private static function failureRules(): array
@@ -269,7 +321,7 @@ final class TwoFactor
         return false;
     }
 
-    /** Counts one wrong code for the account (every rule of the cap). */
+    /** Counts one wrong code for the account (every rule of the cap); call it inside withAccountLock. */
     public static function recordFailure(int|string $userId): void
     {
         foreach (self::failureRules() as $rule) {
@@ -709,18 +761,21 @@ final class TwoFactor
             return;
         }
 
-        // App codes and recovery codes count toward the account's cap like mailed ones (F-19).
-        self::refuseIfLocked($user, $field);
+        // App codes and recovery codes count toward the account's cap like mailed ones (F-19),
+        // looked at, checked and counted under the account's lock like them.
+        self::withAccountLock($user->getKey(), function () use ($user, $otp, $code, $field): void {
+            self::refuseIfLocked($user, $field);
 
-        $ok = $otp !== null
-            ? self::verifyTotpForUser($user, $otp)
-            : self::consumeRecoveryCode($user, $code);
+            $ok = $otp !== null
+                ? self::verifyTotpForUser($user, $otp)
+                : self::consumeRecoveryCode($user, $code);
 
-        if (! $ok) {
-            self::recordFailure($user->getKey());
+            if (! $ok) {
+                self::recordFailure($user->getKey());
 
-            throw ValidationException::withMessages([$field => [self::MSG_WRONG]]);
-        }
+                throw ValidationException::withMessages([$field => [self::MSG_WRONG]]);
+            }
+        });
     }
 
     /* ------------------------------------------------------ Loesch-Freigabe */

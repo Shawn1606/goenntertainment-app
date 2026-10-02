@@ -240,15 +240,21 @@ class TwoFactorController extends Controller
             throw ValidationException::withMessages(['code' => [TwoFactor::MSG_SETUP_RESTART]]);
         }
 
-        // Wrong app codes during the setup count toward the account's cap too (F-19).
-        TwoFactor::refuseIfLocked($user, 'code');
+        // Wrong app codes during the setup count toward the account's cap too (F-19): looked at,
+        // checked and counted under the account's lock (TwoFactor::withAccountLock).
+        $code = (string) $request->input('code');
+        $step = TwoFactor::withAccountLock($user->getKey(), function () use ($user, $secret, $code): int {
+            TwoFactor::refuseIfLocked($user, 'code');
 
-        $step = Totp::verify($secret, (string) $request->input('code'));
-        if ($step === null) {
-            TwoFactor::recordFailure($user->getKey());
+            $step = Totp::verify($secret, $code);
+            if ($step === null) {
+                TwoFactor::recordFailure($user->getKey());
 
-            throw ValidationException::withMessages(['code' => [TwoFactor::MSG_WRONG]]);
-        }
+                throw ValidationException::withMessages(['code' => [TwoFactor::MSG_WRONG]]);
+            }
+
+            return $step;
+        });
 
         // Das Fenster des Bestaetigungs-Codes gilt schon als verbraucht: Derselbe
         // Code kann nicht gleich danach noch eine Anmeldung freischalten.

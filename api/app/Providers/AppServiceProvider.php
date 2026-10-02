@@ -12,6 +12,9 @@ use Laravel\Sanctum\Sanctum;
 
 class AppServiceProvider extends ServiceProvider
 {
+    /** The answer to a request over a limit (Laravel's own is English; the app shows it as is). */
+    public const MSG_TOO_MANY = 'Zu viele Versuche – bitte warte kurz und probier es dann noch mal.';
+
     /**
      * Register any application services.
      */
@@ -71,7 +74,7 @@ class AppServiceProvider extends ServiceProvider
         RateLimitRules::assertValid(config('ratelimits'));
 
         $tooMany = static fn (Request $request, array $headers) => response()->json(
-            ['message' => 'Zu viele Versuche – bitte warte kurz und probier es dann noch mal.'],
+            ['message' => self::MSG_TOO_MANY],
             429,
             $headers,
         );

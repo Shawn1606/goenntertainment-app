@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Http\Controllers\NodeFallbackController;
+use App\Http\Middleware\ThrottleRequestsExactly;
 use Illuminate\Routing\Middleware\ThrottleRequests;
 use Illuminate\Routing\Route as RoutingRoute;
 use Illuminate\Support\Facades\Route;
@@ -158,5 +159,33 @@ class RouteThrottleCoverageTest extends TestCase
 
         $this->assertGreaterThanOrEqual(15, $checked, "only {$checked} auth write routes found");
         $this->assertSame([], $unlimited, "{$checked} auth write routes checked");
+    }
+
+    /**
+     * `throttle` is the variant that checks and counts each counter as one step (review RL-2:
+     * the stock middleware lets a burst past a per-account cap), and no route names the stock
+     * class directly, which would step around the alias.
+     */
+    public function test_every_limiter_checks_and_counts_as_one_step(): void
+    {
+        $this->assertSame(ThrottleRequestsExactly::class, app('router')->getMiddleware()['throttle'] ?? null);
+
+        $aliased = 0;
+        $stock = [];
+        foreach (Route::getRoutes()->getRoutes() as $route) {
+            foreach ($route->gatherMiddleware() as $middleware) {
+                if (! is_string($middleware)) {
+                    continue;
+                }
+                if (str_starts_with($middleware, 'throttle:')) {
+                    $aliased++;
+                } elseif (str_starts_with($middleware, ThrottleRequests::class)) {
+                    $stock[] = self::signature($route);
+                }
+            }
+        }
+
+        $this->assertSame(count(self::LIMITED), $aliased, 'every limited route uses the throttle alias');
+        $this->assertSame([], $stock, 'routes that name the stock throttle class');
     }
 }

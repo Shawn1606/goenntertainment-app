@@ -2,6 +2,7 @@
 
 use App\Http\Middleware\EnsureNotBanned;
 use App\Http\Middleware\LimitRequestBody;
+use App\Http\Middleware\ThrottleRequestsExactly;
 use App\Http\Middleware\UnescapedJsonResponses;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -52,8 +53,11 @@ return Application::configure(basePath: dirname(__DIR__))
             headers: Request::HEADER_X_FORWARDED_FOR | Request::HEADER_X_FORWARDED_HOST | Request::HEADER_X_FORWARDED_PROTO,
         );
 
+        // `throttle` checks and counts each counter as one step under a lock, so the per-account
+        // caps hold for requests that arrive at the same time too (ThrottleRequestsExactly).
         $middleware->alias([
             'banned' => EnsureNotBanned::class,
+            'throttle' => ThrottleRequestsExactly::class,
         ]);
 
         // Gilt fuer JEDE Antwort der API, auch fuer die Fehler-Antworten des
