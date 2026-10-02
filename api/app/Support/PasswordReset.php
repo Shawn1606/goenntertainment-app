@@ -80,6 +80,10 @@ final class PasswordReset
      * nothing about the address either. If the mail fails, the challenge is deleted (a code
      * nobody received is useless, and the next request may send at once) and the failure is
      * logged with the user id and the exception class.
+     *
+     * The account's row is read again under its lock: if its address changed after the request
+     * looked it up (an e-mail change drops open reset codes in the same lock), the address asked
+     * for no longer belongs to the account, and no code is made or mailed.
      */
     public static function issue(User $user): void
     {
@@ -89,14 +93,17 @@ final class PasswordReset
 
         $issued = DB::transaction(function () use ($user): ?array {
             // One issue at a time per account: two requests at the same moment get one mail.
-            User::whereKey($user->getKey())->lockForUpdate()->first();
-
-            if (TwoFactor::secondsUntilNextMail($user, TwoFactor::PURPOSE_RESET) > 0) {
+            $locked = self::lockAccount($user);
+            if ($locked === null) {
                 return null;
             }
 
-            self::forget($user);
-            [$challenge] = TwoFactor::createChallenge($user, TwoFactor::PURPOSE_RESET, TwoFactor::METHOD_EMAIL, prune: false);
+            if (TwoFactor::secondsUntilNextMail($locked, TwoFactor::PURPOSE_RESET) > 0) {
+                return null;
+            }
+
+            self::forget($locked);
+            [$challenge] = TwoFactor::createChallenge($locked, TwoFactor::PURPOSE_RESET, TwoFactor::METHOD_EMAIL, prune: false);
 
             $code = sprintf('%06d', random_int(0, 999999));
             $challenge->forceFill([
@@ -104,16 +111,15 @@ final class PasswordReset
                 'last_sent_at' => now(),
             ])->save();
 
-            return [$challenge->getKey(), $code];
+            return [$challenge->getKey(), $code, (string) $locked->email];
         });
 
         if ($issued === null) {
             return;
         }
 
-        [$challengeId, $code] = $issued;
+        [$challengeId, $code, $address] = $issued;
         $userId = $user->getKey();
-        $address = (string) $user->email;
 
         defer(static function () use ($challengeId, $code, $userId, $address): void {
             try {
@@ -141,11 +147,21 @@ final class PasswordReset
      * The username rule is checked only after the code matched (before, its message would tell a
      * stranger that the address has an account, and what its username contains); a password that
      * breaks it does not use the code up.
+     *
+     * Locks are taken in one order, the account's row first and then its challenges, as issue()
+     * and the e-mail change do: the other order could deadlock with a new code being issued at
+     * the same moment. As in issue(), an address that no longer belongs to the account finds no
+     * code.
      */
     public static function reset(User $user, string $code, string $password): string
     {
         return DB::transaction(function () use ($user, $code, $password): string {
-            $challenge = TwoFactorChallenge::where('user_id', $user->getKey())
+            $locked = self::lockAccount($user);
+            if ($locked === null) {
+                return self::INVALID;
+            }
+
+            $challenge = TwoFactorChallenge::where('user_id', $locked->getKey())
                 ->where('purpose', TwoFactor::PURPOSE_RESET)
                 ->orderByDesc('id')
                 ->lockForUpdate()
@@ -164,20 +180,31 @@ final class PasswordReset
                 return self::INVALID;
             }
 
-            if (PasswordPolicy::problem($password, $user->username, $user->email) !== null) {
+            if (PasswordPolicy::problem($password, $locked->username, $locked->email) !== null) {
                 return self::PERSONAL;
             }
 
-            $user->forceFill([
+            $locked->forceFill([
                 'password' => Hash::make($password),
                 'remember_token' => null,
             ])->save();
 
-            self::forget($user);
-            Sessions::revokeAll($user);
+            self::forget($locked);
+            Sessions::revokeAll($locked);
 
             return self::OK;
         });
+    }
+
+    /**
+     * The account's row, read again and locked for the rest of the transaction; null when it is
+     * gone or no longer has the address $user was found by.
+     */
+    private static function lockAccount(User $user): ?User
+    {
+        $locked = User::whereKey($user->getKey())->lockForUpdate()->first();
+
+        return $locked !== null && (string) $locked->email === (string) $user->email ? $locked : null;
     }
 
     /** Deletes every open reset code of $user (a new code, a reset, a password or e-mail change). */

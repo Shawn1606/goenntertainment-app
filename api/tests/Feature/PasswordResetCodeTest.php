@@ -105,6 +105,39 @@ class PasswordResetCodeTest extends AppFeatureTestCase
         $this->assertSame(10, $mail->minutes);
     }
 
+    /**
+     * A request that found the account by its old address while an e-mail change was committing
+     * gets no code: the account's row is read again under its lock, and the address asked for no
+     * longer belongs to it. Without that, the code would be made after the change dropped the
+     * open ones, and mailed to the old address. The change is made at the moment the request has
+     * looked the account up (the first time the row is read after the listener is registered).
+     */
+    public function test_no_code_goes_to_an_address_the_account_no_longer_has(): void
+    {
+        $user = $this->makeUser();
+        $old = (string) $user->email;
+        $this->forgot($old)->assertOk();
+        $this->mailedCode();
+        $this->travel(61)->seconds();
+
+        $new = self::freeUsername('moved').'@example.invalid';
+        $changed = false;
+        User::retrieved(function (User $retrieved) use (&$changed, $user, $new): void {
+            if (! $changed && $retrieved->getKey() === $user->getKey()) {
+                $changed = true;
+                DB::table('users')->where('id', $user->id)->update(['email' => $new]);
+                DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'reset')->delete();
+            }
+        });
+
+        $this->forgot($old)->assertOk()->assertExactJson(['status' => 'sent', 'message' => self::MSG_SENT]);
+
+        $this->assertTrue($changed, 'the account was not looked up');
+        // Still only the first mail, from before the change.
+        Mail::assertSent(self::CODE_MAIL, 1);
+        $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'reset')->count());
+    }
+
     public function test_an_unknown_address_gets_the_same_answer_and_no_mail(): void
     {
         $known = $this->forgot($this->makeUser()->email)->assertOk()->json();
