@@ -229,9 +229,10 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
    schema step afterwards: never run `php artisan migrate` (Laravel's stock migrations would try to
    create the `users` table a second time).
 
-5. Create the admin account. Who the admin is (the address): `______` (the maintainer). The
-   address and the password are typed in, exist only in the shell variables and the one `--rm`
-   container, and are removed right after. The seed does not apply the app's password rules: use a
+5. Create the admin account. Who the admin is (the address), how many admin accounts there are
+   and who approves an admin grant: `______` (whoever is accountable for the app, to be named
+   before go-live). The address and the password are typed in, exist only in the shell variables
+   and the one `--rm` container, and are removed right after. The seed does not apply the app's password rules: use a
    long, unique password from the password manager.
 
    ```bash
@@ -301,7 +302,8 @@ The app finds the server through `EXPO_PUBLIC_API_URL`, baked into the build. In
 ```
 
 Without it the build is useless: the app shows only a timeout when signing in. Who owns the EAS
-project and builds the app: `______` (the maintainer).
+project and builds the app: `______` (whoever is accountable for the app, to be named before
+go-live).
 
 ## Updating
 
@@ -316,7 +318,8 @@ docker compose up -d
 Docker rebuilds only what changed and replaces the containers; the database and the uploads stay
 in their volumes. When an update adds a required setting, `scripts/preflight.sh` and
 `docker compose` name it: add it to `deploy/.env` ([Settings](#settings)) and run the steps again.
-Who approves an update before it goes live: `______` (the maintainer).
+Who approves an update before it goes live: `______` (whoever is accountable for the app, to be
+named before go-live).
 
 **Base images.** Every image is pinned by digest (`<name>:<tag>@sha256:<digest>`) in
 `api/Dockerfile`, `server/Dockerfile`, `deploy/docker-compose.yml` (mysql, caddy, busybox),
@@ -324,8 +327,8 @@ Who approves an update before it goes live: `______` (the maintainer).
 the same bytes. The stack test's probe in `deploy/docker-compose.ci.yml` is built from
 `server/Dockerfile` and pins no image of its own, so the Node pin has one copy. Dependabot
 (`.github/dependabot.yml`) proposes new digests every week as pull requests that run the full CI;
-after merging one, deploy it with the steps above. Who reviews and merges them: `______` (the
-maintainer).
+after merging one, deploy it with the steps above. Who reviews and merges them: `______`
+(whoever is accountable for the app, to be named before go-live).
 
 **Urgent refresh** (a security fix in a base image before Dependabot's pull request), in a
 development clone:
@@ -597,10 +600,10 @@ row are required: the stack does not start without them.
 | how long MySQL keeps its binary log, or `off` (`MYSQL_BINLOG_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | whether the access log masks client addresses or query strings; who may read production logs | the operator, with whoever answers for data protection | `______` |
 | the backup time (02:30 UTC is a technical constant) | the operator | `______` |
-| who the admin is (the address typed in at the first start) | the maintainer | `______` |
+| who the admin is (the address typed in at the first start), how many admin accounts there are, and who approves an admin grant | whoever is accountable for the app, to be named before go-live | `______` |
 | whether the data seed's venue entries belong on the production server | the maintainer | `______` |
-| the access-token lifetime (default 30 days, `SANCTUM_EXPIRATION`) | the maintainer | `______` |
+| the access-token lifetime (default 30 days, `SANCTUM_EXPIRATION`) | the operator | `______` |
 | IPv6 (an AAAA record) once it is set up end to end | the operator | `______` |
-| who approves updates and the go-live; who reviews and merges Dependabot's pull requests | the maintainer | `______` |
+| who approves updates and the go-live; who reviews and merges Dependabot's pull requests | whoever is accountable for the app, to be named before go-live | `______` |
 | who does the monthly rebuild and tracks the PHP and MySQL support dates | the operator | `______` |
-| who owns the EAS project and builds the app | the maintainer | `______` |
+| who owns the EAS project and builds the app | whoever is accountable for the app, to be named before go-live | `______` |

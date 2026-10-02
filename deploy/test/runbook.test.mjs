@@ -226,6 +226,29 @@ test('runbook: every decision row is a visible blank with who decides', () => {
   assert.deepEqual(bad.map((r) => r.join(' | ')), []);
 });
 
+/**
+ * Who approves updates and the go-live, who merges, who owns the app's accounts and who holds admin
+ * rights is not settled yet: the runbook leaves it to a role that is named before go-live, never
+ * to a person or a role it guesses.
+ */
+const GOVERNANCE_ROLE = 'whoever is accountable for the app, to be named before go-live';
+const GOVERNANCE = /approv|\bmerges?\b|\bowns\b|\badmins?\b/i;
+
+test('runbook: who approves, merges, owns the app accounts or holds admin rights is left to a role named before go-live', () => {
+  const rows = tableRows(section('Decisions this runbook does not make')).filter(([what]) => GOVERNANCE.test(what));
+  // Blanks in the text: "<sentence>: `______` (<who>)", with wrapped (and indented) lines joined.
+  const text = runbook().replace(/[ \t]*\n(?!\n)[ \t]*/g, ' ');
+  const inline = [...text.matchAll(/([^.\n]*):\s+`______`\s+\(([^)]+)\)/g)].filter((m) => GOVERNANCE.test(m[1]));
+  console.log(`governance blanks: ${rows.length} decision rows, ${inline.length} in the text`);
+  assert.ok(rows.length > 0 && inline.length > 0, 'no governance blank found: refusing to report clean');
+  const wrong = [
+    ...rows.filter(([, who]) => who !== GOVERNANCE_ROLE).map(([what, who]) => `row "${what}": ${who}`),
+    ...inline.filter((m) => m[2] !== GOVERNANCE_ROLE).map((m) => `"${m[1].trim()}": ${m[2]}`),
+  ];
+  assert.deepEqual(wrong, []);
+  assert.ok(rows.some(([what]) => /how many admin/i.test(what) && /admin grant/i.test(what)), 'no blank for the number of admins and who approves an admin grant');
+});
+
 test('F-05: the first start keeps the public edge down until the admin account exists', () => {
   // Anywhere in the runbook: the admin's address and password never go into a file or the
   // environment of a long-running container.
