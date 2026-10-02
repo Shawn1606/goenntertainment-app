@@ -13,10 +13,20 @@ use Tests\AppFeatureTestCase;
  * one: sign-up and PATCH /user. 255 is users.name VARCHAR(255) in server/schema.sql; without the
  * cap a longer name reached the database and ended in a 500 (strict mode refuses the value), and
  * one over the word filter's own input cap got the blocked-word message.
+ *
+ * Long names arrive two ways: in a JSON body up to its 32 kB limit (a bigger body is refused
+ * before validation, RequestBodyLimitTest), and in a multipart form, which PHP parses itself and
+ * which therefore still carries a 100,000-character value to the validator. PATCH /user receives a
+ * form as a POST with `_method=PATCH`, because PHP parses multipart only for POST.
  */
 class NameInputTest extends AppFeatureTestCase
 {
     private const MSG_TOO_LONG = 'Der Name fasst hoechstens 255 Zeichen.';
+
+    private const FORM = [
+        'CONTENT_TYPE' => 'multipart/form-data; boundary=----fixture-boundary',
+        'HTTP_ACCEPT' => 'application/json',
+    ];
 
     /** @var list<string> */
     private array $logged = [];
@@ -30,17 +40,21 @@ class NameInputTest extends AppFeatureTestCase
         });
     }
 
-    private function register(string $name): TestResponse
+    /** A sign-up that is valid apart from the name, as JSON or as a multipart form. */
+    private function register(string $name, bool $asForm = false): TestResponse
     {
         $username = self::freeUsername('name');
-
-        return $this->postJson('/api/register', [
+        $data = [
             'name' => $name,
             'username' => $username,
             'email' => $username.'@example.invalid',
             'password' => self::TEST_PASSWORD,
             'account_type' => 'standard',
-        ]);
+        ];
+
+        return $asForm
+            ? $this->call('POST', '/api/register', $data, [], [], self::FORM)
+            : $this->postJson('/api/register', $data);
     }
 
     private function assertNothingLogged(): void
@@ -74,15 +88,23 @@ class NameInputTest extends AppFeatureTestCase
         $this->assertNothingLogged();
     }
 
-    public function test_sign_up_refuses_a_100000_character_name_fast(): void
+    /** As long as a JSON body may be, and longer in a form: the cap answers, fast. */
+    public function test_sign_up_refuses_long_names_fast(): void
     {
-        $start = hrtime(true);
-        $response = $this->register(str_repeat('a', 100000));
-        $seconds = (hrtime(true) - $start) / 1e9;
+        $cases = [
+            'JSON, 30,000 characters' => [str_repeat('a', 30000), false],
+            'form, 100,000 characters' => [str_repeat('a', 100000), true],
+        ];
 
-        $response->assertStatus(422)->assertJsonPath('errors.name', [self::MSG_TOO_LONG]);
-        // Generous: the cap is a length check; the bound only catches work done on the whole value.
-        $this->assertLessThan(2.0, $seconds, "{$seconds} s");
+        foreach ($cases as $label => [$name, $asForm]) {
+            $start = hrtime(true);
+            $response = $this->register($name, $asForm);
+            $seconds = (hrtime(true) - $start) / 1e9;
+
+            $response->assertStatus(422)->assertJsonPath('errors.name', [self::MSG_TOO_LONG]);
+            // Generous: the cap is a length check; the bound only catches work done on the whole value.
+            $this->assertLessThan(2.0, $seconds, "{$label}: {$seconds} s");
+        }
         $this->assertNothingLogged();
     }
 
@@ -106,17 +128,29 @@ class NameInputTest extends AppFeatureTestCase
         $this->assertNothingLogged();
     }
 
-    public function test_profile_change_refuses_a_100000_character_name_fast(): void
+    public function test_profile_change_refuses_long_names_fast(): void
     {
         $user = $this->makeUser();
+        $token = $this->issueToken($user);
 
-        $start = hrtime(true);
-        $response = $this->withBearer($this->issueToken($user))
-            ->patchJson('/api/user', ['name' => str_repeat('a', 100000)]);
-        $seconds = (hrtime(true) - $start) / 1e9;
+        $requests = [
+            'JSON, 30,000 characters' => fn () => $this->withBearer($token)
+                ->patchJson('/api/user', ['name' => str_repeat('a', 30000)]),
+            // call() sends no default headers, so the token goes into the server variables.
+            'form, 100,000 characters' => fn () => $this->withBearer($token)
+                ->call('POST', '/api/user', ['_method' => 'PATCH', 'name' => str_repeat('a', 100000)], [], [], self::FORM + [
+                    'HTTP_AUTHORIZATION' => 'Bearer '.$token,
+                ]),
+        ];
 
-        $response->assertStatus(422)->assertJsonPath('errors.name', [self::MSG_TOO_LONG]);
-        $this->assertLessThan(2.0, $seconds, "{$seconds} s");
+        foreach ($requests as $label => $send) {
+            $start = hrtime(true);
+            $response = $send();
+            $seconds = (hrtime(true) - $start) / 1e9;
+
+            $response->assertStatus(422)->assertJsonPath('errors.name', [self::MSG_TOO_LONG]);
+            $this->assertLessThan(2.0, $seconds, "{$label}: {$seconds} s");
+        }
         $this->assertSame('Feature Test', DB::table('users')->where('id', $user->id)->value('name'));
         $this->assertNothingLogged();
     }

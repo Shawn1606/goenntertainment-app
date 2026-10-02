@@ -8,7 +8,8 @@ use Tests\AppFeatureTestCase;
 
 /**
  * Every route that takes an e-mail address refuses one longer than 254 characters with the
- * e-mail message, and answers a 100,000-character value fast (F-02). The check itself:
+ * e-mail message, and answers a 100,000-character value fast (F-02): in a multipart form with the
+ * e-mail message, as JSON with the body limit's 413. The check itself:
  * tests/Unit/EmailAddressTest.php.
  */
 class EmailInputTest extends AppFeatureTestCase
@@ -24,27 +25,39 @@ class EmailInputTest extends AppFeatureTestCase
         return str_repeat('a', $length - strlen($domain)).$domain;
     }
 
-    /** The four public routes that read an e-mail address, with an otherwise valid body. */
-    private function send(string $route, string $email): TestResponse
+    /**
+     * The four public routes that read an e-mail address, with an otherwise valid body, sent as
+     * JSON or as a multipart form. A JSON body over 32 kB is refused before validation (413,
+     * RequestBodyLimitTest); a multipart POST is parsed by PHP and is the one way a 100,000-character
+     * value still reaches the e-mail check.
+     */
+    private function send(string $route, string $email, bool $asForm = false): TestResponse
     {
         $password = 'Fixture-Only-Pass-'.random_int(1000, 9999).'x';
 
-        return match ($route) {
-            'register' => $this->postJson('/api/register', [
+        [$uri, $data] = match ($route) {
+            'register' => ['/api/register', [
                 'name' => 'Feature Test',
                 'username' => self::freeUsername('mail'),
                 'email' => $email,
                 'password' => $password,
                 'account_type' => 'standard',
-            ]),
-            'login' => $this->postJson('/api/login', ['email' => $email, 'password' => $password]),
-            'forgot' => $this->postJson('/api/forgot-password', ['email' => $email]),
-            'reset' => $this->postJson('/api/reset-password', [
+            ]],
+            'login' => ['/api/login', ['email' => $email, 'password' => $password]],
+            'forgot' => ['/api/forgot-password', ['email' => $email]],
+            'reset' => ['/api/reset-password', [
                 'token' => 'fixture-reset-token-not-a-secret',
                 'email' => $email,
                 'password' => $password,
-            ]),
+            ]],
         };
+
+        return $asForm
+            ? $this->call('POST', $uri, $data, [], [], [
+                'CONTENT_TYPE' => 'multipart/form-data; boundary=----fixture-boundary',
+                'HTTP_ACCEPT' => 'application/json',
+            ])
+            : $this->postJson($uri, $data);
     }
 
     public function test_register_refuses_an_address_over_254_characters(): void
@@ -86,13 +99,22 @@ class EmailInputTest extends AppFeatureTestCase
         $checked = 0;
         foreach (['register', 'login', 'forgot', 'reset'] as $route) {
             foreach ($shapes as $shape => $email) {
+                // As a form the value reaches the e-mail check, which must refuse it fast.
                 $start = hrtime(true);
-                $response = $this->send($route, $email);
+                $response = $this->send($route, $email, asForm: true);
                 $seconds = (hrtime(true) - $start) / 1e9;
 
                 $response->assertStatus(422)->assertJsonPath('errors.email.0', self::MSG_EMAIL);
                 // Generous: the check takes microseconds; the bound only catches a slow pattern.
-                $this->assertLessThan(2.0, $seconds, "{$route}, {$shape}: {$seconds} s");
+                $this->assertLessThan(2.0, $seconds, "{$route}, {$shape}, form: {$seconds} s");
+
+                // As JSON the body is over 32 kB and refused before anything parses it.
+                $start = hrtime(true);
+                $response = $this->send($route, $email);
+                $seconds = (hrtime(true) - $start) / 1e9;
+
+                $response->assertStatus(413)->assertJsonPath('message', 'Die Anfrage ist zu groß.');
+                $this->assertLessThan(2.0, $seconds, "{$route}, {$shape}, JSON: {$seconds} s");
                 $checked++;
             }
         }

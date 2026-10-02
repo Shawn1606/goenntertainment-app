@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureNotBanned;
+use App\Http\Middleware\LimitRequestBody;
 use App\Http\Middleware\UnescapedJsonResponses;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -18,6 +19,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        /**
+         * First of all: a request body over Node's limits (32 kB JSON, 16 kB urlencoded, 128 kB
+         * for the RevenueCat webhook) is refused with 413, ahead of ValidatePostSize and before
+         * TrimStrings and ConvertEmptyStringsToNull rebuild the decoded body (F-02).
+         * public/index.php makes the same check before Request::capture(); this one covers every
+         * other way into the kernel. Being first, its 413 carries no CORS headers (the app sends
+         * nothing this large).
+         */
+        $middleware->prepend(LimitRequestBody::class);
+
         /**
          * Hinter einem Reverse Proxy (nginx/Traefik in Produktion) steht im
          * Schema sonst 'http' - denn der Proxy spricht per Klartext mit PHP, das
