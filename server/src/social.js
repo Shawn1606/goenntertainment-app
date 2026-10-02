@@ -31,14 +31,8 @@ export const MAX_LINK_LENGTH = 200;
 
 const URL_RE = /^https?:\/\/[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:\d+)?([/?#][^\s]*)?$/i;
 
-/**
- * The words of a link for the word filter (F-06): a link is shown on the profile like any text,
- * so a term in it is refused like one in a post. Without the scheme, percent-decoded (up to three
- * times, so an encoded term is read as such), and with the address' separators as spaces: the
- * filter then reads host, path and query as words ("www instagram com name") instead of one long
- * run of letters, in which a term could otherwise be found across two harmless parts.
- */
-export function linkFilterText(url) {
+/** A link as the word filter reads it: without the scheme, percent-decoded up to three times. */
+function decodedLink(url) {
   let text = String(url ?? '').replace(/^https?:\/\//i, '');
   for (let i = 0; i < 3; i += 1) {
     let decoded;
@@ -50,7 +44,32 @@ export function linkFilterText(url) {
     if (decoded === text) break;
     text = decoded;
   }
-  return text.replace(/[/?#&=._~+:@%,;!*'()[\]$-]+/g, ' ').trim();
+  return text;
+}
+
+/**
+ * The words of a link for the word filter (F-06): a link is shown on the profile like any text,
+ * so a term in it is refused like one in a post. Without the scheme, percent-decoded (up to three
+ * times, so an encoded term is read as such), and with the address' separators as spaces: the
+ * filter then reads host, path and query as words ("www instagram com name") instead of one long
+ * run of letters, in which a term could otherwise be found across two harmless parts.
+ */
+export function linkFilterText(url) {
+  return decodedLink(url).replace(/[/?#&=._~+:@%,;!*'()[\]$-]+/g, ' ').trim();
+}
+
+/**
+ * Every text of a link the word filter checks, each in 'text' mode like a post (F-06):
+ *   - linkFilterText(), the whole link as words;
+ *   - each part on its own - the host, every path segment, every query name and value and the
+ *     fragment - split only at '/', '?', '#', '&' and '='. A part keeps its '-', '_' and '.', which
+ *     the filter reads inside one word just as it does in a post, so a term split by them in a
+ *     link is refused exactly when the same string would be refused in a post.
+ */
+export function linkFilterTexts(url) {
+  const decoded = decodedLink(url);
+  const parts = decoded.split(/[/?#&=]+/).filter((part) => part.trim() !== '');
+  return [linkFilterText(url), ...parts];
 }
 
 /**

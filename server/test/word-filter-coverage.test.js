@@ -11,7 +11,8 @@
  * Every filtered field is then sent a blocked term three ways: as a string, inside an array and
  * inside an object (JSON, as a client can send it). Each must be refused with 422 at the field,
  * and nothing may be stored. Social links are also checked with the term in the path, in an
- * encoded path and in the host, and ordinary links must still pass.
+ * encoded path, in the host and split inside one part by '-', '_' or '.' (as a post refuses it),
+ * and ordinary links must still pass.
  *
  * Laravel's text fields (register name and username, PATCH /api/user name and username) take
  * strings only (the `string` rule) and are tested in api/tests/Feature (RegisterTest,
@@ -23,7 +24,7 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
-import { blockedTermMessageFor } from '../src/blocked-terms.js';
+import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm } from '../src/blocked-terms.js';
 import { cleanup, createUser, uniqueStamp } from './support/fixtures.js';
 import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
 
@@ -359,6 +360,25 @@ test('social links: a blocked term in the path, encoded or in the host is refuse
     'https://wichser.example.invalid/',
     'https://www.instagram.com/ihr.wichser',
   ]) {
+    const res = await send('PUT', '/api/me/links', creator.token, { links: [{ platform: 'website', url }] });
+    assert.equal(res.status, 422, url);
+    assert.deepEqual((await res.json()).errors, { links: [MSG_TEXT] }, url);
+  }
+});
+
+test("social links: a term split inside one part by '-', '_' or '.' is refused, as in a post", async () => {
+  // Each link with the part that holds the term: the post text filter refuses that part.
+  for (const [url, part] of [
+    ['https://www.instagram.com/wich-ser', 'wich-ser'],
+    ['https://www.instagram.com/wich_ser', 'wich_ser'],
+    ['https://www.instagram.com/wich.ser', 'wich.ser'],
+    ['https://www.instagram.com/wi.ch.ser', 'wi.ch.ser'],
+    ['https://wich-ser.example.invalid/', 'wich-ser.example.invalid'],
+    ['https://example.invalid/?q=wich-ser', 'wich-ser'],
+    ['https://example.invalid/profil#wich-ser', 'wich-ser'],
+    ['https://example.invalid/%77ich-ser', 'wich-ser'],
+  ]) {
+    assert.ok(findBlockedTerm(part, BLOCKED_TERMS, 'text'), `precondition: "${part}" is refused as post text`);
     const res = await send('PUT', '/api/me/links', creator.token, { links: [{ platform: 'website', url }] });
     assert.equal(res.status, 422, url);
     assert.deepEqual((await res.json()).errors, { links: [MSG_TEXT] }, url);

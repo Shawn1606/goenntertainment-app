@@ -18,7 +18,7 @@ import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
 import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm, rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
-import { linkFilterText, parseLinkList } from '../social.js';
+import { linkFilterTexts, parseLinkList } from '../social.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl } from '../media.js';
 import { blockExistsBetween, hiddenByBlock, notBlockedWith, transformUser, USER_COLUMNS } from '../people.js';
@@ -483,8 +483,9 @@ router.put('/me/links', requireAuth, rateLimit('content'), requireProfile, async
     if (error) {
       throw new HttpError(422, error, { links: [error] });
     }
-    // Links stand on the profile like any text: the fixed list checks their words too (F-06).
-    if (links.some((link) => findBlockedTerm(linkFilterText(link.url), BLOCKED_TERMS, 'text'))) {
+    // Links stand on the profile like any text: the fixed list checks their words, and each of
+    // their parts as a post's text, too (F-06).
+    if (links.some((link) => linkFilterTexts(link.url).some((text) => findBlockedTerm(text, BLOCKED_TERMS, 'text')))) {
       const message = blockedTermMessageFor('text');
       throw new HttpError(422, message, { links: [message] });
     }
