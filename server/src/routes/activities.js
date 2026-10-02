@@ -497,6 +497,8 @@ router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, 
       user: req.user,
       title: b.title,
       description: b.description,
+      // The place is user text too, and as visible as the title (F-06).
+      location: b.location,
       interests: [...(await interestNames(interests)), ...customInterests],
       image: banner,
     });

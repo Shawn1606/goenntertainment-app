@@ -147,7 +147,8 @@ router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, u
     const check = await moderateContent({
       user: req.user,
       context: 'story',
-      description: caption || 'Story ohne Unterschrift',
+      // Only the user's text, no placeholder of ours in the user-data slot (F-06).
+      description: caption,
       image,
     });
 

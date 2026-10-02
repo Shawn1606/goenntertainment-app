@@ -547,7 +547,8 @@ function setProfileImage(kind) {
       const check = await moderateContent({
         user: req.user,
         context: 'profile',
-        description: spec.label,
+        // Code-made, not user text: where the image goes (buildModerationText 'verwendung').
+        label: spec.label,
         image,
       });
 
@@ -649,7 +650,8 @@ router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploa
     const check = await moderateContent({
       user: req.user,
       context: 'post',
-      description: body || 'Beitrag ohne Text',
+      // Only the user's text, no placeholder of ours in the user-data slot (F-06).
+      description: body,
       image,
     });
 
