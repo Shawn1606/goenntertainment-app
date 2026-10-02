@@ -19,45 +19,50 @@
 |   user        the signed-in account
 |
 | The numbers are engineering defaults, not product decisions; each can be changed through the
-| environment variable named next to it without a code change (api/.env.example lists them).
-| The counters live in the database cache store (CACHE_STORE=database).
+| environment variable named next to it without a code change (api/.env.example lists them with
+| their defaults; the production compose passes them all to the api service). Unset or empty
+| means the default; a malformed value stops the application while it boots
+| (App\Support\RateLimitRules). The counters live in the database cache store
+| (CACHE_STORE=database).
 */
+
+use App\Support\RateLimitRules;
 
 return [
     'register' => [
-        'ip' => env('AUTH_LIMIT_REGISTER_IP', '10/600,30/3600'),
-        'account' => env('AUTH_LIMIT_REGISTER_ACCOUNT', '5/3600'),
+        'ip' => RateLimitRules::env('AUTH_LIMIT_REGISTER_IP', '10/600,30/3600'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_REGISTER_ACCOUNT', '5/3600'),
     ],
     'login' => [
-        'account_ip' => env('AUTH_LIMIT_LOGIN_ACCOUNT_IP', '10/60'),
-        'ip' => env('AUTH_LIMIT_LOGIN_IP', '30/60'),
-        'account' => env('AUTH_LIMIT_LOGIN_ACCOUNT', '50/3600,200/86400'),
+        'account_ip' => RateLimitRules::env('AUTH_LIMIT_LOGIN_ACCOUNT_IP', '10/60'),
+        'ip' => RateLimitRules::env('AUTH_LIMIT_LOGIN_IP', '30/60'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_LOGIN_ACCOUNT', '50/3600,200/86400'),
     ],
     'password-forgot' => [
-        'ip' => env('AUTH_LIMIT_FORGOT_IP', '5/600,20/3600'),
-        'account' => env('AUTH_LIMIT_FORGOT_ACCOUNT', '3/3600,10/86400'),
+        'ip' => RateLimitRules::env('AUTH_LIMIT_FORGOT_IP', '5/600,20/3600'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_FORGOT_ACCOUNT', '3/3600,10/86400'),
     ],
     'password-reset' => [
-        'ip' => env('AUTH_LIMIT_RESET_IP', '10/600'),
-        'account' => env('AUTH_LIMIT_RESET_ACCOUNT', '10/3600'),
+        'ip' => RateLimitRules::env('AUTH_LIMIT_RESET_IP', '10/600'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_RESET_ACCOUNT', '10/3600'),
     ],
     'two-factor' => [
-        'challenge' => env('AUTH_LIMIT_2FA_CHALLENGE', '10/60'),
-        'ip' => env('AUTH_LIMIT_2FA_IP', '30/60'),
-        'account' => env('AUTH_LIMIT_2FA_ACCOUNT', '30/3600'),
+        'challenge' => RateLimitRules::env('AUTH_LIMIT_2FA_CHALLENGE', '10/60'),
+        'ip' => RateLimitRules::env('AUTH_LIMIT_2FA_IP', '30/60'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_2FA_ACCOUNT', '30/3600'),
     ],
     'two-factor-resend' => [
-        'ip' => env('AUTH_LIMIT_2FA_RESEND_IP', '10/60'),
-        'account' => env('AUTH_LIMIT_2FA_RESEND_ACCOUNT', '5/600,20/86400'),
+        'ip' => RateLimitRules::env('AUTH_LIMIT_2FA_RESEND_IP', '10/60'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_2FA_RESEND_ACCOUNT', '5/600,20/86400'),
     ],
     'two-factor-setup' => [
-        'user' => env('AUTH_LIMIT_2FA_SETUP_USER', '10/60,30/3600'),
+        'user' => RateLimitRules::env('AUTH_LIMIT_2FA_SETUP_USER', '10/60,30/3600'),
     ],
     'account-sensitive' => [
-        'user' => env('AUTH_LIMIT_ACCOUNT_SENSITIVE_USER', '10/60,30/3600'),
+        'user' => RateLimitRules::env('AUTH_LIMIT_ACCOUNT_SENSITIVE_USER', '10/60,30/3600'),
     ],
     'profile' => [
-        'user' => env('AUTH_LIMIT_PROFILE_USER', '30/60,300/3600'),
+        'user' => RateLimitRules::env('AUTH_LIMIT_PROFILE_USER', '30/60,300/3600'),
     ],
 
     // Not a route limiter: wrong second-factor codes per account, across every sign-in challenge
@@ -66,6 +71,6 @@ return [
     // either side), so 10 guesses per 15 minutes hit about once in 33,000 windows: one hit in
     // roughly a year of non-stop guessing.
     'two-factor-failures' => [
-        'account' => env('AUTH_LIMIT_2FA_FAILURES', '10/900'),
+        'account' => RateLimitRules::env('AUTH_LIMIT_2FA_FAILURES', '10/900'),
     ],
 ];

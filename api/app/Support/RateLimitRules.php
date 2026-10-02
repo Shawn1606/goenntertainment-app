@@ -20,6 +20,46 @@ use LogicException;
 final class RateLimitRules
 {
     /**
+     * The override of one limit from the environment, for config/ratelimits.php only (it runs
+     * while the configuration loads, like env()). Unset or empty gives the default in code: the
+     * production compose passes every variable as `${NAME:-}`, so an override that is not set
+     * there arrives as an empty string. Any other value is returned unchanged, so a malformed
+     * one ('0', 'abc') is still refused by parse(), never replaced by the default.
+     */
+    public static function env(string $name, string $default): mixed
+    {
+        $value = \env($name);
+
+        return $value === null || $value === '' ? $default : $value;
+    }
+
+    /**
+     * Parses every rule of config/ratelimits.php. Called while the application boots
+     * (AppServiceProvider), so a malformed override stops it there: in the api container the
+     * entrypoint's `php artisan config:cache` fails and the container does not start, instead of
+     * the sign-in routes answering 500. The message names the limiter and the scope.
+     */
+    public static function assertValid(mixed $config): void
+    {
+        if (! is_array($config) || $config === []) {
+            throw new LogicException('config/ratelimits.php has no limits.');
+        }
+
+        foreach ($config as $limiter => $scopes) {
+            if (! is_array($scopes) || $scopes === []) {
+                throw new LogicException("config/ratelimits.php has no scopes for '{$limiter}'.");
+            }
+            foreach ($scopes as $scope => $spec) {
+                try {
+                    self::parse($spec);
+                } catch (InvalidArgumentException $e) {
+                    throw new InvalidArgumentException("config/ratelimits.php {$limiter}.{$scope}: ".$e->getMessage(), 0, $e);
+                }
+            }
+        }
+    }
+
+    /**
      * @return list<array{max: int, seconds: int}>
      */
     public static function parse(mixed $spec): array

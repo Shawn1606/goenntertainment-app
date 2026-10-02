@@ -66,6 +66,10 @@ class AppServiceProvider extends ServiceProvider
      */
     private function configureRateLimiting(): void
     {
+        // Every rule parsed now, not on the first request to its route: a malformed override
+        // stops the boot (and the api container's start) instead of answering 500 later.
+        RateLimitRules::assertValid(config('ratelimits'));
+
         $tooMany = static fn (Request $request, array $headers) => response()->json(
             ['message' => 'Zu viele Versuche – bitte warte kurz und probier es dann noch mal.'],
             429,

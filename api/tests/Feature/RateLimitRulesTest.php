@@ -112,4 +112,137 @@ class RateLimitRulesTest extends TestCase
         $this->assertCount(18, $inConfig, 'every scope of config/ratelimits.php has its own variable');
         $this->assertSame($pairs($inConfig), $pairs($inExample));
     }
+
+    /** @return array<string, string> every AUTH_LIMIT_* variable of config/ratelimits.php with its default */
+    private static function overrides(): array
+    {
+        $config = (string) file_get_contents(base_path('config/ratelimits.php'));
+        preg_match_all("/env\('(AUTH_LIMIT_[A-Z0-9_]+)',\s*'([^']+)'\)/", $config, $m, PREG_SET_ORDER);
+
+        return array_combine(array_column($m, 1), array_column($m, 2));
+    }
+
+    /** config/ratelimits.php evaluated with these environment variables set (null = unset). */
+    private static function configWith(array $variables): array
+    {
+        $saved = [];
+        foreach ($variables as $name => $value) {
+            $saved[$name] = [getenv($name), $_ENV[$name] ?? null, $_SERVER[$name] ?? null];
+            if ($value === null) {
+                putenv($name);
+                unset($_ENV[$name], $_SERVER[$name]);
+            } else {
+                putenv("{$name}={$value}");
+                $_ENV[$name] = $_SERVER[$name] = $value;
+            }
+        }
+
+        try {
+            return require base_path('config/ratelimits.php');
+        } finally {
+            foreach ($saved as $name => [$env, $envConst, $server]) {
+                $env === false ? putenv($name) : putenv("{$name}={$env}");
+                if ($envConst === null) {
+                    unset($_ENV[$name]);
+                } else {
+                    $_ENV[$name] = $envConst;
+                }
+                if ($server === null) {
+                    unset($_SERVER[$name]);
+                } else {
+                    $_SERVER[$name] = $server;
+                }
+            }
+        }
+    }
+
+    /**
+     * The production compose passes every variable as `${NAME:-}`, so an unset one arrives as an
+     * empty string. Empty has to mean "the default": RateLimitRules::parse refuses '', and every
+     * sign-in route would answer 500.
+     */
+    public function test_an_empty_override_means_the_default(): void
+    {
+        $overrides = self::overrides();
+        $this->assertCount(18, $overrides);
+
+        $config = self::configWith(array_fill_keys(array_keys($overrides), ''));
+
+        $this->assertSame(self::DOCUMENTED, $config);
+    }
+
+    public function test_a_set_override_is_used_and_a_malformed_one_is_still_refused(): void
+    {
+        $this->assertSame('20/60', self::configWith(['AUTH_LIMIT_LOGIN_IP' => '20/60'])['login']['ip']);
+
+        foreach (['0', 'abc', '0/60', ' '] as $bad) {
+            $spec = self::configWith(['AUTH_LIMIT_LOGIN_IP' => $bad])['login']['ip'];
+            try {
+                RateLimitRules::parse($spec);
+                $this->fail('accepted '.json_encode($bad));
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
+    }
+
+    /**
+     * A malformed override stops the application while it boots (in the api container that is
+     * `php artisan config:cache` in the entrypoint, so the container does not start), instead of
+     * a 500 on the sign-in routes at request time. The message names the limiter and the scope.
+     */
+    public function test_a_malformed_override_stops_the_application_from_booting(): void
+    {
+        $saved = [getenv('AUTH_LIMIT_LOGIN_IP'), $_ENV['AUTH_LIMIT_LOGIN_IP'] ?? null, $_SERVER['AUTH_LIMIT_LOGIN_IP'] ?? null];
+        putenv('AUTH_LIMIT_LOGIN_IP=abc');
+        $_ENV['AUTH_LIMIT_LOGIN_IP'] = $_SERVER['AUTH_LIMIT_LOGIN_IP'] = 'abc';
+
+        try {
+            $this->refreshApplication();
+            $this->fail('the application booted with a malformed rate limit');
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString('login.ip', $e->getMessage());
+        } finally {
+            $saved[0] === false ? putenv('AUTH_LIMIT_LOGIN_IP') : putenv('AUTH_LIMIT_LOGIN_IP='.$saved[0]);
+            if ($saved[1] === null) {
+                unset($_ENV['AUTH_LIMIT_LOGIN_IP']);
+            } else {
+                $_ENV['AUTH_LIMIT_LOGIN_IP'] = $saved[1];
+            }
+            if ($saved[2] === null) {
+                unset($_SERVER['AUTH_LIMIT_LOGIN_IP']);
+            } else {
+                $_SERVER['AUTH_LIMIT_LOGIN_IP'] = $saved[2];
+            }
+            $this->refreshApplication();
+        }
+    }
+
+    /** The api service of the production compose passes every override, without a default of its own. */
+    public function test_the_production_compose_passes_every_override_to_the_api(): void
+    {
+        $compose = (string) file_get_contents(dirname(base_path()).'/deploy/docker-compose.yml');
+        $this->assertSame(1, preg_match('/^  api:\R(.*?)(?=^  \S)/ms', $compose, $service), 'no api service in deploy/docker-compose.yml');
+
+        $missing = [];
+        foreach (array_keys(self::overrides()) as $name) {
+            if (preg_match('/^      '.$name.': \$\{'.$name.':-\}\r?$/m', $service[1]) !== 1) {
+                $missing[] = $name;
+            }
+        }
+
+        $this->assertSame([], $missing, 'not passed as NAME: ${NAME:-} in the api service');
+    }
+
+    public function test_the_deploy_env_example_names_every_override(): void
+    {
+        $example = (string) file_get_contents(dirname(base_path()).'/deploy/.env.example');
+
+        $missing = array_values(array_filter(
+            array_keys(self::overrides()),
+            static fn (string $name): bool => preg_match('/\b'.$name.'\b/', $example) !== 1,
+        ));
+
+        $this->assertSame([], $missing);
+    }
 }
