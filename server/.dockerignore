@@ -10,8 +10,8 @@
 # unnoetig gross, sondern teilweise die falsche Architektur.
 node_modules/
 
-# Nutzer-Uploads. Liegen als Bind-Mount auf dem Server und gehoeren nicht in ein
-# Abbild, das man weitergibt.
+# Nutzer-Uploads. Liegen auf dem Server in benannten Volumes (uploads, private-media)
+# und gehoeren nicht in ein Abbild, das man weitergibt.
 storage/
 storage-private/
 

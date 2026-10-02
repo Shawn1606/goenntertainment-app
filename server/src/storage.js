@@ -8,7 +8,8 @@
  * ## Two roots
  *
  * - PUBLIC_ROOT (`storage/`): avatars, profile banners, event banners and post images. Served to
- *   anyone under /storage (app.js; in the container setup by Apache too).
+ *   anyone under /storage (app.js; in the deploy by the edge, Caddy, as static files from the
+ *   read-only `uploads` volume: deploy/Caddyfile).
  * - PRIVATE_ROOT (`storage-private/`): ban and moderation evidence, and story images. Never under
  *   /storage and never mounted into a web server; Node serves them only through checked routes:
  *   evidence to admins (GET /api/admin/evidence-files/:file), a story image to signed-in viewers
