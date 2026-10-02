@@ -97,8 +97,6 @@ services:
       # decision (deploy/.env.example). Node refuses to start without it and refuses
       # MODERATION_ENABLED=false (server/src/config.js).
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is missing in deploy/.env (see deploy/.env.example)}
-      # Test override only (deploy/ci.env points it at a closed local port); empty = the provider.
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       MODERATION_MODEL: ${MODERATION_MODEL:-claude-opus-5}
       MODERATION_BLOCK_SEVERITY: ${MODERATION_BLOCK_SEVERITY:-2}

@@ -84,7 +84,8 @@ let client = null;
 let clientKey = '';
 function getClient(env = process.env) {
   const apiKey = String(env.ANTHROPIC_API_KEY ?? '').trim();
-  // Empty = the provider's own address. Tests point it at a local stand-in (test/support/model-mock.js).
+  // Empty = the provider's own address. Tests point it at a local stand-in (test/support/model-mock.js);
+  // production accepts no other host (config.js startupProblems).
   const baseURL = String(env.ANTHROPIC_BASE_URL ?? '').trim() || undefined;
   const timeout = tuning(env).requestTimeoutMs;
   const key = JSON.stringify([apiKey, baseURL ?? '', timeout]);

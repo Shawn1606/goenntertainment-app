@@ -128,6 +128,45 @@ test('MODERATION_ENABLED: "false" is refused in production; other values than tr
   }
 });
 
+test("ANTHROPIC_BASE_URL: in production only the provider's own address or a loopback address", () => {
+  const production = { NODE_ENV: 'production', ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY };
+  const problemsWith = (value, env = production) => startupProblems({ ...env, ANTHROPIC_BASE_URL: value });
+  const named = (value, env) => problemsWith(value, env).some((p) => p.startsWith('ANTHROPIC_BASE_URL'));
+
+  const allowed = [
+    undefined,
+    '',
+    ' ',
+    'https://api.anthropic.com',
+    'https://api.anthropic.com/',
+    'http://127.0.0.1:9',
+    'http://127.0.0.1',
+    'http://[::1]:8080',
+    'http://localhost:4010/',
+  ];
+  for (const value of allowed) assert.equal(named(value), false, JSON.stringify(value));
+
+  const refused = [
+    'https://gateway.example.invalid',
+    'http://api.anthropic.com',
+    'https://api.anthropic.com.example.invalid',
+    'https://api.anthropic.com@gateway.example.invalid',
+    'https://api.anthropic.com/v1/relay',
+    'https://api.anthropic.com:8443',
+    'https://127.0.0.1:9',
+    'http://127.0.0.1.example.invalid:9',
+    'http://localhost.example.invalid',
+    'http://10.0.0.1:8080',
+    'gateway.example.invalid',
+  ];
+  for (const value of refused) {
+    assert.equal(named(value), true, value);
+    assert.ok(!problemsWith(value).some((p) => p.includes(value)), `the value is never named: ${value}`);
+  }
+
+  assert.equal(named('https://gateway.example.invalid', {}), false, 'outside production the tests point it at a local stand-in');
+});
+
 test('MODERATION_FAIL_OPEN: optional, and a set value must be "true" or "false"', () => {
   const named = (env) => startupProblems(env).some((p) => p.startsWith('MODERATION_FAIL_OPEN'));
   for (const value of [undefined, '', 'true', 'false']) {

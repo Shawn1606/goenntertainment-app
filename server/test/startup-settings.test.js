@@ -12,6 +12,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { startupProblems } from '../src/config.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 import { startupEnv } from './support/startup-env.js';
 
@@ -167,6 +168,26 @@ test('an invalid MODERATION_FAIL_OPEN stops the start, named without its value',
   assert.match(r.stderr, /MODERATION_FAIL_OPEN/);
   assert.ok(!r.stderr.includes(broken) && !r.stdout.includes(broken), 'the value must never be printed');
   assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('production refuses an ANTHROPIC_BASE_URL that names another host, without printing it', () => {
+  const gateway = 'https://gateway.example.invalid/test-only';
+  const r = runToExit(startupEnv({ ANTHROPIC_BASE_URL: gateway }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal}): the server started with another host`);
+  assert.match(r.stderr, /ANTHROPIC_BASE_URL/);
+  assert.doesNotMatch(r.stderr, /NODE_TRUST_PROXY|NODE_INTERNAL_SECRET|ANTHROPIC_API_KEY|MODERATION_/, 'only the one setting is named');
+  assert.ok(!r.stderr.includes('gateway.example.invalid') && !r.stdout.includes('gateway.example.invalid'), 'the value must never be printed');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('production starts with a loopback ANTHROPIC_BASE_URL (the CI stack and the tests use one)', async () => {
+  assert.equal(await startsListening(startupEnv({ ANTHROPIC_BASE_URL: 'http://localhost:9' })), true);
+});
+
+test("the provider's own address passes the startup gate", () => {
+  // Checked through the gate itself, not by starting a server: a started test server is never
+  // pointed at the real provider.
+  assert.deepEqual(startupProblems(startupEnv({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' })), []);
 });
 
 test('outside production MODERATION_ENABLED=false and an empty key do not stop the start', async () => {

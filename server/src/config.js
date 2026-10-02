@@ -24,7 +24,10 @@
  * Optional, checked when set:
  *   - WRITE_LIMIT_<CLASS>, the write limits per class (rate-limit.js);
  *   - SANCTUM_EXPIRATION, the access-token lifetime in minutes (tokenLifetimeMinutes);
- *   - MODERATION_ENABLED and MODERATION_FAIL_OPEN: exactly 'true' or 'false' (moderationSettings).
+ *   - MODERATION_ENABLED and MODERATION_FAIL_OPEN: exactly 'true' or 'false' (moderationSettings);
+ *   - ANTHROPIC_BASE_URL, the model provider's address: in production only the provider's own
+ *     https address or a loopback address (modelBaseUrlAllowed). The production compose does not
+ *     pass it at all; the CI compose sets a closed loopback port.
  */
 import express from 'express';
 import { writeLimitSettingProblems } from './rate-limit.js';
@@ -129,6 +132,23 @@ export function moderationSettings(env = process.env) {
   };
 }
 
+/** The provider's own address: what the SDK uses when ANTHROPIC_BASE_URL is empty. */
+const PROVIDER_BASE_URL = 'https://api.anthropic.com';
+
+/** A local address: http on 127.0.0.1, [::1] or localhost, any port. */
+const LOOPBACK_BASE_URL = /^http:\/\/(127\.0\.0\.1|\[::1\]|localhost)(:\d{1,5})?\/?$/i;
+
+/**
+ * Whether ANTHROPIC_BASE_URL is acceptable in production: empty, the provider's own address, or a
+ * loopback address (the CI stack points it at a closed local port, tests at a local stand-in). Any
+ * other address would receive every checked text and image and the production key, and nothing
+ * else would show it, so production refuses to start with one.
+ */
+function modelBaseUrlAllowed(value) {
+  const url = String(value ?? '').trim();
+  return url === '' || url === PROVIDER_BASE_URL || url === `${PROVIDER_BASE_URL}/` || LOOPBACK_BASE_URL.test(url);
+}
+
 /** The moderation settings' startup problems (part of startupProblems). */
 function moderationProblems(env, production) {
   const problems = [];
@@ -138,6 +158,9 @@ function moderationProblems(env, production) {
   }
   if (production && !moderationSettings(env).hasKey) {
     problems.push('ANTHROPIC_API_KEY (required in production: the AI moderation checks every upload and post)');
+  }
+  if (production && !modelBaseUrlAllowed(env.ANTHROPIC_BASE_URL)) {
+    problems.push("ANTHROPIC_BASE_URL (optional; in production only the provider's own https address or a loopback address)");
   }
   if (!SWITCH_VALUES.includes(String(env.MODERATION_FAIL_OPEN ?? ''))) {
     problems.push("MODERATION_FAIL_OPEN (optional; 'true' or 'false')");
