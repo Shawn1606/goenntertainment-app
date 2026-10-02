@@ -278,11 +278,34 @@ const ROWS = [
     },
   },
   {
-    id: 'R05', route: 'POST /api/groups/:id/members', semantics: 'refuse', who: 'A adds B',
+    id: 'R05', route: 'POST /api/groups/:id/members', semantics: 'refuse', who: 'A adds B, B adds A',
     async run() {
-      const res = await call('POST', `/api/groups/${f.groupA}/members`, f.A.token, { user_id: f.b });
-      assert.equal(res.status, 422);
-      assert.equal(await first('SELECT 1 AS ok FROM group_members WHERE group_id = ? AND user_id = ?', [f.groupA, f.b]), null);
+      // A and B are not friends in the fixture, so without a friendship row the route refuses at
+      // its friendship check and never reaches the block check. A stale accepted friendship (as if
+      // the block had not removed it) gets past that check: from then on only the block keeps the
+      // other person out, in both directions (the blocker's group and the blocked person's).
+      const stale = await insert(
+        "INSERT INTO friendships (requester_id, addressee_id, status, created_at, updated_at) VALUES (?, ?, 'accepted', NOW(), NOW())",
+        [f.a, f.b],
+      );
+      const groupB = await insert(
+        "INSERT INTO friend_groups (owner_id, name, created_at, updated_at) VALUES (?, 'Runde von B', NOW(), NOW())",
+        [f.b],
+      );
+      await insert('INSERT INTO group_members (group_id, user_id, created_at) VALUES (?, ?, NOW())', [groupB, f.b]);
+      try {
+        for (const [owner, groupId, other] of [[f.A, f.groupA, f.b], [f.B, groupB, f.a]]) {
+          const res = await call('POST', `/api/groups/${groupId}/members`, owner.token, { user_id: other });
+          assert.equal(res.status, 422, `${owner.user.username} added the other person despite the block`);
+          assert.equal(res.body.message, 'Mit diesem Konto ist kein Kontakt moeglich.');
+          assert.equal(await first('SELECT 1 AS ok FROM group_members WHERE group_id = ? AND user_id = ?', [groupId, other]), null);
+        }
+      } finally {
+        await pool.query('DELETE FROM friendships WHERE id = ?', [stale]);
+        // A broken block check must not leave a member row behind for later rows.
+        await pool.query('DELETE FROM group_members WHERE group_id = ? AND user_id = ?', [f.groupA, f.b]);
+        await pool.query('DELETE FROM friend_groups WHERE id = ?', [groupB]);
+      }
     },
   },
   {
