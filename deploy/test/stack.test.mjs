@@ -155,7 +155,7 @@ before(async () => {
     S.failed = true;
     throw err;
   }
-}, { timeout: 35 * 60_000 });
+}, { timeout: 30 * 60_000 });
 
 /** Builds and starts the stack the way the runbook's first start does, recording each step. */
 async function start() {
@@ -165,7 +165,7 @@ async function start() {
   console.log(`services: ${services.join(', ')}`);
 
   // The probe (profile test) is built from server/Dockerfile like node and seed.
-  const build = step('build', () => stack.compose(['build'], { profiles: ['tools', 'test'], timeout: 30 * 60_000 }));
+  const build = step('build', () => stack.compose(['build'], { profiles: ['tools', 'test'], timeout: 25 * 60_000 }));
   if (build.status !== 0) throw new Error(`docker compose build failed (exit ${build.status}):\n${tail(build.stderr, 4000)}`);
 
   // The runbook's first start: backends and jobs first, without the edge.
@@ -224,7 +224,7 @@ after(() => {
     console.log(`down -v --remove-orphans --rmi local: exit ${down.status}`);
   }
   console.log(`stack test: ${Math.round((Date.now() - started) / 1000)} s`);
-}, { timeout: 10 * 60_000 });
+}, { timeout: 5 * 60_000 });
 
 // --------------------------------------------------------------------------- first start
 
