@@ -13,8 +13,9 @@ import path from 'node:path';
 
 import {
   CI_ENV, CI_OVERRIDE, COMPOSE_FILE, DEPLOY_DIR, ENV_EXAMPLE, REPO_ROOT, RUNBOOK,
-  caddyAdapt, caddyHandlers, composeAsync, envFileValues, inCidr, interpolations, ipToInt,
-  mounts, parseEnvFile, readText, removeTemp, renderConfig, requiredSettings, variantEnvFile,
+  caddyAdapt, caddyHandlers, composeAsync, dockerRun, envFileValues, inCidr, interpolations,
+  ipToInt, mounts, parseEnvFile, readText, removeTemp, renderConfig, requiredSettings,
+  serviceImage, variantEnvFile,
 } from './lib.mjs';
 
 const composeText = () => readText(path.join(DEPLOY_DIR, COMPOSE_FILE));
@@ -298,11 +299,60 @@ test('F-29: caddy serves only stored public images from the volume and answers 4
   console.log(`uploads: ${folders.length} public folders served, ${privateFolders.length} private folders not served`);
 });
 
+// ------------------------------------------------------------------------------ F-30
+
+test('F-30: the Caddyfile validates and sets the security headers on normal and error routes', () => {
+  const r = dockerRun(serviceImage('caddy'), {
+    mounts: [{ src: path.join(DEPLOY_DIR, 'Caddyfile'), dst: '/etc/caddy/Caddyfile' }],
+    env: { DOMAIN: 'localhost' },
+    args: ['caddy', 'validate', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'],
+  });
+  assert.equal(r.status, 0, r.stderr);
+
+  const server = caddyAdapt().apps.http.servers.srv0;
+  const places = { routes: server.routes, 'error routes': server.errors?.routes };
+  for (const [where, list] of Object.entries(places)) {
+    assert.ok(list, `no ${where}`);
+    const headers = caddyHandlers(list).filter((h) => h.handler === 'headers' && h.response);
+    const deferred = headers.find((h) => h.response.deferred && h.response.set?.['Strict-Transport-Security']);
+    assert.ok(deferred, `${where}: no deferred security header handler`);
+    const set = deferred.response.set;
+    assert.ok(Number(/max-age=(\d+)/.exec(set['Strict-Transport-Security'][0])?.[1]) >= 31536000, `${where}: HSTS max-age`);
+    assert.deepEqual(set['X-Content-Type-Options'], ['nosniff'], where);
+    assert.deepEqual(set['X-Frame-Options'], ['DENY'], where);
+    assert.ok(set['Referrer-Policy']?.[0], `${where}: Referrer-Policy`);
+    assert.match(set['Permissions-Policy']?.[0] ?? '', /camera=\(\).*geolocation=\(\).*microphone=\(\)/, `${where}: Permissions-Policy`);
+    assert.deepEqual([...deferred.response.delete].sort(), ['Server', 'X-Powered-By'], where);
+    const csp = headers.find((h) => h.response.require?.headers && 'Content-Security-Policy' in h.response.require.headers);
+    assert.match(csp?.response.set['Content-Security-Policy'][0] ?? '', /frame-ancestors 'none'/, `${where}: default CSP`);
+  }
+});
+
 test("F-31: caddy sends the client's TCP address to Laravel and overwrites a client-sent X-Forwarded-For", () => {
   const proxy = caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'reverse_proxy');
   assert.equal(proxy.length, 1);
   assert.deepEqual(proxy[0].headers?.request?.set?.['X-Forwarded-For'], ['{http.request.remote.host}']);
   assert.deepEqual(proxy[0].headers?.request?.set?.['X-Forwarded-Proto'], ['{http.request.scheme}']);
+});
+
+test('request bodies: 9 MB only for multipart uploads, otherwise the largest body limit of the backends', () => {
+  const php = readText(path.join(REPO_ROOT, 'api', 'app', 'Http', 'Middleware', 'LimitRequestBody.php'));
+  const kb = ['JSON_LIMIT_KB', 'WEBHOOK_JSON_LIMIT_KB', 'URLENCODED_LIMIT_KB']
+    .map((n) => Number(new RegExp(`const ${n} = (\\d+);`).exec(php)?.[1]));
+  assert.ok(kb.every((n) => n > 0), 'cannot read the limits in LimitRequestBody.php');
+  const upload = Number(/MAX_UPLOAD_BYTES = (\d+) \* 1024 \* 1024/.exec(readText(path.join(REPO_ROOT, 'server', 'src', 'uploads.js')))?.[1]) * 1024 * 1024;
+  const post = Number(/^post_max_size = (\d+)M/m.exec(readText(path.join(REPO_ROOT, 'api', 'docker', 'php.ini')))?.[1]) * 1024 * 1024;
+  assert.ok(upload > 0 && post > 0, 'cannot read the upload limit or post_max_size');
+
+  const routes = caddyAdapt().apps.http.servers.srv0.routes[0].handle[0].routes;
+  const limits = routes.filter((r) => r.handle?.[0]?.handler === 'request_body');
+  assert.equal(limits.length, 2, 'two request_body handlers');
+  const multipart = limits.find((r) => r.match?.[0]?.header?.['Content-Type']?.[0] === 'multipart/form-data*');
+  const other = limits.find((r) => r.match?.[0]?.not?.[0]?.header?.['Content-Type']?.[0] === 'multipart/form-data*');
+  assert.ok(multipart && other, 'one limit for multipart, one for every other body, never both');
+  assert.equal(multipart.handle[0].max_size, 9000000);
+  assert.ok(multipart.handle[0].max_size > upload && multipart.handle[0].max_size < post, 'between the image limit and post_max_size');
+  assert.equal(other.handle[0].max_size, Math.max(...kb) * 1024, 'the largest non-upload limit of Laravel and Node');
 });
 
 // ------------------------------------------------------------------------------ F-25

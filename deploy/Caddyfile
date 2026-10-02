@@ -1,6 +1,43 @@
 # Caddy holt und erneuert das HTTPS-Zertifikat von Let's Encrypt vollautomatisch,
 # sobald die Domain auf diesen Server zeigt. Kein certbot, kein Cronjob.
+#
+# Security headers on every answer (F-30), also on Caddy's own errors (handle_errors below).
+# `-Server` makes the block apply when the answer is written, so it also overwrites what
+# Laravel or Node sent. `?Content-Security-Policy` only sets a default: the stricter policy of the
+# uploads below stays. HSTS without includeSubDomains/preload: that would bind every subdomain of
+# the domain, an operator decision (deploy/.env.example, DOMAIN).
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		?Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+		-Server
+		-X-Powered-By
+	}
+}
+
 {$DOMAIN} {
+	import security_headers
+
+	# Request body limits. Multipart (image uploads): etwas über dem 5-MB-Limit des
+	# Node-Backends und unter post_max_size von PHP (api/docker/php.ini). So lehnt das
+	# Backend zu große Bilder mit seiner eigenen, in der App lesbaren Fehlermeldung ab,
+	# statt dass Caddy die Verbindung vorher mit einem nackten 413 kappt.
+	# Every other body: the largest limit Laravel and Node apply to a body that is not an upload
+	# (the webhook's JSON, LimitRequestBody::WEBHOOK_JSON_LIMIT_KB); they keep their own, smaller
+	# limits per type (deploy/test/static.test.mjs compares the numbers).
+	@multipart header Content-Type multipart/form-data*
+	@not_multipart not header Content-Type multipart/form-data*
+	request_body @multipart {
+		max_size 9MB
+	}
+	request_body @not_multipart {
+		max_size 128KiB
+	}
+
 	# Public uploads (F-29): plain files from the read-only `uploads` volume, never through PHP.
 	# Only the public folders and the names Node gives a stored image (server/src/storage.js:
 	# PUBLIC_FOLDERS, STORED_NAME); everything else under /storage is a 404 from Caddy, so no
@@ -33,14 +70,6 @@
 		}
 	}
 
-	# Etwas über dem 5-MB-Limit des Node-Backends und unter post_max_size von PHP
-	# (api/docker/php.ini). So lehnt das Backend zu große Bilder mit seiner eigenen,
-	# in der App lesbaren Fehlermeldung ab, statt dass Caddy die Verbindung vorher
-	# mit einem nackten 413 kappt.
-	request_body {
-		max_size 9MB
-	}
-
 	encode gzip
 
 	log {
@@ -48,5 +77,12 @@
 			roll_size 10MB
 			roll_keep 5
 		}
+	}
+
+	# Caddy's own error answers (413, a missing upload, ...) get the same headers: error routes do
+	# not pass through the site's handlers above.
+	handle_errors {
+		import security_headers
+		respond "{err.status_code} {err.status_text}" {err.status_code}
 	}
 }
