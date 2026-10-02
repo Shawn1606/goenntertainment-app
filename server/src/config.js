@@ -177,7 +177,7 @@ export const USAGE_RETENTION_MIN_DAYS = 120;
 
 /**
  * Retention settings (F-16), in whole days. How long data that is no longer needed is kept is an
- * operator decision (HANDOFF §3), so the code has no defaults: production does not start without
+ * operator decision, so the code has no defaults: production does not start without
  * all four (startupProblems), and the compose requires them. What each one covers (retention.js):
  *
  *   EVIDENCE_RETENTION_DAYS           evidence images of bans and AI moderation reports

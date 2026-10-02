@@ -3,10 +3,9 @@
  *
  * ## The denominator
  *
- * COVERAGE_ROUTES are the 20 cross-user routes the security review checked for block enforcement
- * (its coverage notes, in the order given there). EXTRA_ROUTES are the further cross-user paths
- * named by the finding and the fix plan: joining an event, the leaderboard, event comments and
- * likes, participant lists and notifications. Every route has at least one row in ROWS below, or
+ * COVERAGE_ROUTES (R01-R20) are the cross-user routes the security review checked for block
+ * enforcement; EXTRA_ROUTES (R21-R28) are further cross-user paths of F-13: joining an event, the
+ * leaderboard, event comments and likes, participant lists and notifications. Every route has at least one row in ROWS below, or
  * is delegated to the backend that owns it (the leaderboard is Laravel's). The first test checks
  * that, checks that every Node row names a route the app really serves, and refuses a count of 0.
  *
@@ -40,7 +39,7 @@ import { ensureSchema, first, pool } from '../src/db.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { cleanup, createUser } from './support/fixtures.js';
 
-/** The 20 cross-user routes of the review's coverage notes, in their order. */
+/** The 20 cross-user routes the security review checked, R01-R20. */
 const COVERAGE_ROUTES = [
   'R01 POST /api/users/:id/follow',
   'R02 POST /api/posts/:id/like',
@@ -64,7 +63,7 @@ const COVERAGE_ROUTES = [
   'R20 DELETE /api/users/:id/follow',
 ];
 
-/** Further cross-user paths named by the finding and the plan. */
+/** Further cross-user paths of F-13, R21-R28. */
 const EXTRA_ROUTES = [
   'R21 POST /api/activities/:id/join',
   'R22 GET /api/leaderboard',
@@ -547,7 +546,7 @@ const ROWS = [
   },
 ];
 
-test('denominator: the 20 routes of the coverage notes and 8 further cross-user paths each have a row', () => {
+test('denominator: each of the 28 cross-user routes listed above has a row or a delegated test', () => {
   assert.equal(COVERAGE_ROUTES.length, 20);
   assert.equal(EXTRA_ROUTES.length, 8);
   const keys = [...COVERAGE_ROUTES, ...EXTRA_ROUTES];

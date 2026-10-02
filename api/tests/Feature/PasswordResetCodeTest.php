@@ -234,7 +234,7 @@ class PasswordResetCodeTest extends AppFeatureTestCase
     /**
      * Ten minutes by PHP's clock, whatever the time zone: the test MySQL runs in UTC, the
      * development default APP_TIMEZONE is Europe/Berlin. Nothing in the flow uses MySQL's NOW(),
-     * so both zones give the same answer (P3-8).
+     * so both zones give the same answer.
      */
     public static function expiry(): array
     {
@@ -320,7 +320,7 @@ class PasswordResetCodeTest extends AppFeatureTestCase
     }
 
     /**
-     * The per-account cap of code mails is the route throttle of /forgot-password (C22; its
+     * The per-account cap of code mails is the route throttle of /forgot-password (its
      * default, pinned here as config, is 3 an hour and 10 a day), and within it mails are a
      * minute apart. Another spelling of the address is the same account for both.
      */
@@ -364,7 +364,7 @@ class PasswordResetCodeTest extends AppFeatureTestCase
         $this->reset($email, $code)->assertOk();
     }
 
-    /** P3-8: a wrong reset code is counted on the code only, never toward the two-factor cap. */
+    /** A wrong reset code is counted on the code only, never toward the two-factor cap. */
     public function test_wrong_reset_codes_do_not_count_toward_the_two_factor_cap(): void
     {
         config(['ratelimits.two-factor-failures.account' => '2/900']);

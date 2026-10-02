@@ -10,7 +10,7 @@ use Illuminate\Mail\Mailables\Envelope;
  * The mail with the 6-digit code that resets a password (F-09; App\Support\PasswordReset). The
  * code is typed into the app: no link, no deep link.
  *
- * Text only, like TwoFactorCode, and neutral (no support channel or contact, P2-11). The last
+ * Text only, like TwoFactorCode, and neutral (no support channel or contact). The last
  * sentence matters most: an unexpected reset mail means someone typed this address, and nothing
  * changes unless the code is used.
  *

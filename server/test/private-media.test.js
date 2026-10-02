@@ -1,5 +1,5 @@
 /**
- * Evidence and story images are private (F-11; story images also F-13, DECISIONS P3-1/P3-6).
+ * Evidence and story images are private (F-11; story images also F-13).
  *
  * Private folders (denominator 2, src/storage.js PRIVATE_FOLDERS): `evidence` (ban and timeout
  * evidence from admins, written by POST /api/admin/users/:id/ban and /timeout; the AI

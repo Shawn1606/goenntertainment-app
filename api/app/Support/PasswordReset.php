@@ -24,7 +24,7 @@ use function Illuminate\Support\defer;
  * compared with hash_equals. The challenge's token is never handed out; the address finds the
  * account and the account its one open reset. password_reset_tokens is no longer used.
  *
- * ## The numbers (engineering defaults, P3-8)
+ * ## The numbers (engineering defaults the operator may change)
  *
  *   - 6 digits, valid for 10 minutes (CODE_TTL);
  *   - 5 wrong codes and it is used up (MAX_ATTEMPTS), then a new one is needed;
