@@ -98,7 +98,7 @@ jobs:
   server:
     name: Server tests (MySQL 8.4)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       mysql:
         # Same tag as deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs). Dependabot does
@@ -156,7 +156,7 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.schema.outcome == 'success' }}
         # A test file that leaks a handle never exits; this limit turns that into a red run
         # (the report below then says the run was cut off).
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           DB_PORT: ${{ job.services.mysql.ports['3306'] }}
           NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/server.tap

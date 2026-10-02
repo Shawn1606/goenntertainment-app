@@ -87,7 +87,7 @@ CI together.
 | Typecheck | all `*.ts`/`*.tsx` in `tsconfig.json` | `npx tsc --noEmit` | `expo-env.d.ts` (see below) |
 | Lint | `src/`, `app/`, `components/` (expo lint's default inputs; tooling under `scripts/` is not linted) | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npm run lint` | |
 | Expo SDK versions | | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo install --check` | |
-| Server tests | `server/test/*.test.js` | `npm --prefix server test` (loads the test-only `server/test/test.env`; one file: `node --env-file=test/test.env --test test/<file>.test.js` in `server/`) | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
+| Server tests | `server/test/*.test.js` | `npm --prefix server test` (loads the test-only `server/test/test.env` and runs the files one at a time: they share one database, and in parallel one file's cleanup could deadlock with another file's writes and load could break time bounds; one file: `node --env-file=test/test.env --test test/<file>.test.js` in `server/`) | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
 | `composer.lock` matches `composer.json` | | `cd api && composer validate --no-check-publish --strict` | PHP 8.4, Composer 2 |
 | API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` (see [API tests and MySQL](#api-tests-and-mysql)) | PHP 8.4 with `pdo_mysql`, `composer install`, `api/.env` with a key; MySQL 8.4 with `server/schema.sql` loaded and `DB_CONNECTION=mysql` plus `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` in the environment |
 | CI tooling tests | `scripts/ci/*.test.mjs` | `npm run test:tooling` | |
