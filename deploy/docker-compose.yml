@@ -1,6 +1,6 @@
 # GÖ4Fun auf einem Server – alle Teile als Container.
 #
-#   Internet ─► caddy (HTTPS, Port 80/443)
+#   Internet ─► caddy (HTTPS, Port 80/443)       Uploads als einfache Dateien (nur lesend)
 #                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
 #                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
 #                 db  (MySQL)  ◄── beide Backends
@@ -49,12 +49,11 @@ services:
       start_period: 30s
     networks: [app]
 
-  # Bereitet den Upload-Ordner vor und beendet sich dann wieder.
+  # Bereitet die Upload-Volumes vor und beendet sich dann wieder.
   #
-  # Docker legt einen fehlenden Ordner für ein Bind-Mount als root an. Das
-  # Node-Backend läuft aber absichtlich NICHT als root (Benutzer `node`, UID 1000)
-  # und könnte dort nichts speichern – jeder Upload scheiterte mit „Serverfehler".
-  # Dieser Einmal-Container gibt den Ordner dem Benutzer `node`.
+  # Ein neues Volume gehört root. Das Node-Backend läuft aber absichtlich NICHT als
+  # root (Benutzer `node`, UID 1000) und könnte dort nichts speichern – jeder Upload
+  # scheiterte mit „Serverfehler". Dieser Einmal-Container gibt die Ordner dem Benutzer `node`.
   #
   # Als Liste und in EINER Zeile: Als gefalteter Block (`>`) mit tiefer
   # eingerückten Folgezeilen behält YAML die Zeilenumbrüche – die Shell las
@@ -67,9 +66,9 @@ services:
       - -c
       - mkdir -p /storage/avatars /storage/banners /storage/posts /storage/user-banners /storage-private/evidence /storage-private/stories && chown -R 1000:1000 /storage /storage-private
     volumes:
-      - ./storage:/storage
+      - uploads:/storage
       # Evidence and story images (F-11, server/src/storage.js): node only, never a web server.
-      - ./storage-private:/storage-private
+      - private-media:/storage-private
     network_mode: none
 
   node:
@@ -146,10 +145,11 @@ services:
       WRITE_LIMIT_ADMIN: ${WRITE_LIMIT_ADMIN:-}
       WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
-      - ./storage:/app/storage
+      # Public uploads: written by Node only, served by caddy from the same volume (read-only).
+      - uploads:/app/storage
       # Private uploads (ban evidence, AI moderation evidence, story images): served only by
-      # Node's checked routes. Never mount this folder into api or any other web server.
-      - ./storage-private:/app/storage-private
+      # Node's checked routes. Never mount this volume into api, caddy or any other web server.
+      - private-media:/app/storage-private
     healthcheck:
       # Node's own health route; /api/health belongs to Laravel.
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']
@@ -251,11 +251,7 @@ services:
       MAIL_SCHEME: ${MAIL_SCHEME:-}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
-    volumes:
-      # Dieselben Uploads, die Node speichert – Laravel liefert sie unter /storage
-      # aus (so wie lokal über die Verknüpfung api/public/storage). Nur lesend:
-      # Geschrieben wird ausschließlich von Node.
-      - ./storage:/var/www/api/public/storage:ro
+    # No volumes: uploads are served by caddy, never by Laravel or PHP (F-29).
     networks:
       edge: {}
       app:
@@ -282,6 +278,8 @@ services:
         ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Public uploads, read-only: caddy serves them as plain files (deploy/Caddyfile).
+      - uploads:/srv/storage:ro
       # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
       # bei jedem Neustart neue und läuft irgendwann ins Rate-Limit.
       - caddy-data:/data
@@ -291,6 +289,10 @@ volumes:
   db-data:
   caddy-data:
   caddy-config:
+  # Public uploads (avatars, banners, posts, user banners): node writes, caddy serves (read-only).
+  uploads:
+  # Private media (evidence, stories): node only.
+  private-media:
 
 # APP_NET_PREFIX (the first three parts of a free private /24 on this host, see
 # deploy/.env.example) is split into two halves with fixed proxy addresses (F-31):

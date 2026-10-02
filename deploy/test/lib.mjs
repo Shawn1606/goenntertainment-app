@@ -214,6 +214,12 @@ export function caddyHandlers(node, out = []) {
   return out;
 }
 
+/** The services of a rendered config with their (long-form) volume mounts. */
+export function mounts(config) {
+  return Object.entries(config.services ?? {}).flatMap(([service, s]) =>
+    (s.volumes ?? []).map((v) => ({ service, ...v })));
+}
+
 /** IPv4 helpers for the network checks. */
 export function ipToInt(ip) {
   const parts = String(ip).split('.').map(Number);

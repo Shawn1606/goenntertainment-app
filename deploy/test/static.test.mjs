@@ -14,7 +14,7 @@ import path from 'node:path';
 import {
   CI_ENV, CI_OVERRIDE, COMPOSE_FILE, DEPLOY_DIR, ENV_EXAMPLE, REPO_ROOT, RUNBOOK,
   caddyAdapt, caddyHandlers, composeAsync, envFileValues, inCidr, interpolations, ipToInt,
-  parseEnvFile, readText, removeTemp, renderConfig, requiredSettings, variantEnvFile,
+  mounts, parseEnvFile, readText, removeTemp, renderConfig, requiredSettings, variantEnvFile,
 } from './lib.mjs';
 
 const composeText = () => readText(path.join(DEPLOY_DIR, COMPOSE_FILE));
@@ -257,6 +257,45 @@ test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> n
     assert.equal(dials.length, 1, 'caddy has exactly one upstream');
     assert.equal(dials[0].split(':')[0], 'api', "caddy's upstream is the Laravel service");
   });
+});
+
+// ------------------------------------------------------------------------------ F-29
+
+test('F-29: uploads are mounted read-only into caddy, read-write only into node, never into api', () => {
+  const config = base();
+  const all = mounts(config);
+  const of = (source) => all.filter((m) => m.type === 'volume' && m.source === source)
+    .map((m) => `${m.service}:${m.read_only ? 'ro' : 'rw'}`).sort();
+  assert.deepEqual(of('uploads'), ['caddy:ro', 'node:rw', 'storage-init:rw']);
+  assert.deepEqual(of('private-media'), ['node:rw', 'storage-init:rw']);
+  assert.deepEqual(all.filter((m) => m.service === 'api'), [], 'api mounts something');
+  const binds = all.filter((m) => m.type === 'bind' && /storage/.test(posix(m.source)));
+  assert.deepEqual(binds, [], 'an upload folder bound from the clone');
+  console.log(`mounts: ${all.length} checked`);
+});
+
+test('F-29: caddy serves only stored public images from the volume and answers 404 for anything else under /storage', () => {
+  const storage = readText(path.join(REPO_ROOT, 'server', 'src', 'storage.js'));
+  const folders = /export const PUBLIC_FOLDERS = \[([^\]]+)\]/.exec(storage)?.[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
+  const privateFolders = /export const PRIVATE_FOLDERS = \[([^\]]+)\]/.exec(storage)?.[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
+  const name = /export const STORED_NAME = \/\^(.+)\$\/;/.exec(storage)?.[1];
+  assert.ok(folders?.length && privateFolders?.length && name, 'cannot read PUBLIC_FOLDERS, PRIVATE_FOLDERS or STORED_NAME in server/src/storage.js');
+  const expected = `^/storage/(${folders.join('|')})/${name}$`;
+
+  const routes = caddyAdapt().apps.http.servers.srv0.routes[0].handle[0].routes;
+  const uploadAt = routes.findIndex((r) => r.match?.[0]?.path_regexp);
+  const storageAt = routes.findIndex((r) => r.match?.[0]?.path?.includes('/storage/*'));
+  assert.ok(uploadAt >= 0 && storageAt > uploadAt, 'the upload route comes before the /storage 404');
+  assert.equal(routes[uploadAt].match[0].path_regexp.pattern, expected, 'the allow-list mirrors server/src/storage.js');
+  for (const folder of privateFolders) assert.ok(!expected.includes(folder), `private folder ${folder} is served`);
+  const upload = caddyHandlers(routes[uploadAt]);
+  assert.deepEqual(upload.map((h) => h.handler), ['subroute', 'vars', 'headers', 'file_server']);
+  assert.equal(upload[1].root, '/srv');
+  assert.match(upload[2].response.set['Content-Security-Policy'][0], /sandbox/);
+  assert.deepEqual(caddyHandlers(routes[storageAt]).map((h) => [h.handler, h.status_code ?? null]), [['subroute', null], ['static_response', 404]]);
+  assert.equal(routes[storageAt].match[0].path.includes('/storage'), true);
+  assert.equal(caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'file_server').length, 1, 'one file server only');
+  console.log(`uploads: ${folders.length} public folders served, ${privateFolders.length} private folders not served`);
 });
 
 test("F-31: caddy sends the client's TCP address to Laravel and overwrites a client-sent X-Forwarded-For", () => {

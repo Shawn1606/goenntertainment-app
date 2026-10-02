@@ -1,17 +1,36 @@
 # Caddy holt und erneuert das HTTPS-Zertifikat von Let's Encrypt vollautomatisch,
 # sobald die Domain auf diesen Server zeigt. Kein certbot, kein Cronjob.
 {$DOMAIN} {
-	# Alles geht an Laravel (Container `api`). Laravel beantwortet, was es kann,
-	# und reicht den Rest an das Node-Backend weiter – genau wie am PC.
-	reverse_proxy api:80 {
-		# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
-		# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
-		header_up X-Forwarded-Proto {scheme}
-		# The client address: always the TCP peer Caddy sees, never a value the client sent
-		# (overwrite, not append). Laravel trusts this header from Caddy only (TRUSTED_PROXIES)
-		# and its rate limits count this address. Caddy's default does the same today; this
-		# line keeps it so whatever the default becomes.
-		header_up X-Forwarded-For {remote_host}
+	# Public uploads (F-29): plain files from the read-only `uploads` volume, never through PHP.
+	# Only the public folders and the names Node gives a stored image (server/src/storage.js:
+	# PUBLIC_FOLDERS, STORED_NAME); everything else under /storage is a 404 from Caddy, so no
+	# other file there is ever served or handed to Laravel. Evidence and story images live in the
+	# private-media volume, which Caddy does not mount; Node serves them through checked routes.
+	@upload path_regexp upload ^/storage/(avatars|banners|posts|user-banners)/[0-9a-f]{40}\.(jpg|png|webp)$
+	handle @upload {
+		root * /srv
+		# The browser shows the image and runs nothing in it.
+		header Content-Security-Policy "default-src 'none'; sandbox"
+		file_server
+	}
+	@storage path /storage /storage/*
+	handle @storage {
+		respond 404
+	}
+
+	handle {
+		# Alles andere geht an Laravel (Container `api`). Laravel beantwortet, was es kann,
+		# und reicht den Rest an das Node-Backend weiter – genau wie am PC.
+		reverse_proxy api:80 {
+			# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
+			# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
+			header_up X-Forwarded-Proto {scheme}
+			# The client address: always the TCP peer Caddy sees, never a value the client sent
+			# (overwrite, not append). Laravel trusts this header from Caddy only (TRUSTED_PROXIES)
+			# and its rate limits count this address. Caddy's default does the same today; this
+			# line keeps it so whatever the default becomes.
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 
 	# Etwas über dem 5-MB-Limit des Node-Backends und unter post_max_size von PHP
