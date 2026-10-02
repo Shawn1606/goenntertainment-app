@@ -45,8 +45,16 @@ jobs:
   deploy:
     name: Deploy (static checks and the running stack)
     runs-on: ubuntu-24.04
-    # Most of it is the first build of the api and node images; the checks take a few minutes.
-    timeout-minutes: 45
+    # Above the sum of its steps' limits, so GitHub never cancels the job before the stack test's
+    # after() and the log step have run: the static checks 10 min, the stack test 42 (its file
+    # limit in package.json is 40 min, most of it for the first build of the api and node
+    # images), the logs 5, and 3 for checkout, setup and the counts. deploy/test/budgets.test.mjs
+    # checks these numbers against each other and against the stack test's own budgets.
+    timeout-minutes: 60
+    env:
+      # The project the stack test builds, starts and removes (required by the test), and whose
+      # logs the log step prints.
+      COMPOSE_PROJECT_NAME: goenn-ci
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,6 +65,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Static deploy checks (npm run test:deploy)
+        timeout-minutes: 10
         env:
           NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/deploy-static.tap
         run: npm run test:deploy
@@ -66,11 +75,19 @@ jobs:
 
       - name: The running stack, through the edge (npm run test:deploy:stack)
         if: ${{ !cancelled() }}
+        # Above the test file's own limit (package.json), so the test runner stops first and
+        # the test's after() prints the logs and removes the stack.
+        timeout-minutes: 42
         env:
-          # The project the stack test builds, starts and removes (required by the test).
-          COMPOSE_PROJECT_NAME: goenn-ci
           NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/deploy-stack.tap
         run: npm run test:deploy:stack
+      # A second copy of the logs that needs no after(): the stack test prints them itself when a
+      # check fails, but not when it was stopped before its after() ran. Prints nothing once the
+      # stack has been removed.
+      - name: Stack logs after a failure
+        if: ${{ failure() }}
+        timeout-minutes: 5
+        run: docker compose --project-directory deploy --env-file deploy/ci.env -f deploy/docker-compose.yml -f deploy/docker-compose.ci.yml --profile tools --profile test logs --no-color --tail 200
       - name: Stack check count
         if: ${{ !cancelled() }}
         run: node scripts/ci/test-report.mjs tap deploy-stack "$RUNNER_TEMP/deploy-stack.tap"
