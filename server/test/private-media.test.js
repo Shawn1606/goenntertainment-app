@@ -229,6 +229,44 @@ test('the public tree refuses the private folders in any spelling, even for an o
   }
 });
 
+test('the sweep removes expired stories and their image files', async () => {
+  // Supplementary: sweepExpiredStories runs hourly and at start (src/index.js); the checked route
+  // above is what makes expiry exact.
+  const { sweepExpiredStories } = await import('../src/stories.js');
+  const { resolveStored } = await import('../src/storage.js');
+  const story = await createStory();
+  const { image_path: value } = await first('SELECT image_path FROM stories WHERE id = ?', [story.id]);
+  const file = resolveStored(value);
+  assert.ok(file && fs.existsSync(file), 'precondition: the image is stored');
+
+  await pool.query('UPDATE stories SET expires_at = NOW() - INTERVAL 1 MINUTE WHERE id = ?', [story.id]);
+  assert.ok((await sweepExpiredStories()) >= 1, 'the sweep reports what it removed');
+  assert.equal(await first('SELECT id FROM stories WHERE id = ?', [story.id]), null, 'the row is gone');
+  assert.equal(fs.existsSync(file), false, 'the file is gone');
+});
+
+test('files an older version left in public storage move to private storage at start', async () => {
+  // Supplementary: migrateLegacyPrivateFiles runs before the server listens (src/index.js).
+  const { migrateLegacyPrivateFiles, PRIVATE_ROOT } = await import('../src/storage.js');
+  const name = `${'0'.repeat(30)}${String(process.pid).padStart(10, '0').slice(-10)}.png`;
+  const legacy = path.join(PUBLIC_ROOT, 'evidence', name);
+  const moved = path.join(PRIVATE_ROOT, 'evidence', name);
+  fs.mkdirSync(path.dirname(legacy), { recursive: true });
+  fs.writeFileSync(legacy, PNG_1X1);
+  try {
+    // (A server started by another test file may move it first; the outcome is what counts.)
+    await migrateLegacyPrivateFiles();
+    assert.equal(fs.existsSync(legacy), false, 'gone from the public tree');
+    assert.ok(fs.readFileSync(moved).equals(PNG_1X1), 'the same bytes in the private tree');
+    const url = `${base}/api/admin/evidence-files/${name}`;
+    assert.equal((await get(url, admin.token)).status, 200, 'served through the admin route');
+    assert.equal(await migrateLegacyPrivateFiles(), 0, 'a second run has nothing to move');
+  } finally {
+    fs.rmSync(legacy, { force: true });
+    fs.rmSync(moved, { force: true });
+  }
+});
+
 test('every stored-image address is built in src/media.js (denominator: every source file)', () => {
   const files = [];
   const walk = (dir) => {
