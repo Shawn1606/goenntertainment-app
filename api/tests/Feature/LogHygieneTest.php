@@ -15,7 +15,7 @@ use Tests\AppFeatureTestCase;
 use Throwable;
 
 /**
- * Logs carry no request data (F-38, DECISIONS G10): a failed query is reported without its bound
+ * Logs carry no request data (F-38): a failed query is reported without its bound
  * values, its statement or the driver's message; a failed call to the Node fallback and a code
  * mail that could not be sent log the exception class only (their messages carry the URL with
  * the client's path, or the recipient).

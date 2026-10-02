@@ -6,7 +6,7 @@ use PHPUnit\Framework\TestCase;
 use Tests\AppFeatureTestCase;
 
 /**
- * The deploy keeps Laravel's rate-limit counters in the database (DECISIONS P2-13): a file cache
+ * The deploy keeps Laravel's rate-limit counters in the database: a file cache
  * inside the api container loses increments under concurrent requests and starts from zero when
  * the container is recreated, so a per-account cap on it would not hold. The tables come from
  * server/schema.sql, the one schema the deploy loads (Laravel migrations never run there).

@@ -20,7 +20,7 @@ use RuntimeException;
  */
 final class Sessions
 {
-    /** Default token lifetime: 30 days, absolute from sign-in (DECISIONS P2-10). */
+    /** Default token lifetime: 30 days, absolute from sign-in; SANCTUM_EXPIRATION overrides it. */
     public const DEFAULT_LIFETIME_MINUTES = 43200;
 
     /** Longest name stored for a token (`device_name` comes from the client). */
