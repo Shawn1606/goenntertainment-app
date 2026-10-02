@@ -46,8 +46,8 @@ export default function TwoFactorScreen() {
   const { token, user, applyUser } = useAuth();
   const [step, setStep] = useState<Step>({ kind: 'overview' });
   const [code, setCode] = useState('');
-  // Bestätigung (F-19): Einschalten braucht das Passwort, Ausschalten und neue Codes
-  // Passwort UND einen aktuellen Code.
+  // Step-up (F-19): switching on needs the password; switching off and new recovery codes need
+  // the password AND a current code.
   const [password, setPassword] = useState('');
   const [proofCode, setProofCode] = useState('');
   const [error, setError] = useState<string | null>(null);

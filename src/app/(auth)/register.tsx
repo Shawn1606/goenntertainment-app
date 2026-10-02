@@ -99,7 +99,7 @@ export default function RegisterScreen() {
       userBlocked: blockedTermMessage(u, 'username'),
       userLenOk: u.length >= 3 && u.length <= 30,
       userCharsOk: u.length > 0 && USERNAME_RE.test(u),
-      // Dieselbe Prüfung wie am Server, mit derselben Längengrenze (src/domain/email.ts).
+      // The same check as the server, with the same length limit (src/domain/email.ts).
       emailOk: isEmailAddress(email.trim()),
       // Dieselbe Regel wie am Server (Länge, Buchstaben + Zahl, keine Liste häufiger
       // Passwörter, kein Benutzername darin) – siehe src/domain/password-strength.ts.

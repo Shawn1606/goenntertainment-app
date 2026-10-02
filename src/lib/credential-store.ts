@@ -51,7 +51,7 @@ export async function saveEmail(email: string): Promise<void> {
     if (value) await writeKey(SAVED_EMAIL_KEY, value);
     else await deleteKey(SAVED_EMAIL_KEY);
   } catch {
-    // Kein Speicher verfügbar – dann merkt sich die App eben nichts.
+    // No storage available: then the app simply remembers nothing.
   }
 }
 
@@ -70,7 +70,7 @@ export async function clearSavedEmail(): Promise<void> {
     try {
       await deleteKey(key);
     } catch {
-      // Nichts zu löschen oder kein Speicher – beides heißt: nichts gespeichert.
+      // Nothing to delete, or no storage: either way nothing is stored.
     }
   }
 }

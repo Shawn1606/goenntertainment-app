@@ -115,7 +115,7 @@ class AccountController extends Controller
     }
 
     /**
-     * PUT /api/user/email {email, current_password}, bei aktiver 2FA dazu {code}
+     * PUT /api/user/email {email, current_password}, plus {code} when two-factor sign-in is on
      *
      * The only way to change the address (F-04): it is where password-reset mails and e-mail
      * codes go, so whoever controls it can take the account over. A session alone is therefore

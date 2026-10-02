@@ -926,8 +926,8 @@ function localDate(): string {
 }
 
 /**
- * Profil bearbeiten. Die E-Mail-Adresse gehört nicht dazu: Sie ändert sich nur mit dem Passwort
- * (und dem Code bei Zwei-Faktor) über `api.changeEmail`.
+ * Edit the profile. The e-mail address is not part of it: it changes only with the password (and
+ * the code with two-factor sign-in) through `api.changeEmail`.
  */
 export type UpdateProfileInput = {
   name?: string;
@@ -1119,8 +1119,8 @@ export const api = {
     }),
 
   /**
-   * E-Mail-Adresse ändern (angemeldet): mit dem aktuellen Passwort, bei Zwei-Faktor dazu mit dem
-   * aktuellen Code. Meldet alle anderen Geräte ab; an die bisherige Adresse geht ein Hinweis.
+   * Change the e-mail address (signed in): with the current password, and with two-factor sign-in
+   * also a current code. Signs out every other device; a notice goes to the previous address.
    */
   changeEmail: (token: string, input: { email: string; current_password: string; code?: string }) =>
     request<{ user: User; profile_complete: boolean }>('/user/email', { method: 'PUT', body: input, token }),

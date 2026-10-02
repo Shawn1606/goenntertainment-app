@@ -15,12 +15,12 @@ import { notifyUser } from '@/lib/confirm';
 import { loadSavedEmail, saveEmail } from '@/lib/credential-store';
 
 /**
- * E-Mail-Adresse ändern – mit dem aktuellen Passwort, bei Zwei-Faktor dazu mit dem Code.
+ * Change the e-mail address: with the current password, and with two-factor sign-in also the code.
  *
- * Die Adresse ist der Weg zurück ins Konto (Passwort vergessen, Codes per E-Mail). Wer sie
- * ändern kann, kann das Konto übernehmen – deshalb reicht die Anmeldung allein nicht (F-04).
- * Danach meldet der Server alle anderen Geräte ab und schickt einen Hinweis an die bisherige
- * Adresse; geht der nicht raus, bleibt alles beim Alten.
+ * The address is the way back into the account (forgotten password, codes by e-mail). Whoever can
+ * change it can take the account over, so being signed in is not enough (F-04). Afterwards the
+ * server signs out every other device and sends a notice to the previous address; if that notice
+ * cannot be sent, nothing changes.
  */
 export default function ChangeEmailScreen() {
   const router = useRouter();
@@ -36,7 +36,7 @@ export default function ChangeEmailScreen() {
   const method = user?.two_factor_method ?? null;
   const canSave = isEmailAddress(email.trim()) && password.length > 0 && (!method || code.trim().length > 0) && !saving;
 
-  /** E-Mail-Methode: den Code an die BISHERIGE Adresse schicken lassen. */
+  /** E-mail method: have the code sent to the CURRENT address, not the new one. */
   async function sendCode() {
     if (!token) return;
     setSending(true);
@@ -62,7 +62,7 @@ export default function ChangeEmailScreen() {
         ...(method ? { code: code.trim() } : {}),
       });
       applyUser(res.user);
-      // Die gemerkte Adresse mitziehen, wenn dieses Gerät die bisherige gemerkt hatte.
+      // Carry the remembered address over if this device remembered the previous one.
       if (previous && (await loadSavedEmail()) === previous) await saveEmail(res.user.email);
       await notifyUser('E-Mail-Adresse geändert', 'Deine neue Adresse gilt ab sofort. Andere Geräte wurden abgemeldet.');
       router.back();
