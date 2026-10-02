@@ -104,6 +104,36 @@ test('an invalid SANCTUM_EXPIRATION stops the start, named without its value', (
   assert.doesNotMatch(r.stdout, START_LINE);
 });
 
+test('production refuses to start without ANTHROPIC_API_KEY and names it', () => {
+  const r = runToExit(startupEnv({ ANTHROPIC_API_KEY: '' }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
+  assert.match(r.stderr, /ANTHROPIC_API_KEY/);
+  assert.doesNotMatch(r.stderr, /NODE_TRUST_PROXY|NODE_INTERNAL_SECRET|MODERATION_ENABLED/, 'only the one missing setting is named');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('production refuses to start with MODERATION_ENABLED=false and names it', () => {
+  const r = runToExit(startupEnv({ MODERATION_ENABLED: 'false' }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
+  assert.match(r.stderr, /MODERATION_ENABLED/);
+  assert.doesNotMatch(r.stderr, /NODE_TRUST_PROXY|NODE_INTERNAL_SECRET|ANTHROPIC_API_KEY/, 'only the one setting is named');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('an invalid MODERATION_FAIL_OPEN stops the start, named without its value', () => {
+  const broken = 'yes-test-only';
+  const r = runToExit(startupEnv({ MODERATION_FAIL_OPEN: broken }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
+  assert.match(r.stderr, /MODERATION_FAIL_OPEN/);
+  assert.ok(!r.stderr.includes(broken) && !r.stdout.includes(broken), 'the value must never be printed');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('outside production MODERATION_ENABLED=false and an empty key do not stop the start', async () => {
+  const env = startupEnv({ NODE_ENV: 'development', ANTHROPIC_API_KEY: '', MODERATION_ENABLED: 'false' });
+  assert.equal(await startsListening(env), true);
+});
+
 test('outside production empty NODE_TRUST_PROXY and NODE_INTERNAL_SECRET do not stop the start', async () => {
   const env = startupEnv({ NODE_ENV: 'development', NODE_TRUST_PROXY: '', NODE_INTERNAL_SECRET: '' });
   assert.equal(await startsListening(env), true);

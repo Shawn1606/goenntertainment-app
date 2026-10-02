@@ -4,9 +4,9 @@
  *
  * ## Warum es diese Stufe braucht, obwohl es die KI gibt
  *
- * Die KI-Moderation (src/moderation.js) ist ohne ANTHROPIC_API_KEY aus und laesst
- * bei einem Ausfall alles durch (MODERATION_FAIL_OPEN). Sie prueft ausserdem nur
- * Inhalte, keine Benutzernamen. Diese Liste greift IMMER – ohne Netz, ohne
+ * The AI moderation (src/moderation.js) needs the provider and a key; when it cannot ask the
+ * model it refuses the content (fail closed, unless MODERATION_FAIL_OPEN=true). Sie prueft
+ * ausserdem nur Inhalte, keine Benutzernamen. Diese Liste greift IMMER – ohne Netz, ohne
  * Schluessel, in Mikrosekunden – und sie greift ueberall gleich: Die App prueft
  * damit schon beim Tippen, Laravel bei Registrierung und Profil, Node bei allem
  * anderen. Alle drei lesen dieselbe Datei (shared/blocked-terms.json) und rechnen

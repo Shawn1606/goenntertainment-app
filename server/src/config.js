@@ -13,10 +13,15 @@
  *   - NODE_INTERNAL_SECRET: shared with Laravel (api/), which sends it on the internal routes
  *     (routes/internal.js), at least INTERNAL_SECRET_MIN_LENGTH characters. Outside production
  *     it may be empty; the internal routes then refuse every call (fail closed).
+ *   - ANTHROPIC_API_KEY: the AI moderation's key (F-06, moderation.js). Production also refuses
+ *     MODERATION_ENABLED=false: the only production switch for an outage is the explicit
+ *     MODERATION_FAIL_OPEN=true. Outside production a missing key means every checked content is
+ *     refused (fail closed), unless MODERATION_ENABLED=false says moderation is off on purpose.
  *
  * Optional, checked when set:
  *   - WRITE_LIMIT_<CLASS>, the write limits per class (rate-limit.js);
- *   - SANCTUM_EXPIRATION, the access-token lifetime in minutes (tokenLifetimeMinutes).
+ *   - SANCTUM_EXPIRATION, the access-token lifetime in minutes (tokenLifetimeMinutes);
+ *   - MODERATION_ENABLED and MODERATION_FAIL_OPEN: exactly 'true' or 'false' (moderationSettings).
  */
 import express from 'express';
 import { writeLimitSettingProblems } from './rate-limit.js';
@@ -97,6 +102,45 @@ export function trustProxyValid(value) {
   return !PUBLIC_PROBES.some((address) => trust(address, 0));
 }
 
+/** The values a boolean moderation setting may have; empty means unset. */
+const SWITCH_VALUES = ['', 'true', 'false'];
+
+/**
+ * The AI moderation's switches (F-06), read where they are used, never cached at import, so the
+ * process always acts on its current environment.
+ *
+ *   enabled   off only with exactly MODERATION_ENABLED=false (development and tests; refused in
+ *             production by startupProblems).
+ *   hasKey    ANTHROPIC_API_KEY is set. Without it moderation cannot check anything; that counts
+ *             as "the model is unavailable", which is the next switch's case.
+ *   failOpen  only exactly MODERATION_FAIL_OPEN=true lets content through when the model cannot
+ *             be asked (no key, network error, timeout, unreadable reply). Unset, 'false' and every
+ *             other value keep it closed: the content is refused.
+ */
+export function moderationSettings(env = process.env) {
+  return {
+    enabled: env.MODERATION_ENABLED !== 'false',
+    hasKey: String(env.ANTHROPIC_API_KEY ?? '').trim() !== '',
+    failOpen: env.MODERATION_FAIL_OPEN === 'true',
+  };
+}
+
+/** The moderation settings' startup problems (part of startupProblems). */
+function moderationProblems(env, production) {
+  const problems = [];
+  const enabled = String(env.MODERATION_ENABLED ?? '');
+  if (!SWITCH_VALUES.includes(enabled) || (production && enabled === 'false')) {
+    problems.push("MODERATION_ENABLED (optional; 'true' or 'false', and never 'false' in production)");
+  }
+  if (production && !moderationSettings(env).hasKey) {
+    problems.push('ANTHROPIC_API_KEY (required in production: the AI moderation checks every upload and post)');
+  }
+  if (!SWITCH_VALUES.includes(String(env.MODERATION_FAIL_OPEN ?? ''))) {
+    problems.push("MODERATION_FAIL_OPEN (optional; 'true' or 'false')");
+  }
+  return problems;
+}
+
 /**
  * Names (never values) of the settings that keep the server from starting, with a short hint
  * where a name alone would not say what is wrong. An empty list means: start.
@@ -122,6 +166,9 @@ export function startupProblems(env = process.env) {
   if (tokenLifetimeMinutes(env) === null) {
     problems.push('SANCTUM_EXPIRATION (optional; when set, a positive whole number of minutes)');
   }
+
+  // AI moderation (F-06): fail closed, and production never runs without it.
+  problems.push(...moderationProblems(env, production));
 
   return problems;
 }

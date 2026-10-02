@@ -12,6 +12,12 @@
 /** Test-only shared secret for the internal routes (at least 32 characters). */
 export const TEST_INTERNAL_SECRET = 'test-only-internal-secret-not-a-secret-0000';
 
+/** Test-only stand-in for the AI moderation key: never a real key. */
+export const TEST_ANTHROPIC_API_KEY = 'test-only-fake-key-not-a-secret';
+
+/** A local port nothing listens on: a started server can never reach the model provider. */
+export const UNREACHABLE_MODEL_URL = 'http://127.0.0.1:9';
+
 export function startupEnv(overrides = {}) {
   const env = {
     // Database and PATH from the test process (the harness or CI provide them).
@@ -22,8 +28,13 @@ export function startupEnv(overrides = {}) {
     NODE_INTERNAL_SECRET: TEST_INTERNAL_SECRET,
     // Port 0: the system picks a free one.
     PORT: '0',
-    // Moderation off and no key: a started server contacts nobody.
-    ANTHROPIC_API_KEY: '',
+    // Production requires the moderation key and refuses MODERATION_ENABLED=false (src/config.js).
+    // A fake key and an address where nothing listens: a started server contacts nobody.
+    // MODERATION_ENABLED is set because test/test.env switches it off for the other suites.
+    ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY,
+    ANTHROPIC_BASE_URL: UNREACHABLE_MODEL_URL,
+    MODERATION_ENABLED: 'true',
+    MODERATION_FAIL_OPEN: '',
     ...overrides,
   };
   return env;

@@ -297,9 +297,9 @@ test('Hervorheben: unbekanntes Event ergibt 404', async () => {
 
 // --- Oeffentliches Profil, Beitraege und Social-Links ------------------------
 //
-// Die KI-Verifizierung ist in der Testumgebung aus (kein ANTHROPIC_API_KEY),
-// Beitraege laufen also ohne Modell-Aufruf durch – geprueft wird hier die
-// Zugriffslogik, nicht das Urteil der KI.
+// AI moderation is switched off for these suites (test/test.env, MODERATION_ENABLED=false), so
+// posts go through without a model call: this tests the access logic, not the AI's verdict
+// (that is test/moderation.test.js).
 
 /** Schreibt einen Beitrag (multipart, wie die App). */
 const createPost = (token, body) => {

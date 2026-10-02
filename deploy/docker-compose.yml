@@ -84,13 +84,20 @@ services:
       # longer ago too (src/auth.js). Empty = the default in code (30 days).
       SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # AI moderation (F-06): required; who owns the provider account and key is the operator's
+      # decision (deploy/.env.example). Node refuses to start without it and refuses
+      # MODERATION_ENABLED=false (server/src/config.js).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is missing in deploy/.env (see deploy/.env.example)}
+      # Test override only (deploy/ci.env points it at a closed local port); empty = the provider.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       MODERATION_MODEL: ${MODERATION_MODEL:-claude-opus-5}
       MODERATION_BLOCK_SEVERITY: ${MODERATION_BLOCK_SEVERITY:-2}
       MODERATION_TIMEOUT_SEVERITY: ${MODERATION_TIMEOUT_SEVERITY:-2}
       MODERATION_TIMEOUT_DAYS: ${MODERATION_TIMEOUT_DAYS:-7}
-      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-true}
+      # Fail closed: content the model cannot check is refused. 'true' is an explicit emergency
+      # switch only.
+      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-false}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.

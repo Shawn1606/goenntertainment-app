@@ -10,8 +10,11 @@
  *                     (inkl. Beweis-Datensatz mit dem beanstandeten Bild).
  * Jede Pruefung landet in `moderation_reports` – auch die unauffaelligen.
  *
- * Ohne ANTHROPIC_API_KEY ist die Moderation inaktiv und laesst alles durch
- * (die App funktioniert dann wie vorher, nur ungeprueft).
+ * Fails closed (F-06): when the model cannot be asked (no ANTHROPIC_API_KEY, network error,
+ * timeout, unreadable reply), the content is refused, unless MODERATION_FAIL_OPEN=true says
+ * otherwise. Only MODERATION_ENABLED=false switches moderation off, and production refuses to
+ * start with that or without a key (config.js startupProblems). The switches are read on every
+ * check (config.js moderationSettings), not when this module is loaded.
  */
 import 'dotenv/config';
 import path from 'node:path';
@@ -20,26 +23,32 @@ import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from './db.js';
 import { setBan, recordBanEvidence } from './auth.js';
+import { moderationSettings } from './config.js';
 import { describeError, logError, logWarn } from './log.js';
 
 // --- Konfiguration (alles per .env uebersteuerbar) ---------------------------
 
-const MODEL = process.env.MODERATION_MODEL || 'claude-opus-5';
-/** Dauer der automatischen Sperre in Tagen. */
-const TIMEOUT_DAYS = intEnv('MODERATION_TIMEOUT_DAYS', 7);
-/** Ab dieser Schwere wird der Inhalt abgelehnt. */
-const BLOCK_SEVERITY = intEnv('MODERATION_BLOCK_SEVERITY', 2);
-/** Ab dieser Schwere gibt es zusaetzlich den automatischen Timeout. */
-const TIMEOUT_SEVERITY = intEnv('MODERATION_TIMEOUT_SEVERITY', 2);
 /**
- * Verhalten, wenn die KI nicht antwortet (Netzfehler, Rate-Limit, Zeitueberschreitung):
- * true  = Inhalt trotzdem durchlassen (Standard, damit die App nutzbar bleibt),
- * false = Inhalt ablehnen (strenger, aber ein API-Ausfall blockiert alle Uploads).
- * Der Vorfall wird in beiden Faellen als Bericht gespeichert.
+ * The tuning values, read on every check like the switches in config.js:
+ *   model            MODERATION_MODEL
+ *   timeoutDays      Dauer der automatischen Sperre in Tagen (MODERATION_TIMEOUT_DAYS).
+ *   blockSeverity    Ab dieser Schwere wird der Inhalt abgelehnt (MODERATION_BLOCK_SEVERITY).
+ *   timeoutSeverity  Ab dieser Schwere gibt es zusaetzlich den automatischen Timeout
+ *                    (MODERATION_TIMEOUT_SEVERITY).
+ *   requestTimeoutMs Harte Obergrenze pro Pruefung, damit das Anlegen eines Events nicht haengt
+ *                    (MODERATION_TIMEOUT_MS).
+ * When the model does not answer, MODERATION_FAIL_OPEN decides (config.js moderationSettings);
+ * the incident is stored as a report either way.
  */
-const FAIL_OPEN = (process.env.MODERATION_FAIL_OPEN ?? 'true') !== 'false';
-/** Harte Obergrenze pro Pruefung, damit das Anlegen eines Events nicht haengt. */
-const REQUEST_TIMEOUT_MS = intEnv('MODERATION_TIMEOUT_MS', 45000);
+function tuning(env = process.env) {
+  return {
+    model: env.MODERATION_MODEL || 'claude-opus-5',
+    timeoutDays: intEnv(env, 'MODERATION_TIMEOUT_DAYS', 7),
+    blockSeverity: intEnv(env, 'MODERATION_BLOCK_SEVERITY', 2),
+    timeoutSeverity: intEnv(env, 'MODERATION_TIMEOUT_SEVERITY', 2),
+    requestTimeoutMs: intEnv(env, 'MODERATION_TIMEOUT_MS', 45000),
+  };
+}
 
 const EVIDENCE_DIR = path.join(process.cwd(), 'storage', 'evidence');
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
@@ -50,36 +59,44 @@ const VISION_MIME = { 'image/jpeg': 'image/jpeg', 'image/jpg': 'image/jpeg', 'im
 // (bei Moderations-Inhalten durchaus moeglich), beantwortet Anthropic sie
 // automatisch mit einem Ersatz-Modell statt mit einer Absage.
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
-let useFallbacks = (process.env.MODERATION_FALLBACKS ?? 'true') !== 'false';
+/** Set once the provider said the fallback beta is not available to this account (see createMessage). */
+let fallbacksUnavailable = false;
 
-function intEnv(name, fallback) {
-  const n = Number(process.env[name]);
+function intEnv(env, name, fallback) {
+  const n = Number(env[name]);
   return Number.isFinite(n) ? n : fallback;
-}
-
-/** Ist die KI-Moderation aktiv? (Schalter aus ODER kein API-Key => nein) */
-export function moderationEnabled() {
-  if ((process.env.MODERATION_ENABLED ?? 'true') === 'false') {
-    return false;
-  }
-  return Boolean(process.env.ANTHROPIC_API_KEY);
 }
 
 /** Kurzbeschreibung fuer das Server-Log beim Start. */
 export function moderationStatus() {
-  if (!moderationEnabled()) {
-    return process.env.ANTHROPIC_API_KEY
-      ? 'KI-Moderation: AUS (MODERATION_ENABLED=false)'
-      : 'KI-Moderation: AUS (ANTHROPIC_API_KEY fehlt in server/.env)';
+  const settings = moderationSettings();
+  const { model, timeoutSeverity, timeoutDays } = tuning();
+  if (!settings.enabled) {
+    return 'KI-Moderation: AUS (MODERATION_ENABLED=false, development only)';
   }
-  return `KI-Moderation: AN (${MODEL}, Sperre ab Schwere ${TIMEOUT_SEVERITY} fuer ${TIMEOUT_DAYS} Tage)`;
+  const onFailure = settings.failOpen
+    ? 'lets content through when the model cannot be asked (MODERATION_FAIL_OPEN=true)'
+    : 'refuses content when the model cannot be asked';
+  if (!settings.hasKey) {
+    return `KI-Moderation: AN ohne ANTHROPIC_API_KEY - ${onFailure}`;
+  }
+  return `KI-Moderation: AN (${model}, Sperre ab Schwere ${timeoutSeverity} fuer ${timeoutDays} Tage) - ${onFailure}`;
 }
 
+/** One client per key, address and time limit: a changed environment gets a new one. */
 let client = null;
-function getClient() {
-  if (!client) {
-    // Liest ANTHROPIC_API_KEY aus der Umgebung; Zeitlimit in Millisekunden.
-    client = new Anthropic({ timeout: REQUEST_TIMEOUT_MS, maxRetries: 1 });
+let clientKey = '';
+function getClient(env = process.env) {
+  const apiKey = String(env.ANTHROPIC_API_KEY ?? '').trim();
+  // Empty = the provider's own address. Tests point it at a local stand-in (test/support/model-mock.js).
+  const baseURL = String(env.ANTHROPIC_BASE_URL ?? '').trim() || undefined;
+  const timeout = tuning(env).requestTimeoutMs;
+  const key = JSON.stringify([apiKey, baseURL ?? '', timeout]);
+  if (!client || clientKey !== key) {
+    // logLevel 'off': the SDK never writes to the console, so not even ANTHROPIC_LOG=debug can
+    // put a request (with the user's content) into the server log; errors are logged here.
+    client = new Anthropic({ apiKey, baseURL, timeout, maxRetries: 1, logLevel: 'off' });
+    clientKey = key;
   }
   return client;
 }
@@ -206,7 +223,7 @@ function buildPrompt({ context, title, description, interests, hasImage }) {
  */
 async function createMessage(params) {
   const c = getClient();
-  if (useFallbacks) {
+  if (process.env.MODERATION_FALLBACKS !== 'false' && !fallbacksUnavailable) {
     try {
       return await c.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' });
     } catch (err) {
@@ -215,7 +232,7 @@ async function createMessage(params) {
       // sonst wuerde die Moderation dauerhaft (und unbemerkt) ausfallen. Ein
       // echter Anfrage-Fehler wiederholt sich unten und wird sichtbar geloggt.
       if ([400, 403, 404].includes(err?.status)) {
-        useFallbacks = false;
+        fallbacksUnavailable = true;
         logWarn('[moderation] Server-seitige Fallbacks nicht verfuegbar, weiter ohne', err);
       } else {
         throw err;
@@ -254,7 +271,7 @@ async function classify({ context, title, description, interests, image }) {
   let response;
   try {
     response = await createMessage({
-      model: MODEL,
+      model: tuning().model,
       // Genug Luft fuer das (standardmaessig aktive) Nachdenken plus das JSON.
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
@@ -302,13 +319,13 @@ async function classify({ context, title, description, interests, image }) {
 // --- Bewertung + Massnahmen -------------------------------------------------
 
 /** Ordnet dem Klassifikations-Ergebnis Urteil und Massnahme zu. */
-function decide(result, { isAdmin }) {
+function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
   if (result.status === 'refusal') {
     // Kein Urteil, aber ein deutliches Signal: Inhalt ablehnen, NICHT sperren
     // (eine Sperre ohne nachvollziehbare Begruendung waere nicht fair).
     return {
       verdict: 'refusal',
-      severity: BLOCK_SEVERITY,
+      severity: blockSeverity,
       allowed: false,
       timeout: false,
       reason: 'Der Inhalt konnte nicht geprueft werden und wurde vorsichtshalber abgelehnt.',
@@ -317,12 +334,13 @@ function decide(result, { isAdmin }) {
     };
   }
   if (result.status === 'error') {
+    // Fail closed unless MODERATION_FAIL_OPEN=true (config.js moderationSettings).
     return {
       verdict: 'error',
       severity: 0,
-      allowed: FAIL_OPEN,
+      allowed: failOpen,
       timeout: false,
-      reason: FAIL_OPEN
+      reason: failOpen
         ? null
         : 'Die Inhaltspruefung ist gerade nicht erreichbar. Bitte versuche es spaeter erneut.',
       categories: [],
@@ -331,10 +349,10 @@ function decide(result, { isAdmin }) {
   }
 
   const severity = result.severity;
-  const allowed = severity < BLOCK_SEVERITY;
+  const allowed = severity < blockSeverity;
   // Admins werden nie automatisch gesperrt – sonst koennte sich das Team
   // versehentlich selbst aus dem Admin-Panel aussperren.
-  const timeout = !allowed && !isAdmin && severity >= TIMEOUT_SEVERITY;
+  const timeout = !allowed && !isAdmin && severity >= timeoutSeverity;
   return {
     verdict: allowed ? (severity === 0 ? 'ok' : 'auffaellig') : 'abgelehnt',
     severity,
@@ -381,7 +399,7 @@ async function saveReport({ userId, context, decision, snapshot, imagePath, late
         snapshot.description ?? null,
         snapshot.interests.join(', ').slice(0, 500) || null,
         imagePath,
-        MODEL,
+        tuning().model,
         latencyMs,
       ],
     );
@@ -421,14 +439,25 @@ export async function moderateContent({
   interests = [],
   image = null,
 }) {
-  if (!moderationEnabled()) {
+  const settings = moderationSettings();
+  if (!settings.enabled) {
+    // Only with MODERATION_ENABLED=false, which production refuses (config.js).
     return { allowed: true, skipped: true, timedOut: false, bannedUntil: null, banReason: null, reason: null, severity: 0, categories: [], fields: [] };
   }
 
+  const { timeoutDays, blockSeverity, timeoutSeverity } = tuning();
   const started = Date.now();
-  const result = await classify({ context, title, description, interests, image });
+  // Without a key the model cannot be asked: the same case as an outage (fail closed).
+  const result = settings.hasKey
+    ? await classify({ context, title, description, interests, image })
+    : { status: 'error', error: 'ANTHROPIC_API_KEY fehlt', logDetail: 'no ANTHROPIC_API_KEY set' };
   const latencyMs = Date.now() - started;
-  const decision = decide(result, { isAdmin: Boolean(user?.is_admin) });
+  const decision = decide(result, {
+    isAdmin: Boolean(user?.is_admin),
+    failOpen: settings.failOpen,
+    blockSeverity,
+    timeoutSeverity,
+  });
 
   if (result.status === 'error') {
     logError('[moderation] Pruefung fehlgeschlagen', result.logDetail ?? 'unknown');
@@ -451,7 +480,7 @@ export async function moderateContent({
   let banReason = null;
   if (decision.timeout && user?.id) {
     banReason = `Automatische Sperre (KI-Moderation): ${decision.reason}`.slice(0, 255);
-    const untilSql = new Date(Date.now() + TIMEOUT_DAYS * 24 * 3600 * 1000)
+    const untilSql = new Date(Date.now() + timeoutDays * 24 * 3600 * 1000)
       .toISOString()
       .slice(0, 19)
       .replace('T', ' ');

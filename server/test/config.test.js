@@ -8,12 +8,13 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_TOKEN_LIFETIME_MINUTES,
   INTERNAL_SECRET_MIN_LENGTH,
+  moderationSettings,
   startupProblems,
   tokenLifetimeMinutes,
   trustProxySetting,
   trustProxyValid,
 } from '../src/config.js';
-import { startupEnv } from './support/startup-env.js';
+import { startupEnv, TEST_ANTHROPIC_API_KEY } from './support/startup-env.js';
 
 const SECRET_OK = 'x'.repeat(INTERNAL_SECRET_MIN_LENGTH);
 
@@ -78,7 +79,57 @@ test('SANCTUM_EXPIRATION: optional, and a set value must be what Laravel accepts
 
 test('problems name settings, never their values', () => {
   const value = 'visible-test-only-value';
-  const problems = startupProblems({ NODE_ENV: 'production', NODE_TRUST_PROXY: value, NODE_INTERNAL_SECRET: value });
+  // The moderation key (required in production since F-06) is given, so exactly the two settings
+  // that carry the visible value are named.
+  const problems = startupProblems({
+    NODE_ENV: 'production',
+    NODE_TRUST_PROXY: value,
+    NODE_INTERNAL_SECRET: value,
+    ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY,
+  });
   assert.equal(problems.length, 2);
   for (const problem of problems) assert.ok(!problem.includes(value), problem);
+});
+
+test('moderationSettings: off only with exactly "false", open on failure only with exactly "true"', () => {
+  assert.deepEqual(moderationSettings({}), { enabled: true, hasKey: false, failOpen: false });
+  assert.equal(moderationSettings({ MODERATION_ENABLED: 'false' }).enabled, false);
+  for (const value of ['', 'true', 'FALSE', '0', 'no']) {
+    assert.equal(moderationSettings({ MODERATION_ENABLED: value }).enabled, true, JSON.stringify(value));
+  }
+  assert.equal(moderationSettings({ MODERATION_FAIL_OPEN: 'true' }).failOpen, true);
+  for (const value of ['', 'false', 'TRUE', '1', 'yes', ' true']) {
+    assert.equal(moderationSettings({ MODERATION_FAIL_OPEN: value }).failOpen, false, JSON.stringify(value));
+  }
+  assert.equal(moderationSettings({ ANTHROPIC_API_KEY: '  ' }).hasKey, false);
+  assert.equal(moderationSettings({ ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY }).hasKey, true);
+});
+
+test('ANTHROPIC_API_KEY: required in production only', () => {
+  const named = (env) => startupProblems(env).some((p) => p.startsWith('ANTHROPIC_API_KEY'));
+  assert.equal(named({ NODE_ENV: 'production' }), true, 'missing in production');
+  assert.equal(named({ NODE_ENV: 'production', ANTHROPIC_API_KEY: ' ' }), true, 'blank in production');
+  assert.equal(named({ NODE_ENV: 'production', ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY }), false);
+  assert.equal(named({}), false, 'outside production moderation fails closed instead');
+});
+
+test('MODERATION_ENABLED: "false" is refused in production; other values than true/false everywhere', () => {
+  const named = (env) => startupProblems(env).some((p) => p.startsWith('MODERATION_ENABLED'));
+  assert.equal(named({ NODE_ENV: 'production', MODERATION_ENABLED: 'false' }), true);
+  assert.equal(named({ NODE_ENV: 'production', MODERATION_ENABLED: 'true' }), false);
+  assert.equal(named({ NODE_ENV: 'production' }), false, 'unset means on');
+  assert.equal(named({ MODERATION_ENABLED: 'false' }), false, 'development and tests may switch it off');
+  for (const value of ['0', 'off', 'FALSE', ' false']) {
+    assert.equal(named({ MODERATION_ENABLED: value }), true, JSON.stringify(value));
+  }
+});
+
+test('MODERATION_FAIL_OPEN: optional, and a set value must be "true" or "false"', () => {
+  const named = (env) => startupProblems(env).some((p) => p.startsWith('MODERATION_FAIL_OPEN'));
+  for (const value of [undefined, '', 'true', 'false']) {
+    assert.equal(named({ NODE_ENV: 'production', MODERATION_FAIL_OPEN: value }), false, JSON.stringify(value));
+  }
+  const value = 'yes-test-only';
+  assert.equal(named({ MODERATION_FAIL_OPEN: value }), true);
+  assert.ok(!startupProblems({ MODERATION_FAIL_OPEN: value }).some((p) => p.includes(value)), 'the value is never named');
 });
