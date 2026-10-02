@@ -8,9 +8,9 @@
 # ## Warum php:8.4-apache
 #
 # - 8.4, weil lokal (Herd) dieselbe Version läuft: Was am PC geht, geht hier.
-# - Apache mit eingebautem PHP ist EIN Prozess, der PHP ausführt UND Dateien
-#   ausliefert (die Bilder unter /storage). Mit php-fpm bräuchte es daneben noch
-#   einen zweiten Webserver, der dieselben Dateien sehen muss.
+# - Apache with PHP built in (mod_php) is ONE process: no second web server next to php-fpm.
+#   Apache serves no uploads: the edge (Caddy, deploy/Caddyfile) serves those as static files,
+#   and this image refuses an upload folder under its docroot (docker/apache.conf).
 # - Laravel bringt in public/.htaccess die Umleitungen für Apache mit – inklusive
 #   der Zeile, die den `Authorization`-Kopf (das Anmelde-Token) an PHP weiterreicht.
 #   Ohne sie wäre jede Anfrage der App „nicht angemeldet".
@@ -102,13 +102,17 @@ RUN composer dump-autoload --optimize --no-dev --no-interaction
 FROM base AS runtime
 
 # The finished code, owned by root: the web server reads it but cannot change it. Only the
-# folders Laravel writes to (caches, compiled views, logs) belong to www-data. public/storage is
-# the mount point of the uploads (deploy/docker-compose.yml), read-only.
+# folders Laravel writes to (caches, compiled views, logs) belong to www-data.
+#
+# No upload folder under the docroot: uploads are not this image's business (see the header).
+# The build stops if a public/storage came in with the code (api/.dockerignore keeps the local
+# development link out), and docker/apache.conf refuses one mounted there later.
 COPY --from=build /var/www/api /var/www/api
 COPY --from=build /var/www/shared /var/www/shared
 RUN mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views \
-               storage/logs bootstrap/cache public/storage \
-    && chown -R www-data:www-data storage bootstrap/cache
+               storage/logs bootstrap/cache \
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && test ! -e public/storage
 
 COPY docker/entrypoint.sh /usr/local/bin/goenn-entrypoint
 RUN chmod 755 /usr/local/bin/goenn-entrypoint

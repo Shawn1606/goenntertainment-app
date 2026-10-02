@@ -134,3 +134,70 @@ test('F-28: the api image listens on port 8080, which needs no root', (t) => {
   assert.equal(health.length, 1, 'the api image needs exactly one HEALTHCHECK');
   assert.match(health[0].args, /127\.0\.0\.1:8080\//, 'the healthcheck does not ask port 8080');
 });
+
+// ------------------------------------------------------------------ F-29: no uploads under the api docroot
+
+/** <Directory> blocks of an Apache file: { path, directives } with comments dropped, lower case. */
+function directoryBlocks(conf) {
+  const text = conf
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n');
+  return [...text.matchAll(/<Directory\s+"?([^">\s]+)"?\s*>([\s\S]*?)<\/Directory\s*>/gi)].map((m) => ({
+    path: m[1].replace(/\/+$/, ''),
+    directives: m[2]
+      .split('\n')
+      .map((line) => line.trim().replace(/\s+/g, ' ').toLowerCase())
+      .filter(Boolean),
+  }));
+}
+
+/** The Apache docroot the api image sets (APACHE_DOCUMENT_ROOT) and its uploads path below it. */
+function apiDocroot(instructions) {
+  const docroot = instructions
+    .filter((i) => i.keyword === 'ENV')
+    .map((i) => /APACHE_DOCUMENT_ROOT[=\s]+(\S+)/.exec(i.args)?.[1])
+    .find(Boolean);
+  assert.ok(docroot, 'APACHE_DOCUMENT_ROOT is not set in the final chain of api/Dockerfile');
+  return { docroot, uploads: `${docroot.replace(/\/+$/, '')}/storage` };
+}
+
+test('F-29: the api image has no upload folder under its docroot and its build refuses one', (t) => {
+  const { instructions } = finalInstructions('api/Dockerfile');
+  const { uploads } = apiDocroot(instructions);
+  const run = instructions.filter((i) => i.keyword === 'RUN');
+  t.diagnostic(`uploads path under the docroot: ${uploads}; RUN instructions in the final chain: ${run.length}`);
+  assert.ok(run.length > 0, 'the final chain of api/Dockerfile has no RUN instruction');
+  const creates = run.filter((i) => /\bmkdir\b[^;&|]*\bpublic\/storage\b/.test(i.args));
+  assert.deepEqual(creates.map((i) => `line ${i.line}`), [], 'the final chain creates public/storage');
+  assert.ok(
+    run.some((i) => /\btest ! -e \S*public\/storage\b/.test(i.args)),
+    'the build does not refuse a public/storage that came in with the code',
+  );
+});
+
+test('F-29: Apache in the api image refuses an upload folder mounted under its docroot', (t) => {
+  const { instructions } = finalInstructions('api/Dockerfile');
+  const { docroot, uploads } = apiDocroot(instructions);
+
+  // The image installs and enables the file that holds the rule.
+  assert.ok(
+    instructions.some((i) => i.keyword === 'COPY' && /docker\/apache\.conf\s+\S*conf-available\/goenn\.conf$/.test(i.args)),
+    'api/docker/apache.conf is not installed as conf-available/goenn.conf',
+  );
+  assert.ok(
+    instructions.some((i) => i.keyword === 'RUN' && /\ba2enconf goenn\b/.test(i.args)),
+    'the goenn Apache configuration is not enabled',
+  );
+
+  // Should a folder be mounted or linked there later: no access, no PHP, no .htaccess.
+  const blocks = directoryBlocks(read('api/docker/apache.conf')).filter((b) => b.path === uploads);
+  t.diagnostic(`docroot ${docroot}; <Directory ${uploads}> blocks: ${blocks.length}`);
+  assert.ok(blocks.length > 0, `api/docker/apache.conf has no <Directory ${uploads}> block`);
+  const directives = blocks.flatMap((b) => b.directives);
+  for (const required of ['require all denied', 'allowoverride none', 'php_admin_flag engine off']) {
+    assert.ok(directives.includes(required), `<Directory ${uploads}> lacks "${required}"`);
+  }
+  const grants = directives.filter((d) => d.startsWith('require') && d !== 'require all denied');
+  assert.deepEqual(grants, [], `<Directory ${uploads}> grants access`);
+});
