@@ -113,6 +113,33 @@ class RateLimitRulesTest extends TestCase
         $this->assertSame($pairs($inConfig), $pairs($inExample));
     }
 
+    /**
+     * The header of config/ratelimits.php states how long each per-account scope can refuse an
+     * account with the defaults: the longest window of its rules (a fixed window refuses until it
+     * ends). Named mirror of the numbers above, so the stated lockout cannot drift from them.
+     */
+    public function test_the_config_states_the_longest_refusal_of_every_account_scope(): void
+    {
+        $header = (string) file_get_contents(base_path('config/ratelimits.php'));
+        $checked = 0;
+        foreach (self::DOCUMENTED as $limiter => $scopes) {
+            if (! isset($scopes['account'])) {
+                continue;
+            }
+            $seconds = max(array_column(RateLimitRules::parse($scopes['account']), 'seconds'));
+            $stated = $seconds % 3600 === 0 ? ($seconds / 3600).' h' : ($seconds / 60).' min';
+
+            $this->assertMatchesRegularExpression(
+                '/^\|\s+'.preg_quote($limiter, '/').'\s+up to '.preg_quote($stated, '/').'\b/m',
+                $header,
+                "config/ratelimits.php does not state 'up to {$stated}' for the {$limiter} account scope",
+            );
+            $checked++;
+        }
+
+        $this->assertSame(7, $checked, 'limiters with an account scope');
+    }
+
     /** @return array<string, string> every AUTH_LIMIT_* variable of config/ratelimits.php with its default */
     private static function overrides(): array
     {

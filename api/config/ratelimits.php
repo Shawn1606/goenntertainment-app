@@ -18,6 +18,26 @@
 |   challenge   one two-factor sign-in in progress
 |   user        the signed-in account
 |
+| How long an account can be refused. The per-account scopes count every request, right or
+| wrong, from any address, so whoever knows an account's e-mail address can use them up. A rule
+| that is reached refuses until its window ends; the window starts with its first request. So
+| the longest window of a scope is the longest refusal (tests/Feature/RateLimitRulesTest.php
+| checks this list against the defaults):
+|   register             up to 1 h
+|   login                up to 24 h (50 requests an hour for four hours reach the 200 per
+|                        24 hours; password sign-in is then refused until 24 hours after the
+|                        first request, about 21 hours, and the same can be repeated every day.
+|                        The hourly rule alone refuses about 55 minutes of every hour.)
+|   password-forgot      up to 24 h (10 requests over about three hours; reset mails are then
+|                        refused for about the remaining 21 hours)
+|   password-reset       up to 1 h
+|   two-factor           up to 1 h
+|   two-factor-resend    up to 24 h
+|   two-factor-failures  up to 15 min (wrong codes only)
+| Sessions that are already signed in are not affected. The login and password-forgot account
+| values (AUTH_LIMIT_LOGIN_ACCOUNT, AUTH_LIMIT_FORGOT_ACCOUNT) are the ones to confirm: dropping
+| a daily rule shortens the longest refusal to its hourly window.
+|
 | The numbers are engineering defaults, not product decisions; each can be changed through the
 | environment variable named next to it without a code change (api/.env.example lists them with
 | their defaults; the production compose passes them all to the api service). Unset or empty
