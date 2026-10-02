@@ -99,6 +99,57 @@ class TwoFactorHardeningTest extends AppFeatureTestCase
         $this->assertSame($mailsBefore, Mail::sent(TwoFactorCode::class)->count());
     }
 
+    /** At the cap no step-up code is mailed either (review AUTH-3). */
+    public function test_at_the_cap_no_step_up_code_is_mailed(): void
+    {
+        Mail::fake();
+        $user = $this->makeUser(['two_factor_method' => TwoFactor::METHOD_EMAIL, 'two_factor_confirmed_at' => now()]);
+        for ($signIn = 0; $signIn < 2; $signIn++) {
+            $challenge = $this->signIn($user)->assertOk()->json('two_factor.challenge');
+            $wrong = self::wrongMailedCode();
+            for ($i = 0; $i < 5; $i++) {
+                $this->postJson('/api/login/two-factor', ['challenge' => $challenge, 'code' => $wrong])->assertStatus(422);
+            }
+        }
+        $mailsBefore = Mail::sent(TwoFactorCode::class)->count();
+
+        $this->withBearer($this->issueToken($user))->postJson('/api/user/two-factor/code')
+            ->assertStatus(422)
+            ->assertJsonPath('errors.code.0', self::MSG_LOCKED_15);
+
+        $this->assertSame($mailsBefore, Mail::sent(TwoFactorCode::class)->count());
+        $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', TwoFactor::PURPOSE_CONFIRM)->count());
+    }
+
+    /** At the cap no setup code is mailed either, even with the right password (review AUTH-3). */
+    public function test_at_the_cap_no_setup_code_is_mailed(): void
+    {
+        Mail::fake();
+        $user = $this->makeUser();
+        $token = $this->issueToken($user);
+
+        // Ten wrong setup codes on two setups (five use one up); the pauses keep the mails 60 s
+        // apart and the requests under the per-minute route limit.
+        for ($setup = 0; $setup < 2; $setup++) {
+            $challenge = $this->withBearer($token)->postJson('/api/user/two-factor/email', ['password' => self::TEST_PASSWORD])
+                ->assertOk()
+                ->json('challenge');
+            $wrong = self::wrongMailedCode();
+            for ($i = 0; $i < 5; $i++) {
+                $this->withBearer($token)->postJson('/api/user/two-factor/email/confirm', ['challenge' => $challenge, 'code' => $wrong])->assertStatus(422);
+            }
+            $this->travel(61)->seconds();
+        }
+        $mailsBefore = Mail::sent(TwoFactorCode::class)->count();
+
+        $this->withBearer($token)->postJson('/api/user/two-factor/email', ['password' => self::TEST_PASSWORD])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.code.0', fn (string $message) => preg_match('/^Zu viele falsche Codes – bitte warte \d+ Minuten und versuch es dann noch mal\.$/u', $message) === 1);
+
+        $this->assertSame($mailsBefore, Mail::sent(TwoFactorCode::class)->count());
+        $this->assertNull(DB::table('users')->where('id', $user->id)->value('two_factor_method'));
+    }
+
     public function test_step_up_failures_count_toward_the_same_cap_and_the_lock_ends(): void
     {
         Mail::fake();

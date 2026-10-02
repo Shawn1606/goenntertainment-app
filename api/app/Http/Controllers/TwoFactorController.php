@@ -137,6 +137,8 @@ class TwoFactorController extends Controller
         $user = $request->user();
         $this->refuseIfActive($user);
         StepUp::assertPassword($user, $request->input('password'));
+        // At the account's cap no code is mailed (F-19), and the open setup stays as it is.
+        TwoFactor::refuseIfLocked($user, 'code');
 
         $wait = TwoFactor::secondsUntilNextMail($user, TwoFactor::PURPOSE_SETUP);
         if ($wait > 0) {
@@ -335,6 +337,9 @@ class TwoFactorController extends Controller
         if ($user->two_factor_method !== TwoFactor::METHOD_EMAIL) {
             return response()->json(['message' => TwoFactor::MSG_USES_APP], 409);
         }
+
+        // At the account's cap no code is mailed (F-19), and the open one stays as it is.
+        TwoFactor::refuseIfLocked($user, 'code');
 
         $wait = TwoFactor::secondsUntilNextMail($user, TwoFactor::PURPOSE_CONFIRM);
         if ($wait > 0) {
