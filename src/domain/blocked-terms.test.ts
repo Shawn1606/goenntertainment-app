@@ -158,8 +158,10 @@ test('the word filter fails closed on 100,000 characters in under 500 ms, in eve
 });
 
 test('a list without a valid max_input_length is refused, never used without a bound', () => {
+  // Operator-facing, so in English; the same text in all three copies of the filter.
+  const refused = { name: 'TypeError', message: 'Blocked-terms list: max_input_length is missing or not a positive whole number' };
   for (const max of [undefined, 0, 2.5]) {
     const lists = { ...LISTS, max_input_length: max } as unknown as BlockedTermLists;
-    assert.throws(() => findBlockedTerm('Hallo', lists, 'text'), TypeError, String(max));
+    assert.throws(() => findBlockedTerm('Hallo', lists, 'text'), refused, String(max));
   }
 });

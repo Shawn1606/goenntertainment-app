@@ -149,7 +149,9 @@ test('adversarial input at the maximum (2000 characters) is checked in under 500
 });
 
 test('a list without a valid max_input_length is refused, never used without a bound', () => {
+  // Operator-facing, so in English; the same text in all three copies of the filter.
+  const refused = { name: 'TypeError', message: 'Blocked-terms list: max_input_length is missing or not a positive whole number' };
   for (const max of [undefined, 0, -1, 2.5, '2000']) {
-    assert.throws(() => findBlockedTerm('Hallo', { ...BLOCKED_TERMS, max_input_length: max }, 'text'), TypeError, String(max));
+    assert.throws(() => findBlockedTerm('Hallo', { ...BLOCKED_TERMS, max_input_length: max }, 'text'), refused, String(max));
   }
 });

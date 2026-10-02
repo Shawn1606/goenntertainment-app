@@ -176,7 +176,11 @@ class BlockedTermsTest extends TestCase
                 $thrown = $e;
             }
             $this->assertNotNull($thrown, 'accepted max_input_length '.var_export($max, true));
-            $this->assertStringContainsString('max_input_length', $thrown->getMessage());
+            // Operator-facing, so in English; the same text in all three copies of the filter.
+            $this->assertSame(
+                'Blocked-terms list: max_input_length is missing or not a positive whole number',
+                $thrown->getMessage(),
+            );
         }
     }
 

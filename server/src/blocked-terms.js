@@ -84,7 +84,7 @@ function loadDefaultLists() {
 function maxInputLength(lists) {
   const max = lists?.max_input_length;
   if (!Number.isInteger(max) || max < 1) {
-    throw new TypeError('Liste gesperrter Begriffe: max_input_length fehlt oder ist keine positive ganze Zahl');
+    throw new TypeError('Blocked-terms list: max_input_length is missing or not a positive whole number');
   }
   return max;
 }

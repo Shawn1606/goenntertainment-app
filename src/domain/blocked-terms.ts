@@ -360,7 +360,7 @@ function hasUncoveredHit(
 function maxInputLength(lists: BlockedTermLists): number {
   const max = lists.max_input_length;
   if (typeof max !== 'number' || !Number.isInteger(max) || max < 1) {
-    throw new TypeError('Liste gesperrter Begriffe: max_input_length fehlt oder ist keine positive ganze Zahl');
+    throw new TypeError('Blocked-terms list: max_input_length is missing or not a positive whole number');
   }
   return max;
 }

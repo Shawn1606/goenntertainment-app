@@ -111,7 +111,7 @@ final class BlockedTerms
         // Without a bound the patterns can be made slow (F-02): a list without one is unusable.
         $max = $lists['max_input_length'] ?? null;
         if (! is_int($max) || $max < 1) {
-            throw new RuntimeException('Liste gesperrter Begriffe: max_input_length fehlt oder ist keine positive ganze Zahl');
+            throw new RuntimeException('Blocked-terms list: max_input_length is missing or not a positive whole number');
         }
         $this->maxInputLength = $max;
 
