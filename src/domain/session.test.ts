@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { createSessionWatch, endsSession } from './session.ts';
+import { createSessionWatch, endsSession, signOutLocally } from './session.ts';
 
 const CURRENT = 'fixture-token-current-not-a-secret';
 const OLDER = 'fixture-token-older-not-a-secret';
@@ -70,4 +70,44 @@ test('a listener that unsubscribes while being called does not skip the others',
   watch.report(401, CURRENT);
 
   assert.deepEqual(calls, ['first', 'second', 'second']);
+});
+
+/** Sign-out steps that record their order; `storage` makes removing the stored token fail. */
+function signOutSteps(storage: 'works' | 'fails' = 'works') {
+  const calls: string[] = [];
+  const steps = {
+    forget: () => {
+      calls.push('forget');
+    },
+    clearStorage: async () => {
+      calls.push('clearStorage');
+      if (storage === 'fails') throw new Error('storage unavailable');
+    },
+    notice: async () => {
+      calls.push('notice');
+    },
+  };
+  return { steps, calls };
+}
+
+test('signing out forgets the session in memory before the storage is touched', async () => {
+  const deliberate = signOutSteps();
+  await signOutLocally(deliberate.steps, false);
+  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage'], 'a deliberate sign-out shows no notice');
+
+  const rejected = signOutSteps();
+  await signOutLocally(rejected.steps, true);
+  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'notice']);
+});
+
+test('after a 401 a storage error still signs out and tells the person why', async () => {
+  const { steps, calls } = signOutSteps('fails');
+  await assert.doesNotReject(signOutLocally(steps, true));
+  assert.deepEqual(calls, ['forget', 'clearStorage', 'notice'], 'the session must be forgotten even when the storage fails');
+});
+
+test('a deliberate sign-out passes a storage error on, after forgetting the session', async () => {
+  const { steps, calls } = signOutSteps('fails');
+  await assert.rejects(signOutLocally(steps, false), /storage unavailable/);
+  assert.deepEqual(calls, ['forget', 'clearStorage'], 'the session must be forgotten even when the storage fails');
 });

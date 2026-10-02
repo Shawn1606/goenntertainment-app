@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { endsSession } from '@/domain/session';
+import { endsSession, signOutLocally } from '@/domain/session';
 import {
   api,
   ApiError,
@@ -71,27 +71,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [token]);
 
   /**
-   * The one way this device signs out (F-20, DECISIONS P2-12): deliberate logout and a 401
-   * during a session both end here. `notify` tells the person why, for the 401 case.
+   * The one way this device signs out (F-20): deliberate logout and a 401 during a session both
+   * end here, so whatever else must leave the device at sign-out is added in this one place.
+   * `notify` marks the 401 case and tells the person why. The order and the handling of a
+   * storage error are in signOutLocally (src/domain/session.ts): memory first, then storage; a
+   * storage error rejects only a deliberate logout.
    */
-  const endLocalSession = useCallback(async (notify: boolean) => {
-    tokenRef.current = null;
-    await clearToken();
-    setToken(null);
-    setUser(null);
-    if (notify) {
-      await notifyUser(
-        'Abgemeldet',
-        'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
-      );
-    }
-  }, []);
+  const endLocalSession = useCallback(
+    (notify: boolean) =>
+      signOutLocally(
+        {
+          forget: () => {
+            tokenRef.current = null;
+            setToken(null);
+            setUser(null);
+          },
+          clearStorage: clearToken,
+          notice: () =>
+            notifyUser(
+              'Abgemeldet',
+              'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
+            ),
+        },
+        notify,
+      ),
+    [],
+  );
 
   // A 401 to a request with the current token: the server no longer accepts this session.
+  // Nothing to report if the notice fails: the session is already gone on this device.
   useEffect(
     () =>
       sessionWatch.subscribe((rejected) => {
-        if (endsSession(401, rejected, tokenRef.current)) void endLocalSession(true);
+        if (endsSession(401, rejected, tokenRef.current)) void endLocalSession(true).catch(() => {});
       }),
     [endLocalSession],
   );

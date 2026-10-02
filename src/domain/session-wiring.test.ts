@@ -80,3 +80,22 @@ test('the auth state signs out through one path when a session is rejected', () 
   // logout ends in the same place.
   assert.match(context, /logout: async \(\) => \{[\s\S]*?await endLocalSession\(false\);/);
 });
+
+test('signing out clears the session in memory before the stored token', () => {
+  const context = code('lib/auth-context.tsx');
+  const start = context.indexOf('const endLocalSession = useCallback(');
+  const end = context.indexOf('sessionWatch.subscribe(', start);
+  assert.ok(start >= 0 && end > start, 'endLocalSession not found before the 401 listener');
+  const body = context.slice(start, end);
+
+  const forget = body.indexOf('setToken(null)');
+  const storage = body.indexOf('clearToken');
+  assert.ok(forget >= 0 && storage > forget, 'the stored token is cleared before the session is forgotten in memory');
+  // The steps run in the order signOutLocally gives them (tested in session.test.ts).
+  assert.match(body, /signOutLocally\(/, 'endLocalSession does not use signOutLocally');
+  assert.match(body, /forget: \(\) => \{\s*tokenRef\.current = null;\s*setToken\(null\);\s*setUser\(null\);\s*\}/);
+  assert.match(body, /clearStorage: clearToken,/);
+
+  // The 401 path never leaves a rejected promise behind.
+  assert.match(context, /if \(endsSession\(401, rejected, tokenRef\.current\)\) void endLocalSession\(true\)\.catch\(/);
+});
