@@ -38,7 +38,30 @@ const FILES = {
   'api/app/Providers/AppServiceProvider.php': "<?php\n        fn () => response()->json(['message' => 'Zu viele Versuche – bitte warte kurz.'], 429);\n",
   'src/app/create-activity.tsx': "import x from 'y';\nconst MAX_INTERESTS = 5;\n",
   'server/src/routes/activities.js': '/** Interests. */\nconst MAX_INTERESTS = 5;\n',
+  'server/src/app.js': [
+    "export const JSON_LIMIT = '32kb';",
+    "export const WEBHOOK_JSON_LIMIT = '128kb';",
+    "export const URLENCODED_LIMIT = '16kb';",
+    "  app.use('/api/webhooks/revenuecat', express.json({ limit: WEBHOOK_JSON_LIMIT }));",
+    '  app.use(express.json({ limit: JSON_LIMIT }));',
+    '',
+  ].join('\n'),
+  'server/src/client-errors.js': "export const MSG_TOO_LARGE = 'Die Anfrage ist zu groß.';\n",
+  'api/app/Http/Middleware/LimitRequestBody.php': [
+    '<?php',
+    'final class LimitRequestBody',
+    '{',
+    '    public const JSON_LIMIT_KB = 32;',
+    '    public const WEBHOOK_JSON_LIMIT_KB = 128;',
+    '    public const URLENCODED_LIMIT_KB = 16;',
+    "    public const WEBHOOK_PATH = '/api/webhooks/revenuecat';",
+    "    public const MSG_TOO_LARGE = 'Die Anfrage ist zu groß.';",
+    '}',
+    '',
+  ].join('\n'),
 };
+
+const LIMIT_REQUEST_BODY = 'api/app/Http/Middleware/LimitRequestBody.php';
 
 function withTree(overrides, fn) {
   const root = mkdtempSync(join(tmpdir(), 'check-mirrors-'));
@@ -58,9 +81,47 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 8);
-    assert.equal(r.places, 18);
-    assert.equal(r.occurrences, 19, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 13);
+    assert.equal(r.places, 28);
+    assert.equal(r.occurrences, 29, 'two mysql services in ci.yml count separately');
+  });
+});
+
+test('detects request body limits that differ between Node and Laravel', () => {
+  const php = FILES[LIMIT_REQUEST_BODY];
+  const cases = [
+    [{ [LIMIT_REQUEST_BODY]: php.replace('JSON_LIMIT_KB = 32;', 'JSON_LIMIT_KB = 64;') },
+      /^JSON body limit \(kB\) differs: 32 \(server\/src\/app\.js JSON_LIMIT\), 64 \(api\/app\/Http\/Middleware\/LimitRequestBody\.php JSON_LIMIT_KB\)$/],
+    [{ 'server/src/app.js': FILES['server/src/app.js'].replace("'128kb'", "'256kb'") },
+      /^Webhook JSON body limit \(kB\) differs: 256 \(server\/src\/app\.js WEBHOOK_JSON_LIMIT\), 128 /],
+    [{ [LIMIT_REQUEST_BODY]: php.replace('URLENCODED_LIMIT_KB = 16;', 'URLENCODED_LIMIT_KB = 32;') },
+      /^Urlencoded body limit \(kB\) differs: 16 .*, 32 /],
+    [{ 'server/src/app.js': FILES['server/src/app.js'].replace("app.use('/api/webhooks/revenuecat'", "app.use('/api/webhooks/store'") },
+      /^Webhook JSON body limit path differs: \/api\/webhooks\/store .*, \/api\/webhooks\/revenuecat /],
+    [{ 'server/src/client-errors.js': "export const MSG_TOO_LARGE = 'Zu groß.';\n" },
+      /^Body too large message differs: Zu groß\. /],
+  ];
+  for (const [overrides, expected] of cases) {
+    withTree(overrides, (root) => {
+      const r = checkMirrors(root);
+      assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+      assert.match(r.problems[0], expected);
+    });
+  }
+});
+
+test('refuses a body limit it cannot read, such as one written in bytes or MB', () => {
+  withTree({ 'server/src/app.js': FILES['server/src/app.js'].replace("JSON_LIMIT = '32kb'", "JSON_LIMIT = '0.03mb'") }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, ['JSON body limit (kB): cannot find JSON_LIMIT in server/src/app.js']);
+  });
+  withTree({ [LIMIT_REQUEST_BODY]: null }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      `JSON body limit (kB): ${LIMIT_REQUEST_BODY} not found`,
+      `Webhook JSON body limit (kB): ${LIMIT_REQUEST_BODY} not found`,
+      `Webhook JSON body limit path: ${LIMIT_REQUEST_BODY} not found`,
+      `Urlencoded body limit (kB): ${LIMIT_REQUEST_BODY} not found`,
+      `Body too large message: ${LIMIT_REQUEST_BODY} not found`,
+    ]);
   });
 });
 

@@ -10,7 +10,10 @@
 //   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example;
 //   - the upload size limit: server/src/uploads.js and Laravel's NodeFallbackController;
 //   - the 429 message: server/src/rate-limit.js and api/app/Providers/AppServiceProvider.php;
-//   - the interests per event: the app's create-activity screen and server/src/routes/activities.js.
+//   - the interests per event: the app's create-activity screen and server/src/routes/activities.js;
+//   - the request body limits (JSON, webhook JSON with its path, urlencoded) and their 413 message:
+//                  server/src/app.js and server/src/client-errors.js against Laravel's
+//                  LimitRequestBody, which applies them before Laravel parses a body.
 // CI tests what production runs only while these agree. A Dependabot update of a base image
 // that moves Node or PHP fails here until CI (and composer.json) move with it, on purpose.
 //
@@ -27,6 +30,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const all = (re) => (text) => [...text.matchAll(re)].map((m) => m[1]);
+
+const LIMIT_REQUEST_BODY = 'api/app/Http/Middleware/LimitRequestBody.php';
 
 /** The `require.php` constraint of composer.json, reduced to major.minor ("^8.4" and "^8.4.1" → 8.4). */
 function composerPhp(text) {
@@ -102,6 +107,46 @@ export const MIRRORS = [
     sources: [
       { file: 'src/app/create-activity.tsx', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
       { file: 'server/src/routes/activities.js', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
+    ],
+  },
+  {
+    // Laravel refuses a larger body before it parses it (LimitRequestBody); Node's parsers refuse
+    // the same sizes. 1 kB = 1024 bytes on both sides, so the values are compared in kB.
+    name: 'JSON body limit (kB)',
+    sources: [
+      { file: 'server/src/app.js', what: 'JSON_LIMIT', extract: all(/^export const JSON_LIMIT = '(\d+)kb';/gm) },
+      { file: LIMIT_REQUEST_BODY, what: 'JSON_LIMIT_KB', extract: all(/\bconst JSON_LIMIT_KB = (\d+);/g) },
+    ],
+  },
+  {
+    name: 'Webhook JSON body limit (kB)',
+    sources: [
+      { file: 'server/src/app.js', what: 'WEBHOOK_JSON_LIMIT', extract: all(/^export const WEBHOOK_JSON_LIMIT = '(\d+)kb';/gm) },
+      { file: LIMIT_REQUEST_BODY, what: 'WEBHOOK_JSON_LIMIT_KB', extract: all(/\bconst WEBHOOK_JSON_LIMIT_KB = (\d+);/g) },
+    ],
+  },
+  {
+    // The path Node mounts its larger webhook parser on, and the normalised path Laravel gives the
+    // larger limit.
+    name: 'Webhook JSON body limit path',
+    sources: [
+      { file: 'server/src/app.js', what: 'the webhook parser mount', extract: all(/app\.use\('([^']+)', express\.json\(\{ limit: WEBHOOK_JSON_LIMIT \}\)\)/g) },
+      { file: LIMIT_REQUEST_BODY, what: 'WEBHOOK_PATH', extract: all(/\bconst WEBHOOK_PATH = '([^']+)';/g) },
+    ],
+  },
+  {
+    name: 'Urlencoded body limit (kB)',
+    sources: [
+      { file: 'server/src/app.js', what: 'URLENCODED_LIMIT', extract: all(/^export const URLENCODED_LIMIT = '(\d+)kb';/gm) },
+      { file: LIMIT_REQUEST_BODY, what: 'URLENCODED_LIMIT_KB', extract: all(/\bconst URLENCODED_LIMIT_KB = (\d+);/g) },
+    ],
+  },
+  {
+    // The answer to an oversized body, from whichever backend refuses it; the app shows it verbatim.
+    name: 'Body too large message',
+    sources: [
+      { file: 'server/src/client-errors.js', what: 'MSG_TOO_LARGE', extract: all(/^export const MSG_TOO_LARGE = '([^']+)';/gm) },
+      { file: LIMIT_REQUEST_BODY, what: 'MSG_TOO_LARGE', extract: all(/\bconst MSG_TOO_LARGE = '([^']+)';/g) },
     ],
   },
 ];
