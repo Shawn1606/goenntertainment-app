@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\TwoFactorChallenge;
 use App\Models\User;
 use InvalidArgumentException;
 use Laravel\Sanctum\PersonalAccessToken;
@@ -20,6 +21,9 @@ use RuntimeException;
  *
  * Revoking: a change of password, e-mail address or two-factor settings signs out every other
  * device (revokeOthers); a password reset, where nobody is signed in, signs out all (revokeAll).
+ * Both also end every sign-in that has passed the password and still waits for its second factor
+ * (a 'login' challenge): it is a session in the making, and whoever changes a credential to lock
+ * someone out must not leave them a way in by the code.
  */
 final class Sessions
 {
@@ -74,9 +78,14 @@ final class Sessions
         return $user->createToken($name, ['*'], now()->addMinutes(self::lifetimeMinutes()))->plainTextToken;
     }
 
-    /** Deletes every token of $user except the one the current request is signed in with. */
+    /**
+     * Deletes every token of $user except the one the current request is signed in with, and
+     * every open sign-in; returns the number of tokens deleted.
+     */
     public static function revokeOthers(User $user): int
     {
+        self::endOpenSignIns($user);
+
         $current = $user->currentAccessToken();
         $currentId = $current instanceof PersonalAccessToken ? $current->getKey() : null;
 
@@ -85,9 +94,22 @@ final class Sessions
             ->delete();
     }
 
-    /** Deletes every token of $user. */
+    /** Deletes every token of $user and every open sign-in; returns the number of tokens deleted. */
     public static function revokeAll(User $user): int
     {
+        self::endOpenSignIns($user);
+
         return $user->tokens()->delete();
+    }
+
+    /**
+     * Deletes the sign-ins of $user that wait for their second factor. First, so that a sign-in
+     * finished at this moment yields a token that the deletion of the tokens still catches.
+     */
+    private static function endOpenSignIns(User $user): void
+    {
+        TwoFactorChallenge::where('user_id', $user->getKey())
+            ->where('purpose', TwoFactor::PURPOSE_LOGIN)
+            ->delete();
     }
 }

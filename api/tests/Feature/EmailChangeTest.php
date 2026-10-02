@@ -168,6 +168,26 @@ class EmailChangeTest extends AppFeatureTestCase
         $this->withBearer($tokenA)->getJson('/api/user')->assertOk();
     }
 
+    /** A sign-in waiting for its second factor ends with the change too (review AUTH-2). */
+    public function test_the_change_ends_open_two_factor_sign_ins(): void
+    {
+        Mail::fake();
+        [$user, $secret] = $this->totpUser();
+        $token = $this->issueToken($user);
+        $challenge = $this->postJson('/api/login', ['email' => $user->email, 'password' => self::TEST_PASSWORD])
+            ->assertOk()
+            ->json('two_factor.challenge');
+
+        $this->change($token, ['email' => $this->newAddress(), 'current_password' => self::TEST_PASSWORD, 'code' => Totp::now($secret)])->assertOk();
+
+        // A valid code for the challenge from before the change (the replay marker cleared).
+        DB::table('users')->where('id', $user->id)->update(['two_factor_last_step' => null]);
+        $this->postJson('/api/login/two-factor', ['challenge' => $challenge, 'code' => Totp::now($secret)])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.challenge.0', TwoFactor::MSG_EXPIRED_LOGIN);
+        $this->assertSame(1, DB::table('personal_access_tokens')->where('tokenable_type', User::class)->where('tokenable_id', $user->id)->count());
+    }
+
     public function test_the_old_address_gets_a_notice_and_the_new_one_nothing(): void
     {
         Mail::fake();

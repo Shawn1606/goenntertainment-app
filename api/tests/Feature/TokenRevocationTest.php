@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Support\Totp;
+use App\Support\TwoFactor;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -41,6 +43,39 @@ class TokenRevocationTest extends AppFeatureTestCase
         $this->assertSame(
             $revokesAll ? 0 : 1,
             DB::table('personal_access_tokens')->where('tokenable_type', User::class)->where('tokenable_id', $user->id)->count(),
+        );
+    }
+
+    /**
+     * A sign-in that has passed the password and waits for the second factor is a session in the
+     * making, and a credential change ends it too (review AUTH-2): the old challenge does not
+     * turn into a token, even with a valid code. The account uses an authenticator app, so a
+     * valid code is at hand.
+     */
+    #[DataProvider('credentialChanges')]
+    public function test_credential_changes_end_open_two_factor_sign_ins(string $change, bool $revokesAll): void
+    {
+        $secret = Totp::generateSecret();
+        $user = $this->makeUser([
+            'two_factor_method' => TwoFactor::METHOD_TOTP,
+            'two_factor_secret' => $secret,
+            'two_factor_confirmed_at' => now(),
+        ]);
+        $token = $this->issueToken($user);
+        $challenge = $this->postJson('/api/login', ['email' => $user->email, 'password' => self::TEST_PASSWORD])
+            ->assertOk()
+            ->json('two_factor.challenge');
+
+        $this->perform($change, $user, $token);
+
+        $this->postJson('/api/login/two-factor', ['challenge' => $challenge, 'code' => Totp::now($secret)])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.challenge.0', TwoFactor::MSG_EXPIRED_LOGIN);
+        $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', TwoFactor::PURPOSE_LOGIN)->count());
+        $this->assertSame(
+            $revokesAll ? 0 : 1,
+            DB::table('personal_access_tokens')->where('tokenable_type', User::class)->where('tokenable_id', $user->id)->count(),
+            'no token was issued for the old sign-in',
         );
     }
 
