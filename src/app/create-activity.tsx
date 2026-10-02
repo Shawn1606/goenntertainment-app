@@ -396,6 +396,9 @@ export default function CreateActivityScreen() {
               <Text style={[styles.removeBannerText, { color: colors.tint }]}>Foto entfernen</Text>
             </Pressable>
           ) : null}
+          {/* The server's answer for the image (not a JPEG, PNG or WebP it can read, or refused by
+              the moderation): shown here, or the form would stay silent. */}
+          {errors.banner?.[0] ? <Text style={styles.fieldError}>{errors.banner[0]}</Text> : null}
 
           <TextField label="Name" value={title} onChangeText={setTitle} placeholder="z. B. Feierabend-Fußball" error={errors.title?.[0]} />
           <TextField
@@ -524,6 +527,9 @@ export default function CreateActivityScreen() {
             <Text style={[styles.hint, { color: colors.textSecondary }]}>
               Eigene Interessen sind nur für dich sichtbar.
             </Text>
+            {/* The server checks the interests too (the word filter on own interests, too many,
+                unknown ones): its message is shown here. */}
+            {errors.interests?.[0] ? <Text style={styles.fieldError}>{errors.interests[0]}</Text> : null}
           </View>
 
           <BrandButton title="Veröffentlichen" onPress={onSubmit} loading={submitting} />

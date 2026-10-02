@@ -429,15 +429,20 @@ router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, 
     const b = req.body ?? {};
     const v = new Validator(b);
 
-    if (!b.title || b.title.length > 255) v.add('title', 'Der Titel ist erforderlich (max. 255 Zeichen).');
-    if (!b.description || b.description.length > 2000) {
+    // Text fields are strings (F-06): an array or object here would skip the length check (its
+    // own .length) and reach the database as something else. Any other type gets the field's
+    // message, before the word filter and long before SQL.
+    const isText = (value) => typeof value === 'string';
+    if (!isText(b.title) || !b.title || b.title.length > 255) v.add('title', 'Der Titel ist erforderlich (max. 255 Zeichen).');
+    if (!isText(b.description) || !b.description || b.description.length > 2000) {
       v.add('description', 'Die Beschreibung ist erforderlich (max. 2000 Zeichen).');
     }
-    if (!b.location || b.location.length > 255) v.add('location', 'Der Ort ist erforderlich (max. 255 Zeichen).');
+    if (!isText(b.location) || !b.location || b.location.length > 255) {
+      v.add('location', 'Der Ort ist erforderlich (max. 255 Zeichen).');
+    }
 
-    // Gesperrte Begriffe – die feste Liste VOR der KI-Moderation. Die KI ist ohne
-    // Schluessel aus und laesst bei einem Ausfall alles durch; diese Pruefung
-    // greift immer. Nur an Feldern ohne Laengenfehler: Eine Meldung je Feld.
+    // Gesperrte Begriffe – die feste Liste VOR der KI-Moderation. It applies always, also when
+    // the model cannot be asked. Nur an Feldern ohne Laengenfehler: Eine Meldung je Feld.
     for (const field of ['title', 'description', 'location']) {
       if (!v.errors[field]) rejectBlockedTerms(v, field, b[field], 'text');
     }
@@ -479,6 +484,9 @@ router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, 
       .map((name) => String(name).trim())
       .filter(Boolean)
       .slice(0, MAX_INTERESTS);
+    // Free text like the title (F-06): the model reads them, so the fixed list checks them first,
+    // as they came (any JSON type, findBlockedTermInValue).
+    if (!v.errors.interests) rejectBlockedTerms(v, 'interests', b.custom_interests, 'text');
 
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
       v.add('banner', MSG_BANNER_TYPE);
@@ -886,7 +894,7 @@ router.post('/:id/comments', requireAuth, rateLimit('comment'), async (req, res,
     if (!body) v.add('body', 'Schreib etwas, bevor du kommentierst.');
     else if (body.length > MAX_COMMENT) {
       v.add('body', `Ein Kommentar fasst hoechstens ${MAX_COMMENT} Zeichen.`);
-    } else rejectBlockedTerms(v, 'body', body, 'text');
+    } else rejectBlockedTerms(v, 'body', req.body?.body, 'text'); // as it came, any JSON type (F-06)
     v.throwIfFails();
 
     // Gleicher Kontext wie Kommentare unter Beitraegen ('post' = kurzer Text

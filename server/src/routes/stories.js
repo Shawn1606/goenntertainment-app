@@ -136,7 +136,7 @@ router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, u
       v.add('caption', `Die Unterschrift fasst hoechstens ${MAX_CAPTION} Zeichen.`);
     } else {
       // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall.
-      rejectBlockedTerms(v, 'caption', caption, 'text');
+      rejectBlockedTerms(v, 'caption', req.body?.caption, 'text'); // as it came, any JSON type (F-06)
     }
     v.throwIfFails();
 

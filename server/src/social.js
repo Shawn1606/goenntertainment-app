@@ -32,6 +32,28 @@ export const MAX_LINK_LENGTH = 200;
 const URL_RE = /^https?:\/\/[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+(:\d+)?([/?#][^\s]*)?$/i;
 
 /**
+ * The words of a link for the word filter (F-06): a link is shown on the profile like any text,
+ * so a term in it is refused like one in a post. Without the scheme, percent-decoded (up to three
+ * times, so an encoded term is read as such), and with the address' separators as spaces: the
+ * filter then reads host, path and query as words ("www instagram com name") instead of one long
+ * run of letters, in which a term could otherwise be found across two harmless parts.
+ */
+export function linkFilterText(url) {
+  let text = String(url ?? '').replace(/^https?:\/\//i, '');
+  for (let i = 0; i < 3; i += 1) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(text);
+    } catch {
+      break;
+    }
+    if (decoded === text) break;
+    text = decoded;
+  }
+  return text.replace(/[/?#&=._~+:@%,;!*'()[\]$-]+/g, ' ').trim();
+}
+
+/**
  * Prueft die komplette Liste (PUT-Semantik: was hier steht, ersetzt alles).
  *
  * @param {unknown} raw
@@ -54,6 +76,10 @@ export function parseLinkList(raw) {
     }
 
     const platform = String(entry.platform ?? '');
+    // An address is text; any other JSON type is not an address (F-06).
+    if (entry.url !== undefined && entry.url !== null && typeof entry.url !== 'string') {
+      return { links: [], error: 'Jeder Link braucht Plattform und Adresse.' };
+    }
     const url = String(entry.url ?? '').trim();
 
     // Leere Adresse = geloescht. Das ist kein Fehler, sondern der normale Weg,

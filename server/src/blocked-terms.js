@@ -443,6 +443,56 @@ export function findBlockedTerm(text, lists, mode) {
   return null;
 }
 
+/** How deep and how many parts findBlockedTermInValue() looks into a non-text value. */
+export const MAX_VALUE_DEPTH = 4;
+export const MAX_VALUE_PARTS = 100;
+
+/** The hit for a value too deep or with too many parts to check (fail closed). */
+export const STRUCTURE_HIT = Object.freeze({ term: '', group: 'max_value_parts', kind: 'structure' });
+
+/**
+ * findBlockedTerm() for a request value of any JSON type (F-06). Requests bring text fields as
+ * strings, but also as arrays, objects, numbers or booleans (JSON, or a form field sent twice),
+ * and a route that turns such a value into text (String(...)) or passes it on must not let a term
+ * through just because it was not a string:
+ *   - a string is checked as findBlockedTerm() checks it;
+ *   - a number or boolean as its text (numeric codes are on the list);
+ *   - an array or object by every string, number and boolean inside it, down to MAX_VALUE_DEPTH
+ *     levels, and an array also as the text String() makes of it (the parts joined by commas,
+ *     which can join a term split over two parts);
+ *   - a value deeper than MAX_VALUE_DEPTH or with more than MAX_VALUE_PARTS parts is not
+ *     examined further and counts as a hit (STRUCTURE_HIT): nothing that cannot be checked gets
+ *     through.
+ * Node only: App and Laravel accept strings for these fields, so the three mirrored
+ * findBlockedTerm() implementations stay as they are.
+ */
+export function findBlockedTermInValue(value, lists, mode) {
+  if (typeof value === 'string') return findBlockedTerm(value, lists, mode);
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return findBlockedTerm(String(value), lists, mode);
+  }
+  if (value === null || value === undefined || typeof value !== 'object') return null;
+
+  const parts = [];
+  const collect = (node, depth) => {
+    if (parts.length > MAX_VALUE_PARTS) return false;
+    if (node === null || node === undefined) return true;
+    if (typeof node === 'object') {
+      if (depth >= MAX_VALUE_DEPTH) return false;
+      return Object.values(node).every((child) => collect(child, depth + 1));
+    }
+    parts.push(String(node));
+    return parts.length <= MAX_VALUE_PARTS;
+  };
+  if (!collect(value, 0)) return { ...STRUCTURE_HIT };
+
+  for (const part of parts) {
+    const hit = findBlockedTerm(part, lists, mode);
+    if (hit) return hit;
+  }
+  return Array.isArray(value) ? findBlockedTerm(parts.join(','), lists, mode) : null;
+}
+
 /** Die Meldung fuer einen Modus – dieselbe, die die App anzeigt. */
 export function blockedTermMessageFor(mode, lists = BLOCKED_TERMS) {
   return lists.messages[mode];
@@ -450,13 +500,14 @@ export function blockedTermMessageFor(mode, lists = BLOCKED_TERMS) {
 
 /**
  * Bequem fuer die Routen: Ist `value` gesperrt, kommt die Meldung an `field` in
- * den Validator. Leere Werte und Nicht-Texte uebergeht sie – ob ein Feld Pflicht
- * ist, entscheidet die Route vorher.
+ * den Validator. Leere Werte uebergeht sie – ob ein Feld Pflicht ist, entscheidet
+ * die Route vorher. A value of any JSON type is checked (findBlockedTermInValue): routes pass
+ * the value as it came, so an array or object cannot carry a term past the check (F-06).
  *
  * @returns {boolean} true, wenn der Wert gesperrt war.
  */
 export function rejectBlockedTerms(v, field, value, mode, lists = BLOCKED_TERMS) {
-  if (typeof value !== 'string' || !findBlockedTerm(value, lists, mode)) return false;
+  if (!findBlockedTermInValue(value, lists, mode)) return false;
   v.add(field, blockedTermMessageFor(mode, lists));
   return true;
 }

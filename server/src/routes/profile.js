@@ -16,9 +16,9 @@ import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
-import { rejectBlockedTerms } from '../blocked-terms.js';
+import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm, rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
-import { parseLinkList } from '../social.js';
+import { linkFilterText, parseLinkList } from '../social.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl } from '../media.js';
 import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
@@ -459,6 +459,11 @@ router.put('/me/links', requireAuth, rateLimit('content'), requireProfile, async
     if (error) {
       throw new HttpError(422, error, { links: [error] });
     }
+    // Links stand on the profile like any text: the fixed list checks their words too (F-06).
+    if (links.some((link) => findBlockedTerm(linkFilterText(link.url), BLOCKED_TERMS, 'text'))) {
+      const message = blockedTermMessageFor('text');
+      throw new HttpError(422, message, { links: [message] });
+    }
 
     const connection = await pool.getConnection();
     try {
@@ -634,8 +639,9 @@ router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploa
     } else if (body.length > MAX_BODY) {
       v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
     } else {
-      // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall.
-      rejectBlockedTerms(v, 'body', body, 'text');
+      // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall. The value as it
+      // came, any JSON type (F-06).
+      rejectBlockedTerms(v, 'body', req.body?.body, 'text');
     }
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
       v.add('image', MSG_IMAGE_TYPE);
@@ -726,7 +732,7 @@ router.patch('/posts/:id', requireAuth, rateLimit('moderated'), async (req, res,
     } else if (body.length > MAX_BODY) {
       v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
     } else {
-      rejectBlockedTerms(v, 'body', body, 'text');
+      rejectBlockedTerms(v, 'body', req.body?.body, 'text'); // as it came, any JSON type (F-06)
     }
     v.throwIfFails();
 
@@ -869,7 +875,7 @@ router.post('/posts/:id/comments', requireAuth, rateLimit('comment'), async (req
     if (!body) v.add('body', 'Schreib etwas, bevor du kommentierst.');
     else if (body.length > MAX_COMMENT) {
       v.add('body', `Ein Kommentar fasst hoechstens ${MAX_COMMENT} Zeichen.`);
-    } else rejectBlockedTerms(v, 'body', body, 'text');
+    } else rejectBlockedTerms(v, 'body', req.body?.body, 'text'); // as it came, any JSON type (F-06)
     v.throwIfFails();
 
     // Kommentare laufen durch dieselbe KI-Verifizierung wie Beitraege: Sonst

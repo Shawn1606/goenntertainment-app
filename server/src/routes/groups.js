@@ -148,13 +148,14 @@ router.post('/groups', requireAuth, rateLimit('content'), async (req, res, next)
     const description = String(req.body?.description ?? '').trim();
     const v = new Validator(req.body ?? {});
 
+    // The word filter gets the values as they came, any JSON type (F-06).
     if (!name) v.add('name', 'Gib der Gruppe einen Namen.');
     else if (name.length > MAX_GROUP_NAME) {
       v.add('name', `Der Name fasst hoechstens ${MAX_GROUP_NAME} Zeichen.`);
-    } else rejectGroupName(v, name);
+    } else rejectGroupName(v, req.body?.name);
     if (description.length > MAX_GROUP_DESCRIPTION) {
       v.add('description', `Die Beschreibung fasst hoechstens ${MAX_GROUP_DESCRIPTION} Zeichen.`);
-    } else rejectBlockedTerms(v, 'description', description, 'text');
+    } else rejectBlockedTerms(v, 'description', req.body?.description, 'text');
     v.throwIfFails();
 
     // Mitglieder, die direkt mit angelegt werden – nur bestaetigte Freunde.
@@ -227,14 +228,14 @@ router.patch('/groups/:id', requireAuth, rateLimit('content'), async (req, res, 
       if (!name) v.add('name', 'Gib der Gruppe einen Namen.');
       else if (name.length > MAX_GROUP_NAME) {
         v.add('name', `Der Name fasst hoechstens ${MAX_GROUP_NAME} Zeichen.`);
-      } else if (name !== group.name) rejectGroupName(v, name);
+      } else if (name !== group.name) rejectGroupName(v, req.body.name);
     }
     // Nur NEUE Werte pruefen (wie beim Profil): Ein Altname, den die Liste heute
     // traefe, soll das Aendern der Beschreibung nicht blockieren – und umgekehrt.
     if (hasDescription && description.length > MAX_GROUP_DESCRIPTION) {
       v.add('description', `Die Beschreibung fasst hoechstens ${MAX_GROUP_DESCRIPTION} Zeichen.`);
     } else if (hasDescription && description !== (group.description ?? '')) {
-      rejectBlockedTerms(v, 'description', description, 'text');
+      rejectBlockedTerms(v, 'description', req.body.description, 'text');
     }
     v.throwIfFails();
 

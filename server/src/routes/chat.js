@@ -34,7 +34,7 @@ import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
-import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm } from '../blocked-terms.js';
+import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm, findBlockedTermInValue } from '../blocked-terms.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { isRoomKind, nextBurst, pageLimit, parseMessageInput } from '../messaging.js';
 
@@ -410,7 +410,11 @@ router.post('/chats/:kind/:refId/messages', requireAuth, rateLimit('chat'), asyn
 
     // Gesperrte Begriffe: klar ablehnen statt maskieren. Ein „***" im Verlauf
     // sagte allen, dass da etwas stand – und dem Absender nicht, was.
-    if (parsed.body && findBlockedTerm(parsed.body, BLOCKED_TERMS, 'text')) {
+    // The stored text, and the value as it came when it was not a string (F-06).
+    if (
+      (parsed.body && findBlockedTerm(parsed.body, BLOCKED_TERMS, 'text')) ||
+      (typeof req.body?.body !== 'string' && findBlockedTermInValue(req.body?.body, BLOCKED_TERMS, 'text'))
+    ) {
       const message = blockedTermMessageFor('text');
       throw new HttpError(422, message, { body: [message] });
     }
