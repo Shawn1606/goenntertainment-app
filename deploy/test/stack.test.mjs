@@ -808,11 +808,12 @@ check('F-45: the MySQL binary log keeps exactly the configured retention, not th
   const [logBin, seconds] = row.split(/\s+/).map(Number);
   const days = values.MYSQL_BINLOG_RETENTION_DAYS;
   console.log(`binary log: log_bin ${logBin}, binlog_expire_logs_seconds ${seconds} (MYSQL_BINLOG_RETENTION_DAYS=${days})`);
+  // Per value: with `off` MySQL keeps its unused default; with days the equality shows the
+  // setting took effect (deploy/ci.env's value differs from MySQL's default: static.test.mjs).
   if (days === 'off') {
     assert.equal(logBin, 0, 'the binary log is on');
   } else {
     assert.equal(logBin, 1);
     assert.equal(seconds, Number(days) * 86400, 'the retention is not the configured one');
   }
-  assert.notEqual(seconds, 2592000, "MySQL's own default (30 days)");
 });
