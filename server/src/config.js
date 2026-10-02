@@ -14,13 +14,40 @@
  *     (routes/internal.js), at least INTERNAL_SECRET_MIN_LENGTH characters. Outside production
  *     it may be empty; the internal routes then refuse every call (fail closed).
  *
- * Optional, checked when set: WRITE_LIMIT_<CLASS>, the write limits per class (rate-limit.js).
+ * Optional, checked when set:
+ *   - WRITE_LIMIT_<CLASS>, the write limits per class (rate-limit.js);
+ *   - SANCTUM_EXPIRATION, the access-token lifetime in minutes (tokenLifetimeMinutes).
  */
 import express from 'express';
 import { writeLimitSettingProblems } from './rate-limit.js';
 
 /** Shortest accepted NODE_INTERNAL_SECRET (`openssl rand -hex 32` gives 64 characters). */
 export const INTERNAL_SECRET_MIN_LENGTH = 32;
+
+/**
+ * The access-token lifetime when SANCTUM_EXPIRATION is unset: 30 days, in minutes. Named mirror of
+ * DEFAULT_LIFETIME_MINUTES in api/app/Support/Sessions.php (scripts/ci/check-mirrors.mjs).
+ */
+export const DEFAULT_TOKEN_LIFETIME_MINUTES = 43200;
+
+/**
+ * An accepted SANCTUM_EXPIRATION: a positive whole number of minutes, at most seven digits. Named
+ * mirror of the pattern in Sessions::lifetimeFromEnv (scripts/ci/check-mirrors.mjs).
+ */
+export const TOKEN_LIFETIME_PATTERN = /^[1-9]\d{0,6}$/;
+
+/**
+ * The access-token lifetime in minutes (F-20), from SANCTUM_EXPIRATION - the setting Laravel reads
+ * for the same purpose (App\Support\Sessions::lifetimeFromEnv, the same rule): unset or empty means
+ * the default; a value that is not a positive whole number gives null, and the server does not
+ * start with it (startupProblems). Expiry is never switched off.
+ */
+export function tokenLifetimeMinutes(env = process.env) {
+  const raw = env.SANCTUM_EXPIRATION;
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_TOKEN_LIFETIME_MINUTES;
+  const trimmed = String(raw).trim();
+  return TOKEN_LIFETIME_PATTERN.test(trimmed) ? Number(trimmed) : null;
+}
 
 /** True when the server runs as the production build. */
 export function isProduction(env = process.env) {
@@ -90,6 +117,11 @@ export function startupProblems(env = process.env) {
 
   // Optional everywhere (the code has defaults), but a set value must be valid (rate-limit.js).
   problems.push(...writeLimitSettingProblems(env));
+
+  // Optional too; a set value must be valid, exactly as Laravel requires (tokenLifetimeMinutes).
+  if (tokenLifetimeMinutes(env) === null) {
+    problems.push('SANCTUM_EXPIRATION (optional; when set, a positive whole number of minutes)');
+  }
 
   return problems;
 }

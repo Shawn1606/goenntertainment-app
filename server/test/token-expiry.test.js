@@ -60,6 +60,50 @@ test('a token that expires in the future works (and so does the one createUser r
   assert.equal((await notifications(token)).status, 200);
 });
 
+/** Runs `fn` with these environment settings, then puts the previous ones back. */
+async function withEnv(settings, fn) {
+  const saved = Object.fromEntries(Object.keys(settings).map((name) => [name, process.env[name]]));
+  Object.assign(process.env, settings);
+  try {
+    return await fn();
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+test('a token older than the lifetime is refused even with a later expires_at', async () => {
+  // Laravel's Sanctum guard refuses it too: created_at older than the lifetime (SANCTUM_EXPIRATION,
+  // unset = 30 days = 43200 minutes), whatever the stored expires_at says.
+  const { user } = await createUser('tokenexpiry');
+  assert.equal((await notifications(await insertToken(user.id, { createdMinutesAgo: 43200 + 1 }))).status, 401);
+  assert.equal((await notifications(await insertToken(user.id, { createdMinutesAgo: 43200 - 1 }))).status, 200);
+});
+
+test('a lower SANCTUM_EXPIRATION ends older sessions at once, as on the Laravel routes', async () => {
+  const { user } = await createUser('tokenexpiry');
+  // Both issued under the old lifetime; their expires_at (tomorrow) has not passed.
+  const older = await insertToken(user.id, { createdMinutesAgo: 61 });
+  const newer = await insertToken(user.id, { createdMinutesAgo: 59 });
+
+  await withEnv({ SANCTUM_EXPIRATION: '60' }, async () => {
+    assert.equal((await notifications(older)).status, 401);
+    assert.equal((await notifications(newer)).status, 200);
+  });
+});
+
+test('with an invalid SANCTUM_EXPIRATION no token is accepted (the server does not start with one)', async () => {
+  const { token } = await createUser('tokenexpiry');
+  for (const bad of ['0', 'abc', '1.5']) {
+    await withEnv({ SANCTUM_EXPIRATION: bad }, async () => {
+      assert.equal((await notifications(token)).status, 500, bad);
+    });
+  }
+  assert.equal((await notifications(token)).status, 200, 'and the same token works again with the default');
+});
+
 test('a malformed token id is rejected without a lookup error', async () => {
   const { token } = await createUser('tokenexpiry');
   const plain = token.slice(token.indexOf('|') + 1);

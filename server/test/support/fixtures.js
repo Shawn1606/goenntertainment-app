@@ -130,18 +130,25 @@ let testPasswordHash = null;
 /**
  * Inserts an access token for `userId` and returns its bearer value `<id>|<plain>`.
  * `expires`: 'future' (one day ahead), 'past' (an hour ago) or 'null' (no expiry);
- * `type`: the tokenable_type (another value makes a token that belongs to no account).
+ * `type`: the tokenable_type (another value makes a token that belongs to no account);
+ * `createdMinutesAgo`: how long ago the token was issued (`created_at`, by the database clock).
  */
-export async function insertToken(userId, { expires = 'future', type = TOKENABLE_TYPE, name = 'test' } = {}) {
+export async function insertToken(
+  userId,
+  { expires = 'future', type = TOKENABLE_TYPE, name = 'test', createdMinutesAgo = 0 } = {},
+) {
   const expiresSql = Object.hasOwn(TOKEN_EXPIRY_SQL, expires) ? TOKEN_EXPIRY_SQL[expires] : null;
   if (expiresSql === null) throw new Error("insertToken: expires must be 'future', 'past' or 'null'");
+  if (!Number.isSafeInteger(createdMinutesAgo) || createdMinutesAgo < 0) {
+    throw new Error('insertToken: createdMinutesAgo must be a whole number of minutes, 0 or more');
+  }
   const [{ pool }] = await serverModules();
   const plain = sanctumPlainToken();
   const [result] = await pool.query(
     `INSERT INTO personal_access_tokens
        (tokenable_type, tokenable_id, name, token, abilities, expires_at, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ${expiresSql}, NOW(), NOW())`,
-    [type, userId, name, crypto.createHash('sha256').update(plain).digest('hex'), '["*"]'],
+     VALUES (?, ?, ?, ?, ?, ${expiresSql}, NOW() - INTERVAL ? MINUTE, NOW())`,
+    [type, userId, name, crypto.createHash('sha256').update(plain).digest('hex'), '["*"]', createdMinutesAgo],
   );
   return `${result.insertId}|${plain}`;
 }

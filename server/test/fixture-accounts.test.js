@@ -145,6 +145,18 @@ test('insertToken: future, past and no expiry, another tokenable_type, and nothi
   await assert.rejects(insertToken(user.id, { expires: 'toString' }), /expires must be/);
 });
 
+test('insertToken: created now by default, or the given minutes ago (database clock)', async () => {
+  const { user } = await createUser('fixtoken');
+  const age = async (bearer) =>
+    Number((await first('SELECT TIMESTAMPDIFF(MINUTE, created_at, NOW()) AS m FROM personal_access_tokens WHERE id = ?', [bearer.split('|')[0]])).m);
+
+  assert.equal(await age(await insertToken(user.id)), 0);
+  assert.equal(await age(await insertToken(user.id, { createdMinutesAgo: 90 })), 90);
+  for (const bad of [-1, 1.5, '60', null]) {
+    await assert.rejects(insertToken(user.id, { createdMinutesAgo: bad }), /createdMinutesAgo must be a whole number/, String(bad));
+  }
+});
+
 test('cleanup: removes every account createUser made, with all of its tokens', async () => {
   const one = await createUser('fixclean');
   const two = await createUser('fixcleantwo');

@@ -94,6 +94,16 @@ test('an invalid write limit setting stops the start, named without its value', 
   assert.doesNotMatch(r.stdout, START_LINE);
 });
 
+test('an invalid SANCTUM_EXPIRATION stops the start, named without its value', () => {
+  const broken = '30-test-only-days';
+  const r = runToExit(startupEnv({ SANCTUM_EXPIRATION: broken }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal})`);
+  assert.match(r.stderr, /SANCTUM_EXPIRATION/);
+  assert.doesNotMatch(r.stderr, /NODE_TRUST_PROXY|NODE_INTERNAL_SECRET/, 'only the one invalid setting is named');
+  assert.ok(!r.stderr.includes(broken) && !r.stdout.includes(broken), 'the value must never be printed');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
 test('outside production empty NODE_TRUST_PROXY and NODE_INTERNAL_SECRET do not stop the start', async () => {
   const env = startupEnv({ NODE_ENV: 'development', NODE_TRUST_PROXY: '', NODE_INTERNAL_SECRET: '' });
   assert.equal(await startsListening(env), true);

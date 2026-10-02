@@ -80,6 +80,9 @@ services:
       NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
       # The only hop Node takes the client address from: api's fixed address below.
       NODE_TRUST_PROXY: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
+      # Access-token lifetime in minutes, the same setting as api's: Node refuses a token issued
+      # longer ago too (src/auth.js). Empty = the default in code (30 days).
+      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
@@ -169,7 +172,8 @@ services:
       # array = keine Sitzungen – die API arbeitet nur mit Tokens
       # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
       CACHE_STORE: database
-      # Optional: access-token lifetime in minutes; empty = the default in code (30 days).
+      # Optional: access-token lifetime in minutes; empty = the default in code (30 days). The
+      # node service reads the same setting (scripts/ci/check-mirrors.mjs keeps both lines equal).
       SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
       # Optional overrides of the sign-in, sign-up, password and two-factor rate limits
       # (api/config/ratelimits.php); empty = the defaults in code, an invalid value stops the

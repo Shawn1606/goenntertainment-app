@@ -31,10 +31,11 @@ class AppServiceProvider extends ServiceProvider
         $this->configureRateLimiting();
 
         /*
-         * A token is valid only with an expiry date that has not passed (F-20), the rule Node's
-         * requireAuth applies too. Sanctum alone accepts a token without `expires_at` (it then
-         * checks only its age against sanctum.expiration); tokens from before expiry existed
-         * have none and end here. App\Support\Sessions issues every token with one.
+         * A token is valid only with an expiry date that has not passed (F-20). Sanctum alone
+         * accepts a token without `expires_at` (it then checks only its age against
+         * sanctum.expiration); tokens from before expiry existed have none and end here.
+         * App\Support\Sessions issues every token with one. Node's requireAuth applies the whole
+         * rule too, the age included (server/src/auth.js, TOKEN_IS_VALID_SQL).
          */
         Sanctum::authenticateAccessTokensUsing(
             static fn (PersonalAccessToken $token, bool $isValid): bool => $isValid && $token->expires_at !== null,

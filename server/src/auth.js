@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import { tokenLifetimeMinutes } from './config.js';
 import { pool, first } from './db.js';
 import { mediaUrl } from './media.js';
 
@@ -135,14 +136,30 @@ export async function userPayload(row, req = null) {
 }
 
 /**
+ * The token-validity rule (F-20), one rule on both backends - a named mirror of Laravel's:
+ *   - the token belongs to an account: `tokenable_type` App\Models\User;
+ *   - it has an expiry date that has not passed: AppServiceProvider (api/app/Providers) refuses a
+ *     token without `expires_at`, Sanctum's guard one whose `expires_at` has passed;
+ *   - it was issued within the lifetime: Sanctum's guard refuses a token whose `created_at` is
+ *     older than sanctum.expiration, which is SANCTUM_EXPIRATION (tokenLifetimeMinutes here). So a
+ *     lower setting ends older sessions at once on both backends, whatever their stored
+ *     `expires_at` says (both containers read the same setting: deploy/docker-compose.yml).
+ * Laravel writes both dates when it issues a token (App\Support\Sessions). The comparisons run in
+ * SQL against the database clock, the clock Laravel's dates are read against too (production runs
+ * both in UTC). api/tests/Feature/TokenLifetimeTest.php and test/token-expiry.test.js pin the same
+ * cases; scripts/ci/check-mirrors.mjs keeps the lifetime's default, its format and its setting
+ * equal on both sides.
+ */
+const TOKEN_IS_VALID_SQL = `tokenable_type = ?
+          AND expires_at IS NOT NULL AND expires_at > NOW()
+          AND created_at > NOW() - INTERVAL ? MINUTE`;
+
+/**
  * Express-Middleware: verlangt einen gueltigen Bearer-Token (Sanctum-kompatibel).
  * Setzt req.user (DB-Zeile) und req.tokenId.
  *
- * Valid means (F-20): the token belongs to an account (`tokenable_type`), has an expiry date and
- * that date has not passed. Laravel applies the same rule (api/app/Providers/
- * AppServiceProvider.php) and writes the date when it issues the token (App\Support\Sessions).
- * The comparison runs in SQL against the database clock, the clock Laravel's dates are read
- * against too (production runs both in UTC).
+ * Valid: see TOKEN_IS_VALID_SQL. With an invalid SANCTUM_EXPIRATION (the server does not start
+ * with one) no token is accepted: the request fails instead of falling back to some lifetime.
  */
 export async function requireAuth(req, res, next) {
   try {
@@ -160,11 +177,15 @@ export async function requireAuth(req, res, next) {
       return res.status(401).json({ message: 'Unauthenticated.' });
     }
 
+    const lifetime = tokenLifetimeMinutes();
+    if (lifetime === null) {
+      throw new Error('SANCTUM_EXPIRATION is not a positive whole number of minutes');
+    }
+
     const token = await first(
       `SELECT * FROM personal_access_tokens
-        WHERE id = ? AND token = ? AND tokenable_type = ?
-          AND expires_at IS NOT NULL AND expires_at > NOW()`,
-      [id, sha256(plain), TOKENABLE_TYPE],
+        WHERE id = ? AND token = ? AND ${TOKEN_IS_VALID_SQL}`,
+      [id, sha256(plain), TOKENABLE_TYPE, lifetime],
     );
     if (!token) {
       return res.status(401).json({ message: 'Unauthenticated.' });

@@ -14,8 +14,8 @@ use Tests\AppFeatureTestCase;
 /**
  * Access tokens expire (F-20): Sanctum has a lifetime (30 days unless SANCTUM_EXPIRATION says
  * otherwise), every route that issues a token writes its expiry date, and a token that is too
- * old, past its date or has no date at all is refused. Node applies the same expiry rule
- * (server/test/token-expiry.test.js).
+ * old, past its date or has no date at all is refused. Node applies the same rule, the age by
+ * SANCTUM_EXPIRATION included (server/test/token-expiry.test.js pins the same cases).
  */
 class TokenLifetimeTest extends AppFeatureTestCase
 {
@@ -111,5 +111,19 @@ class TokenLifetimeTest extends AppFeatureTestCase
         ]);
 
         $this->withBearer($token)->getJson('/api/user')->assertUnauthorized();
+    }
+
+    public function test_a_lower_lifetime_ends_older_sessions_at_once(): void
+    {
+        config(['sanctum.expiration' => 60]);
+        $user = $this->makeUser();
+        // Both issued under the old lifetime: their expiry date (tomorrow) has not passed.
+        $older = $this->issueToken($user, new DateTimeImmutable('+1 day'));
+        $newer = $this->issueToken($user, new DateTimeImmutable('+1 day'));
+        DB::table('personal_access_tokens')->where('id', (int) strtok($older, '|'))->update(['created_at' => CarbonImmutable::now()->subMinutes(61)]);
+        DB::table('personal_access_tokens')->where('id', (int) strtok($newer, '|'))->update(['created_at' => CarbonImmutable::now()->subMinutes(59)]);
+
+        $this->withBearer($older)->getJson('/api/user')->assertUnauthorized();
+        $this->withBearer($newer)->getJson('/api/user')->assertOk();
     }
 }

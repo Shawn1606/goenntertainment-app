@@ -5,6 +5,10 @@
 //                  constraint in api/composer.json ("^8.4" and "^8.4.1" both read as 8.4);
 //   - MySQL minor: every `image: mysql:` in ci.yml (service containers) and in
 //                  deploy/docker-compose.yml;
+//   - the access-token lifetime (one token-validity rule on both backends): its default in
+//                  api/app/Support/Sessions.php, server/src/config.js and the three .env examples,
+//                  its accepted format in both backends, and the SANCTUM_EXPIRATION that the
+//                  deploy hands to api and to node;
 //   - the minimum length of NODE_INTERNAL_SECRET: server/src/config.js, api/app/Support/
 //                  NodeInternal.php and api/docker/entrypoint.sh;
 //   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example;
@@ -32,6 +36,30 @@ export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', 
 const all = (re) => (text) => [...text.matchAll(re)].map((m) => m[1]);
 
 const LIMIT_REQUEST_BODY = 'api/app/Http/Middleware/LimitRequestBody.php';
+
+/**
+ * The value of the environment setting `name` in one service of a compose file: services are
+ * the keys indented by two spaces under the top-level `services:`.
+ */
+function composeServiceEnv(service, name) {
+  const setting = new RegExp(`^\\s+${name}:\\s*(\\S.*?)\\s*$`);
+  return (text) => {
+    const values = [];
+    let inServices = false;
+    let current = null;
+    for (const line of text.split(/\r?\n/)) {
+      if (/^\S/.test(line)) {
+        inServices = /^services:\s*(?:#.*)?$/.test(line);
+        current = null;
+        continue;
+      }
+      const key = inServices ? /^ {2}([\w.-]+):\s*(?:#.*)?$/.exec(line) : null;
+      if (key) current = key[1];
+      else if (current === service && setting.test(line)) values.push(setting.exec(line)[1]);
+    }
+    return values;
+  };
+}
 
 /** The `require.php` constraint of composer.json, reduced to major.minor ("^8.4" and "^8.4.1" → 8.4). */
 function composerPhp(text) {
@@ -61,6 +89,34 @@ export const MIRRORS = [
     sources: [
       { file: '.github/workflows/ci.yml', what: 'image: mysql:', extract: all(/^\s*image:\s*['"]?mysql:(\d+\.\d+)/gm) },
       { file: 'deploy/docker-compose.yml', what: 'image: mysql:', extract: all(/^\s*image:\s*['"]?mysql:(\d+\.\d+)/gm) },
+    ],
+  },
+  {
+    // Laravel and Node refuse a token issued longer ago than the lifetime (one token-validity
+    // rule, server/src/auth.js); unset, both take this default, and the examples name it.
+    name: 'Token lifetime default (minutes)',
+    sources: [
+      { file: 'api/app/Support/Sessions.php', what: 'DEFAULT_LIFETIME_MINUTES', extract: all(/\bconst DEFAULT_LIFETIME_MINUTES = (\d+);/g) },
+      { file: 'server/src/config.js', what: 'DEFAULT_TOKEN_LIFETIME_MINUTES', extract: all(/^export const DEFAULT_TOKEN_LIFETIME_MINUTES = (\d+);/gm) },
+      { file: 'api/.env.example', what: '# SANCTUM_EXPIRATION=', extract: all(/^# SANCTUM_EXPIRATION=(\d+)\s*$/gm) },
+      { file: 'server/.env.example', what: '# SANCTUM_EXPIRATION=', extract: all(/^# SANCTUM_EXPIRATION=(\d+)\s*$/gm) },
+      { file: 'deploy/.env.example', what: '# SANCTUM_EXPIRATION=', extract: all(/^# SANCTUM_EXPIRATION=(\d+)\s*$/gm) },
+    ],
+  },
+  {
+    // A SANCTUM_EXPIRATION one backend accepts and the other refuses would stop only one of them.
+    name: 'Token lifetime format (SANCTUM_EXPIRATION)',
+    sources: [
+      { file: 'api/app/Support/Sessions.php', what: 'lifetimeFromEnv pattern', extract: all(/preg_match\('\/(\^[^']*\$)\/', trim\(\$raw\)\)/g) },
+      { file: 'server/src/config.js', what: 'TOKEN_LIFETIME_PATTERN', extract: all(/^export const TOKEN_LIFETIME_PATTERN = \/(.+)\/;$/gm) },
+    ],
+  },
+  {
+    // Both containers must read the same setting, or a lower value ends sessions on one only.
+    name: 'SANCTUM_EXPIRATION in the deploy',
+    sources: [
+      { file: 'deploy/docker-compose.yml', what: 'api SANCTUM_EXPIRATION', extract: composeServiceEnv('api', 'SANCTUM_EXPIRATION') },
+      { file: 'deploy/docker-compose.yml', what: 'node SANCTUM_EXPIRATION', extract: composeServiceEnv('node', 'SANCTUM_EXPIRATION') },
     ],
   },
   {

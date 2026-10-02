@@ -26,12 +26,47 @@ const FILES = {
   'server/Dockerfile': 'FROM node:22-alpine\nWORKDIR /app\n',
   'api/Dockerfile': 'FROM php:8.4-apache\nCOPY --from=composer:2 /usr/bin/composer /usr/bin/composer\n',
   'api/composer.json': JSON.stringify({ require: { php: '^8.4', 'laravel/framework': '^13.0' } }, null, 4),
-  'deploy/docker-compose.yml': 'services:\n  db:\n    image: mysql:8.4\n',
-  'server/src/config.js': 'export const INTERNAL_SECRET_MIN_LENGTH = 32;\n',
+  'deploy/docker-compose.yml': [
+    'services:',
+    '  db:',
+    '    image: mysql:8.4',
+    '  node:',
+    '    environment:',
+    '      # The same setting as api.',
+    '      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}',
+    '  api:',
+    '    environment:',
+    '      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}',
+    'volumes:',
+    '  db-data:',
+    '',
+  ].join('\n'),
+  'deploy/.env.example': '# --- Sessions (optional) ---\n# SANCTUM_EXPIRATION=43200\n',
+  'api/app/Support/Sessions.php': [
+    '<?php',
+    'final class Sessions',
+    '{',
+    '    public const DEFAULT_LIFETIME_MINUTES = 43200;',
+    '',
+    '    public static function lifetimeFromEnv(mixed $raw): int',
+    '    {',
+    "        if (is_string($raw) && preg_match('/^[1-9]\\d{0,6}$/', trim($raw)) === 1) {",
+    '            return (int) trim($raw);',
+    '        }',
+    '    }',
+    '}',
+    '',
+  ].join('\n'),
+  'server/src/config.js': [
+    'export const INTERNAL_SECRET_MIN_LENGTH = 32;',
+    'export const DEFAULT_TOKEN_LIFETIME_MINUTES = 43200;',
+    'export const TOKEN_LIFETIME_PATTERN = /^[1-9]\\d{0,6}$/;',
+    '',
+  ].join('\n'),
   'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 32;\n}\n',
   'api/docker/entrypoint.sh': 'if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then\n  exit 1\nfi\n',
-  'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n',
-  'server/.env.example': 'PORT=8001\r\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\r\n',
+  'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n# SANCTUM_EXPIRATION=43200\n',
+  'server/.env.example': 'PORT=8001\r\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\r\n# SANCTUM_EXPIRATION=43200\r\n',
   'server/src/uploads.js': '/** Largest image. */\nexport const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;\n',
   'api/app/Http/Controllers/NodeFallbackController.php': '<?php\n        $nodeLimit = 5 * 1024 ** 2;\n',
   'server/src/rate-limit.js': "export const RATE_LIMIT_MESSAGE = 'Zu viele Versuche – bitte warte kurz.';\n",
@@ -81,9 +116,9 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 13);
-    assert.equal(r.places, 28);
-    assert.equal(r.occurrences, 29, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 16);
+    assert.equal(r.places, 37);
+    assert.equal(r.occurrences, 38, 'two mysql services in ci.yml count separately');
   });
 });
 
@@ -122,6 +157,39 @@ test('refuses a body limit it cannot read, such as one written in bytes or MB', 
       `Urlencoded body limit (kB): ${LIMIT_REQUEST_BODY} not found`,
       `Body too large message: ${LIMIT_REQUEST_BODY} not found`,
     ]);
+  });
+});
+
+test('detects a token lifetime default that differs between Laravel, Node and an example', () => {
+  withTree({ 'deploy/.env.example': '# SANCTUM_EXPIRATION=1440\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Token lifetime default \(minutes\) differs: 43200 \(api\/app\/Support\/Sessions\.php .*, 1440 \(deploy\/\.env\.example # SANCTUM_EXPIRATION=\)$/);
+  });
+  withTree({ 'server/src/config.js': FILES['server/src/config.js'].replace('= 43200;', '= 1440;') }, (root) => {
+    assert.match(checkMirrors(root).problems[0], /^Token lifetime default \(minutes\) differs: .*1440 \(server\/src\/config\.js DEFAULT_TOKEN_LIFETIME_MINUTES\)/);
+  });
+});
+
+test('detects a token lifetime format that one backend accepts and the other refuses', () => {
+  withTree({ 'server/src/config.js': FILES['server/src/config.js'].replace('\\d{0,6}', '\\d{0,8}') }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Token lifetime format \(SANCTUM_EXPIRATION\) differs: /);
+  });
+});
+
+test('detects a deploy that does not hand SANCTUM_EXPIRATION to both containers alike', () => {
+  const compose = FILES['deploy/docker-compose.yml'];
+  withTree({ 'deploy/docker-compose.yml': compose.replace('      # The same setting as api.\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}\n', '') }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      'SANCTUM_EXPIRATION in the deploy: cannot find node SANCTUM_EXPIRATION in deploy/docker-compose.yml',
+    ]);
+  });
+  withTree({ 'deploy/docker-compose.yml': compose.replace('    environment:\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}', '    environment:\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-1440}') }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^SANCTUM_EXPIRATION in the deploy differs: \$\{SANCTUM_EXPIRATION:-1440\} \(deploy\/docker-compose\.yml api .*\), \$\{SANCTUM_EXPIRATION:-\} \(deploy\/docker-compose\.yml node /);
   });
 });
 
@@ -173,12 +241,12 @@ test('detects an internal secret minimum length that differs between Node, Larav
 });
 
 test('detects development internal secrets that differ between api/ and server/', () => {
-  withTree({ 'server/.env.example': 'NODE_INTERNAL_SECRET=dev-only-other-not-a-secret-00000000000\n' }, (root) => {
+  withTree({ 'server/.env.example': 'NODE_INTERNAL_SECRET=dev-only-other-not-a-secret-00000000000\n# SANCTUM_EXPIRATION=43200\n' }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
     assert.match(r.problems[0], /^Development NODE_INTERNAL_SECRET differs: /);
   });
-  withTree({ 'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=\n' }, (root) => {
+  withTree({ 'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=\n# SANCTUM_EXPIRATION=43200\n' }, (root) => {
     assert.deepEqual(checkMirrors(root).problems, [
       'Development NODE_INTERNAL_SECRET: cannot find NODE_INTERNAL_SECRET in api/.env.example',
     ]);
@@ -225,7 +293,7 @@ test('accepts digest-pinned images', () => {
   const digest = `@sha256:${'d'.repeat(64)}`;
   withTree({
     'server/Dockerfile': `FROM node:22-alpine${digest}\n`,
-    'deploy/docker-compose.yml': `services:\n  db:\n    image: mysql:8.4${digest}\n`,
+    'deploy/docker-compose.yml': FILES['deploy/docker-compose.yml'].replace('image: mysql:8.4', `image: mysql:8.4${digest}`),
   }, (root) => {
     assert.deepEqual(checkMirrors(root).problems, []);
   });
