@@ -22,6 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ensureSchema, first, pool } from '../src/db.js';
+import { PRIVATE_ROOT, rootFor } from '../src/storage.js';
 import { TOKENABLE_TYPE, createUser, deleteTestUsers } from './support/fixtures.js';
 
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -45,10 +46,13 @@ const createdFiles = [];
 const cleanup = { tokens: [], challenges: [], resetEmails: [], cacheKeys: [], reports: [] };
 
 const stamp = () => crypto.randomBytes(6).toString('hex');
-const storagePath = (relative) => path.join(SERVER_DIR, 'storage', relative);
+// Evidence lives in the private root (src/storage.js); the prune runs with cwd SERVER_DIR, so the
+// files are written and checked under SERVER_DIR/storage-private whatever this process's cwd is.
+const storagePath = (relative) => path.join(SERVER_DIR, 'storage-private', relative);
 
-/** A small file under storage/evidence, as the moderation and the admin panel store them. */
+/** A small evidence file, where the moderation and the admin panel store them (private root). */
 function evidenceFile() {
+  assert.equal(rootFor('evidence'), PRIVATE_ROOT, 'evidence is stored in the private root');
   fs.mkdirSync(storagePath('evidence'), { recursive: true });
   const relative = `evidence/zret-test-${stamp()}.png`;
   fs.writeFileSync(storagePath(relative), Buffer.from('test-only image bytes'));
