@@ -1498,11 +1498,11 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
     ganzen Tagen (`USAGE_RETENTION_DAYS` mindestens 120). Wessen Anbieter-Konto und Schlüssel
     das ist und wie lange was aufbewahrt wird, entscheidest du; Vorgaben gibt es absichtlich
     keine. Ohne diese Werte startet der Server nicht (siehe `deploy/.env.example` und
-    `deploy/README.md`, Schritt 4).
+    `deploy/README.md`, Abschnitt „Settings").
   - Ebenso Pflicht ist `MODERATION_DAILY_CALL_LIMIT`: wie viele KI-Prüfungen pro Tag (UTC) für
     alle Konten zusammen höchstens laufen. Wie viel du dafür ausgibst, entscheidest du; eine
     Vorgabe gibt es absichtlich nicht. Ohne den Wert startet der Server nicht (siehe
-    `deploy/README.md`, Schritt 4).
+    `deploy/README.md`, Abschnitt „Settings").
   - Einmal `npm --prefix server ci` ausführen: Der Server braucht jetzt das Paket `sharp` (es
     rechnet jedes hochgeladene Bild neu und entfernt dabei Standort- und Kameradaten). Ohne das
     Paket startet das Backend nicht.
@@ -1510,12 +1510,37 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
     die Zeile löschen oder auf `false` setzen, damit es am PC so streng zugeht wie auf dem
     Server. Ohne Schlüssel dann außerdem `MODERATION_ENABLED=false` setzen (nur am PC), sonst
     wird jeder geprüfte Inhalt abgelehnt (siehe Abschnitt 14, Nachtrag).
-  - Beweisbilder und Story-Bilder liegen jetzt getrennt in `deploy/storage-private/` (am PC
-    `server/storage-private/`). Der Ordner gehört ins Backup, darf aber nie über einen
-    Webserver erreichbar sein.
+  - Beweisbilder und Story-Bilder liegen jetzt getrennt von den öffentlichen Uploads: auf dem
+    Server im Volume `private-media`, am PC in `server/storage-private/`. Sie gehören ins Backup,
+    dürfen aber nie über einen Webserver erreichbar sein.
   - Ein älterer App-Stand passt nicht mehr zum Server: Registrieren (Alters- und
     Nutzungsbedingungen-Bestätigung), „Passwort vergessen" (Code statt Link) und Story-Bilder
     (nur noch angemeldet) gehen damit nicht. Am Handy die App neu laden bzw. neu bauen.
+- Sicherheits-Update für den Server (`deploy/`). Die Anleitung ist jetzt ein Runbook auf
+  Englisch: `deploy/README.md`.
+  - Neue Pflichtwerte in `deploy/.env`: `MAIL_HOST`, `MAIL_USERNAME` und `MAIL_PASSWORD` (die
+    beiden letzten dürfen bei einem Mail-Relay ohne Anmeldung leer sein, müssen aber in der Datei
+    stehen), `MAIL_FROM_ADDRESS`, `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`, `LOG_MAX_SIZE`,
+    `LOG_MAX_FILES` und `MYSQL_BINLOG_RETENTION_DAYS`. Mail-Anbieter, Absenderadresse, der Ort
+    der Sicherungen und wie lange Sicherungen, Logs und das Binärlog von MySQL aufbewahrt werden,
+    sind Entscheidungen: Sie trifft, wer den Server betreibt, zusammen mit der Person, die für den
+    Datenschutz zuständig ist. Vorgaben gibt es absichtlich keine. Die offenen Punkte stehen im
+    Runbook unter „Decisions this runbook does not make". Vor jedem Start prüft
+    `deploy/scripts/preflight.sh` die Datei.
+  - `ADMIN_EMAIL` und `ADMIN_PASSWORD` gehören nicht mehr in `deploy/.env`. Beim ersten Start legt
+    ein Einmal-Container das Admin-Konto an, bevor die Domain erreichbar ist; Caddy startet erst,
+    wenn es ein Admin-Konto gibt. Die Schritte stehen im Runbook unter „First start".
+  - Die Uploads liegen nicht mehr in `deploy/storage/` und `deploy/storage-private/`, sondern in
+    den benannten Volumes `uploads` und `private-media`. Die öffentlichen Bilder liefert Caddy
+    direkt aus; Laravel und PHP berühren sie nie. Lief ein Server schon mit den alten Ordnern,
+    steht im Runbook unter „Updating", wie die Dateien einmal umziehen.
+  - Laravel läuft im Container ohne root-Rechte und hört deshalb auf Port 8080 statt 80.
+  - Jede Nacht um 02:30 UTC sichert der Dienst `backup` die Datenbank und die Uploads nach
+    `BACKUP_DIR` und löscht danach die abgelaufenen Sätze. Die Logs aller Container werden nach
+    Größe rotiert. Eine Kopie außerhalb des Servers richtet das Setup nicht ein: Ob und wohin,
+    ist ebenfalls eine Entscheidung.
+  - Den `APP_KEY` im Passwort-Manager aufheben: Ohne ihn hilft eine Sicherung bei Konten mit
+    Zwei-Faktor-Anmeldung nicht weiter.
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.
