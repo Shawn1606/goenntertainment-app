@@ -200,6 +200,41 @@ export function pngOfSize(width, height) {
   ]);
 }
 
+/**
+ * A valid 8-bit palette PNG (256 colours) whose pixels are a fixed pseudo-random pattern: one byte
+ * per pixel as a file, but three bytes per pixel (and barely compressible) once it is encoded again
+ * as an ordinary RGB PNG. Always the same bytes for the same size.
+ */
+export function palettePngOfSize(width, height) {
+  let state = 0x2545f491;
+  const next = () => {
+    state ^= state << 13;
+    state >>>= 0;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    state >>>= 0;
+    return state & 0xff;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 3; // palette
+  const palette = Buffer.alloc(256 * 3);
+  for (let i = 0; i < palette.length; i += 1) palette[i] = next();
+  const raw = Buffer.alloc(height * (1 + width)); // filter byte 0 + one index per pixel
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) raw[y * (1 + width) + 1 + x] = next();
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('PLTE', palette),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 /** Bytes appended after the image's end (after IEND, EOI or the RIFF container). */
 export function withTrailer(image, trailer) {
   return Buffer.concat([image, Buffer.from(trailer, 'latin1')]);

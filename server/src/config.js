@@ -117,8 +117,9 @@ const SWITCH_VALUES = ['', 'true', 'false'];
  *   hasKey    ANTHROPIC_API_KEY is set. Without it moderation cannot check anything; that counts
  *             as "the model is unavailable", which is the next switch's case.
  *   failOpen  only exactly MODERATION_FAIL_OPEN=true lets content through when the model cannot
- *             be asked (no key, network error, timeout, unreadable reply). Unset, 'false' and every
- *             other value keep it closed: the content is refused.
+ *             be asked (no key, network error, timeout, an overloaded or failing provider,
+ *             unreadable reply). Unset, 'false' and every other value keep it closed: the content
+ *             is refused. A request the provider refuses is never let through (moderation.js).
  */
 export function moderationSettings(env = process.env) {
   return {

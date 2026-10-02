@@ -6,14 +6,17 @@
  * 127.0.0.1. assertLoopbackBaseUrl() refuses any other address before anything is sent, and the
  * tests assert that their requests reached the stand-in, so nothing can leave the machine.
  *
- * Fail closed: when the model cannot be asked (an error, a timeout, no key), content is refused
- * unless MODERATION_FAIL_OPEN is exactly 'true'.
+ * Fail closed: when the model cannot be asked (an error, a timeout, no key, a reply that is not a
+ * verdict), content is refused unless MODERATION_FAIL_OPEN is exactly 'true'. A request the
+ * provider refuses (a 4xx other than 408 and 429) is no outage and is refused whatever the switch
+ * says; the image the model gets stays within the provider's documented limits.
  */
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import sharp from 'sharp';
 
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
-import { hasMetadataTrace, JPEG_8X8, PNG_1X1, withJpegExif } from './support/images.js';
+import { hasMetadataTrace, JPEG_8X8, palettePngOfSize, PNG_1X1, pngOfSize, withJpegExif } from './support/images.js';
 import { assertLoopbackBaseUrl, startModelMock, verdict } from './support/model-mock.js';
 
 /** What test/test.env gave this process, before this file changes it. */
@@ -37,6 +40,10 @@ process.env.MODERATION_TIMEOUT_MS = '1500';
 const { createApp } = await import('../src/app.js');
 const { ensureSchema, first, pool } = await import('../src/db.js');
 const { cleanup, createUser } = await import('./support/fixtures.js');
+// Read through the namespace, so that this file still loads on a server without the model copy
+// and its tests fail on an assertion.
+const images = await import('../src/images.js');
+const { MAX_UPLOAD_BYTES } = await import('../src/uploads.js');
 
 let base;
 let server;
@@ -200,6 +207,85 @@ test('the image sent to the model is the re-encoded one, typed by its bytes (F-1
   const png = await createImagePost(creator.token, PNG_1X1, 'image/jpeg');
   assert.equal(png.status, 201, JSON.stringify(await png.json()));
   assert.equal(lastImageBlock().source.media_type, 'image/png');
+});
+
+/* ------------------------------------------- the image the model gets: the provider's limits */
+
+/** The provider's documented limits for one image: 8000 px on a side, 5 MB of base64 text. */
+const PROVIDER_MAX_SIDE = 8000;
+const PROVIDER_MAX_BASE64 = 5 * 1024 * 1024;
+/** The largest image the default model reads without scaling it down itself (long edge). */
+const MODEL_MAX_EDGE = 2576;
+
+/** Size and format of the image in an image block, read from its bytes. */
+async function sentImage(block) {
+  const bytes = Buffer.from(block.source.data, 'base64');
+  const meta = await sharp(bytes).metadata();
+  return { base64: block.source.data.length, width: meta.width, height: meta.height, format: meta.format, type: block.source.media_type };
+}
+
+/** Pixel size of a stored post image, read back from the address the API answered with. */
+async function storedSize(json, token) {
+  const res = await fetch(json.data.image_url, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(res.status, 200, `the stored image can be read: ${json.data.image_url}`);
+  const meta = await sharp(Buffer.from(await res.arrayBuffer())).metadata();
+  return { width: meta.width, height: meta.height };
+}
+
+test('an image wider than the provider accepts reaches the model scaled down; the stored image keeps its size', async () => {
+  mock.respond({ verdict: verdict({ severity: 0 }) });
+  const res = await createImagePost(creator.token, pngOfSize(8001, 600), 'image/png');
+  const json = await res.json();
+  assert.equal(res.status, 201, JSON.stringify(json));
+  const block = lastImageBlock();
+  assert.ok(block, 'the image reached the local stand-in');
+  const sent = await sentImage(block);
+  assert.ok(sent.width <= MODEL_MAX_EDGE && sent.height <= MODEL_MAX_EDGE, `sent ${sent.width}x${sent.height}`);
+  assert.ok(sent.width <= PROVIDER_MAX_SIDE, "within the provider's pixel limit");
+  assert.ok(sent.base64 <= PROVIDER_MAX_BASE64, `sent ${sent.base64} base64 characters`);
+  assert.equal(sent.type, `image/${sent.format}`, 'the model is told what the bytes are');
+  assert.deepEqual(await storedSize(json, creator.token), { width: 8001, height: 600 }, 'the stored image keeps its pixel size');
+});
+
+test('a palette PNG that grows when it is encoded again still reaches the model within the size limit', async () => {
+  mock.respond({ verdict: verdict({ severity: 0 }) });
+  const upload = palettePngOfSize(2000, 1500);
+  assert.ok(upload.length < MAX_UPLOAD_BYTES, `precondition: an accepted upload (${upload.length} bytes)`);
+  const processed = await images.processImageUpload({ buffer: upload });
+  assert.ok(
+    Math.ceil(processed.buffer.length / 3) * 4 > PROVIDER_MAX_BASE64,
+    `precondition: encoded again, the image is over the provider's size limit (${processed.buffer.length} bytes)`,
+  );
+
+  const res = await createImagePost(creator.token, upload, 'image/png');
+  const json = await res.json();
+  assert.equal(res.status, 201, JSON.stringify(json));
+  const sent = await sentImage(lastImageBlock());
+  assert.ok(sent.base64 <= PROVIDER_MAX_BASE64, `sent ${sent.base64} base64 characters`);
+  assert.deepEqual({ width: sent.width, height: sent.height }, { width: 2000, height: 1500 }, 'every pixel fits, so none is dropped');
+  assert.equal(sent.type, `image/${sent.format}`, 'the model is told what the bytes are');
+  assert.deepEqual(await storedSize(json, creator.token), { width: 2000, height: 1500 });
+});
+
+test('the model copy fits the size limit even for an image that resists compression', async () => {
+  assert.equal(typeof images.imageForModel, 'function', 'images.js makes the model copy');
+  // Over the upload limit, so only the copy step is tested here: pseudo-random pixels at the full
+  // model size are over the limit at the first quality step, so smaller steps are needed.
+  const processed = await images.processImageUpload({ buffer: palettePngOfSize(2600, 2600) });
+  const copy = await images.imageForModel(processed);
+  const meta = await sharp(copy.buffer).metadata();
+  assert.ok(Math.ceil(copy.buffer.length / 3) * 4 <= PROVIDER_MAX_BASE64, `copy of ${copy.buffer.length} bytes`);
+  assert.ok(meta.width <= MODEL_MAX_EDGE && meta.height <= MODEL_MAX_EDGE, `copy of ${meta.width}x${meta.height}`);
+  assert.equal(copy.mimetype, `image/${meta.format}`);
+  assert.deepEqual({ width: processed.width, height: processed.height }, { width: 2600, height: 2600 }, 'the processed image is unchanged');
+});
+
+test('an image within the limits goes to the model as it is stored', async () => {
+  assert.equal(typeof images.imageForModel, 'function', 'images.js makes the model copy');
+  const processed = await images.processImageUpload({ buffer: JPEG_8X8 });
+  const copy = await images.imageForModel(processed);
+  assert.ok(copy.buffer.equals(processed.buffer), 'the same bytes');
+  assert.equal(copy.mimetype, 'image/jpeg');
 });
 
 /** An event as the app sends it (multipart); returns the status and the request the model got. */
@@ -472,4 +558,88 @@ test('category and field names outside the schema are dropped, the verdict still
     [author.user.id],
   );
   assert.deepEqual({ ...report }, { verdict: 'abgelehnt', categories: 'gewalt', fields: 'ort' });
+});
+
+/* ------------------------------------- a request the provider refuses is not an outage (F-06) */
+
+test('a request the provider refuses (4xx) is refused even with MODERATION_FAIL_OPEN=true', async () => {
+  const author = await createUser('modbadreq', { accountType: 'creator', created: userIds });
+  const failures = [];
+  await withEnv({ MODERATION_FAIL_OPEN: 'true' }, async () => {
+    for (const status of [400, 401, 403, 404, 409, 413, 422]) {
+      mock.respond({ status, errorType: 'invalid_request_error' });
+      const before = await postCount(author.user.id);
+      const r = await postAndCount(author.token, `Anfrage abgelehnt ${status}`);
+      if (r.calls < 1) failures.push(`${status}: the check did not reach the local stand-in`);
+      if (r.status !== 422 || r.json.message !== MSG_REFUSAL) failures.push(`${status}: ${r.status} ${JSON.stringify(r.json)}`);
+      if ((await postCount(author.user.id)) !== before) failures.push(`${status}: the post was stored`);
+      const report = { ...(await lastReport(author.user.id)) };
+      if (report.verdict !== 'error' || report.action !== 'blocked') failures.push(`${status}: report ${JSON.stringify(report)}`);
+    }
+  });
+  const banned = await first('SELECT banned_until FROM users WHERE id = ?', [author.user.id]);
+  assert.equal(banned.banned_until, null, 'never a ban');
+  assert.deepEqual(failures, []);
+});
+
+test('an unavailable provider (429, 5xx) still follows MODERATION_FAIL_OPEN', async () => {
+  const author = await createUser('modoutage', { accountType: 'creator', created: userIds });
+  for (const status of [429, 500, 503, 529]) {
+    mock.respond({ status, errorType: 'overloaded_error' });
+    const closed = await postAndCount(author.token, `Ausfall ${status}`);
+    assert.equal(closed.status, 422, `${status} closed: ${JSON.stringify(closed.json)}`);
+    assert.equal(closed.json.message, MSG_UNAVAILABLE);
+    await withEnv({ MODERATION_FAIL_OPEN: 'true' }, async () => {
+      const open = await postAndCount(author.token, `Ausfall offen ${status}`);
+      assert.equal(open.status, 201, `${status} open: ${JSON.stringify(open.json)}`);
+      assert.deepEqual({ ...(await lastReport(author.user.id)) }, { verdict: 'error', action: 'none' });
+    });
+  }
+});
+
+/* ------------------------------------- the server-side fallback beta (keep these tests last) */
+
+/** Did this recorded request ask for the server-side fallback beta? */
+const usedFallbackBeta = (call) =>
+  String(call?.headers?.['anthropic-beta'] ?? '').includes('server-side-fallback') && call?.body?.fallbacks === 'default';
+
+test('a 400 about the request does not switch the fallback beta off for the process', async () => {
+  const author = await createUser('modfallback', { accountType: 'creator', created: userIds });
+  await withEnv({ MODERATION_FALLBACKS: 'true' }, async () => {
+    mock.respond({ status: 400, errorType: 'invalid_request_error' });
+    const refused = await postAndCount(author.token, 'Anfrage abgelehnt');
+    assert.ok(usedFallbackBeta(mock.messageCalls().at(-1)), 'the check asked with the fallback beta');
+    assert.equal(refused.calls, 1, 'not asked again without the beta: the error is about the request');
+
+    mock.respond({ verdict: verdict({ severity: 0 }) });
+    const next = await postAndCount(author.token, 'Danach wieder normal');
+    assert.equal(next.calls, 1);
+    assert.ok(usedFallbackBeta(mock.messageCalls().at(-1)), 'the next check still uses the fallback beta');
+    assert.equal(next.status, 201, JSON.stringify(next.json));
+
+    assert.equal(refused.status, 422, JSON.stringify(refused.json));
+    assert.equal(refused.json.message, MSG_REFUSAL);
+  });
+});
+
+// Last test of the file: it switches the fallback beta off for the rest of this process.
+test('a 400 that names the fallback beta switches it off, and the check goes on without it', async () => {
+  const author = await createUser('modnobeta', { accountType: 'creator', created: userIds });
+  await withEnv({ MODERATION_FALLBACKS: 'true' }, async () => {
+    mock.respond(
+      { status: 400, errorType: 'invalid_request_error', message: 'fallbacks: not available for this account (test stand-in)' },
+      { verdict: verdict({ severity: 0 }) },
+    );
+    const withoutBeta = await postAndCount(author.token, 'Ohne Fallback weiter');
+    assert.equal(withoutBeta.status, 201, JSON.stringify(withoutBeta.json));
+    assert.equal(withoutBeta.calls, 2, 'asked once with the beta, then once without');
+    const [asked, retried] = mock.messageCalls().slice(-2);
+    assert.ok(usedFallbackBeta(asked));
+    assert.equal(usedFallbackBeta(retried), false);
+
+    const later = await postAndCount(author.token, 'Weiter ohne Fallback');
+    assert.equal(later.status, 201, JSON.stringify(later.json));
+    assert.equal(later.calls, 1);
+    assert.equal(usedFallbackBeta(mock.messageCalls().at(-1)), false, 'the beta stays off');
+  });
 });

@@ -11,17 +11,19 @@
  * Jede Pruefung landet in `moderation_reports` – auch die unauffaelligen.
  *
  * Fails closed (F-06): when the model cannot be asked (no ANTHROPIC_API_KEY, network error,
- * timeout, unreadable reply), the content is refused, unless MODERATION_FAIL_OPEN=true says
- * otherwise. Only MODERATION_ENABLED=false switches moderation off, and production refuses to
- * start with that or without a key (config.js startupProblems). The switches are read on every
- * check (config.js moderationSettings), not when this module is loaded.
+ * timeout, an overloaded or failing provider, unreadable reply), the content is refused, unless
+ * MODERATION_FAIL_OPEN=true says otherwise. A request the provider refuses (isOutage) is no
+ * outage: its content is refused whatever the switch says. Only MODERATION_ENABLED=false switches
+ * moderation off, and production refuses to start with that or without a key (config.js
+ * startupProblems). The switches are read on every check (config.js moderationSettings), not when
+ * this module is loaded.
  */
 import 'dotenv/config';
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic, { APIConnectionError } from '@anthropic-ai/sdk';
 import { pool } from './db.js';
 import { setBan, recordBanEvidence } from './auth.js';
 import { moderationSettings } from './config.js';
-import { isProcessedImage } from './images.js';
+import { imageForModel, isProcessedImage } from './images.js';
 import { describeError, logError, logWarn } from './log.js';
 import { storeImage } from './storage.js';
 
@@ -225,26 +227,52 @@ async function createMessage(params) {
     try {
       return await c.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' });
     } catch (err) {
-      // Ist der Beta-Pfad fuer den Account nicht freigeschaltet, kommt eine
-      // 400/403/404 zurueck. Dann einmalig abschalten und ohne Fallback weiter –
-      // sonst wuerde die Moderation dauerhaft (und unbemerkt) ausfallen. Ein
-      // echter Anfrage-Fehler wiederholt sich unten und wird sichtbar geloggt.
-      if ([400, 403, 404].includes(err?.status)) {
-        fallbacksUnavailable = true;
-        logWarn('[moderation] Server-seitige Fallbacks nicht verfuegbar, weiter ohne', err);
-      } else {
-        throw err;
-      }
+      // Ist der Beta-Pfad fuer den Account nicht freigeschaltet, wird er einmalig
+      // abgeschaltet und es geht ohne Fallback weiter – sonst wuerde die Moderation
+      // dauerhaft (und unbemerkt) ausfallen. Any other error, a 400 about this request
+      // included, is this request's own and leaves the fallback on for the next one.
+      if (!fallbackBetaUnavailable(err)) throw err;
+      fallbacksUnavailable = true;
+      logWarn('[moderation] Server-seitige Fallbacks nicht verfuegbar, weiter ohne', err);
     }
   }
   return c.messages.create(params);
 }
 
 /**
+ * Whether a failed beta call says that the fallback beta itself is not available to this account:
+ * a 403 or 404, or a 400 whose provider message names the fallback or the beta header. A 400 for
+ * anything else (an image the provider refuses, say) is about one request; switching the fallback
+ * off for the whole process because of it would let any single upload do that.
+ */
+function fallbackBetaUnavailable(err) {
+  if (err?.status === 403 || err?.status === 404) return true;
+  if (err?.status !== 400) return false;
+  return /fallback|anthropic-beta/i.test(String(err?.error?.error?.message ?? ''));
+}
+
+/**
+ * Whether a failed request means that the provider is unavailable right now: no connection, the
+ * time limit, 408, 429 or a 5xx (529 "overloaded" included). Only then may MODERATION_FAIL_OPEN let
+ * content through (decide()). Every other failure is no outage: the provider refused this request
+ * (400, 413, 422 - an image over its limits, say), or the key, account or settings are wrong (401,
+ * 403, 404). Content behind such an error is refused whatever the switch says, or any user could
+ * skip the check on demand by sending what the provider refuses.
+ */
+function isOutage(err) {
+  if (err instanceof APIConnectionError) return true; // the SDK's time limit is one of these
+  const status = err?.status;
+  return status === 408 || status === 429 || (Number.isInteger(status) && status >= 500);
+}
+
+/**
  * Ruft die KI auf und liefert
  *   { status: 'classified', youth_safe, severity, categories, fields, reason }
  *   { status: 'refusal' }   – Sicherheits-Klassifikator hat die Pruefung abgelehnt
- *   { status: 'error', error, logDetail } – Netz/Modell-Problem oder unlesbare Antwort
+ *   { status: 'error', error, logDetail } – the provider is unavailable (isOutage), or the reply
+ *                           cannot be read
+ *   { status: 'invalid', error, logDetail } – the provider refused the request, or the image could
+ *                           not be prepared within its limits: refused whatever MODERATION_FAIL_OPEN says
  *
  * `error` goes into the moderation report; `logDetail` is what the server log gets: made by the
  * code, never the model's reply (which can quote the checked text) - see log.js.
@@ -252,14 +280,24 @@ async function createMessage(params) {
 async function classify({ context, title, description, location, interests, label, image }) {
   const blocks = [];
   if (image) {
-    // A processed image (images.js): fresh bytes without metadata, and a type taken from the
-    // bytes - one of the three the model accepts.
+    // A processed image (images.js): fresh bytes without metadata, a type taken from the bytes -
+    // one of the three the model accepts - and within the provider's limits (imageForModel).
+    let sent;
+    try {
+      sent = await imageForModel(image);
+    } catch {
+      return {
+        status: 'invalid',
+        error: 'Bild liess sich nicht innerhalb der Grenzen des Modells kodieren.',
+        logDetail: 'the image could not be prepared within the model limits',
+      };
+    }
     blocks.push({
       type: 'image',
       source: {
         type: 'base64',
-        media_type: image.mimetype,
-        data: image.buffer.toString('base64'),
+        media_type: sent.mimetype,
+        data: sent.buffer.toString('base64'),
       },
     });
   }
@@ -283,7 +321,7 @@ async function classify({ context, title, description, location, interests, labe
       messages: [{ role: 'user', content: blocks }],
     });
   } catch (err) {
-    return { status: 'error', error: err?.message ?? String(err), logDetail: describeError(err) };
+    return { status: isOutage(err) ? 'error' : 'invalid', error: err?.message ?? String(err), logDetail: describeError(err) };
   }
 
   // Die Sicherheits-Klassifikatoren koennen die Anfrage ablehnen – dann gibt es
@@ -361,6 +399,19 @@ function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
     return {
       verdict: 'refusal',
       severity: blockSeverity,
+      allowed: false,
+      timeout: false,
+      reason: MSG_NOT_CHECKABLE,
+      categories: [],
+      fields: [],
+    };
+  }
+  if (result.status === 'invalid') {
+    // The provider refused the request itself, or the image could not be prepared within its
+    // limits: no outage, so MODERATION_FAIL_OPEN does not apply. Refused without a ban.
+    return {
+      verdict: 'error',
+      severity: 0,
       allowed: false,
       timeout: false,
       reason: MSG_NOT_CHECKABLE,
@@ -519,7 +570,8 @@ export async function moderateContent({
     timeoutSeverity,
   });
 
-  if (result.status === 'error') {
+  const failed = result.status === 'error' || result.status === 'invalid';
+  if (failed) {
     logError('[moderation] Pruefung fehlgeschlagen', result.logDetail ?? 'unknown');
   }
 
@@ -534,7 +586,7 @@ export async function moderateContent({
     snapshot: { title, description: hasText(description) ? description : label, interests },
     imagePath,
     latencyMs,
-    error: result.status === 'error' ? result.error : null,
+    error: failed ? result.error : null,
   });
 
   let bannedUntil = null;

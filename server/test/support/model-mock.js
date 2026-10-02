@@ -7,9 +7,12 @@
  * and every test asserts that its request reached this stand-in.
  *
  * Each request is recorded (path, headers, parsed JSON body). The answer is chosen per test with
- * `respond(next)`, where `next` is one of:
+ * `respond(...answers)`: each request takes the first answer while more than one is left, the last
+ * one answers every request after that. An answer is one of:
  *   { verdict: {...} }      200, a reply whose text is the verdict as JSON (stop_reason end_turn)
- *   { status: 500 }         an error status (x-should-retry: false, so the SDK does not retry)
+ *   { status: 500 }         an error status (x-should-retry: false, so the SDK does not retry);
+ *                           `errorType` and `message` set the error body (defaults: api_error and
+ *                           a fixed test text)
  *   { refusal: true }       200 with stop_reason 'refusal' and no text
  *   { hang: true }          no answer at all (the SDK's time limit ends the call)
  */
@@ -35,7 +38,7 @@ export function verdict({ severity = 0, fields = [], categories = [], reason = '
 export async function startModelMock() {
   const requests = [];
   const hanging = new Set();
-  let next = { verdict: verdict() };
+  let answers = [{ verdict: verdict() }];
 
   const server = http.createServer((req, res) => {
     const chunks = [];
@@ -48,6 +51,7 @@ export async function startModelMock() {
         body = null;
       }
       requests.push({ method: req.method, path: req.url, headers: req.headers, body });
+      const next = answers.length > 1 ? answers.shift() : answers[0];
 
       if (next.hang) {
         hanging.add(res);
@@ -56,7 +60,8 @@ export async function startModelMock() {
       }
       if (next.status) {
         res.writeHead(next.status, { 'content-type': 'application/json', 'x-should-retry': 'false' });
-        res.end(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'test stand-in error' } }));
+        const error = { type: next.errorType ?? 'api_error', message: next.message ?? 'test stand-in error' };
+        res.end(JSON.stringify({ type: 'error', error }));
         return;
       }
       const content = next.refusal ? [] : [{ type: 'text', text: JSON.stringify(next.verdict) }];
@@ -82,9 +87,10 @@ export async function startModelMock() {
   return {
     url,
     requests,
-    /** The answer for the following requests. */
-    respond(answer) {
-      next = answer;
+    /** The answers for the following requests, in order (the last one repeats). */
+    respond(...next) {
+      if (next.length === 0) throw new Error('respond() needs at least one answer');
+      answers = next;
     },
     /** Requests that reached the Messages endpoint (any API version prefix). */
     messageCalls() {
