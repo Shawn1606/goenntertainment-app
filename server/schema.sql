@@ -78,6 +78,9 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Passwort-Zuruecksetzen (E-Mail -> Token)
+-- No longer written: the reset works by a mailed code (purpose 'reset' in
+-- two_factor_challenges, F-09). The table stays until its removal from every
+-- schema copy (backlog).
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   email      VARCHAR(255) NOT NULL,
   token      VARCHAR(255) NOT NULL,
@@ -136,6 +139,9 @@ CREATE TABLE IF NOT EXISTS cache_locks (
 --   'delete'  – Freigabe von Laravel an Node: „diese Person hat das Loeschen
 --               vollstaendig bestaetigt" (siehe server/src/routes/internal.js).
 --               Kein Code, nur der Token; lebt zwei Minuten.
+--   'reset'   – a password reset code (POST /forgot-password, signed out); its token is
+--               never handed out (api/app/Support/PasswordReset.php). The former link
+--               tokens table, password_reset_tokens, is no longer written.
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App
 -- in der Hand haelt; `code_hash` = HMAC des Codes (Schluessel APP_KEY). Wer die

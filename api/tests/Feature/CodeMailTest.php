@@ -4,15 +4,16 @@ namespace Tests\Feature;
 
 use App\Support\TwoFactor;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use RuntimeException;
 use Tests\AppFeatureTestCase;
 
 /**
- * Mails with a code (two-factor codes) never go through the log transport, not even when
- * MAIL_MAILER names it or a failover chain contains it: the log would hold the code
- * (F-09; App\Support\CodeMail). The mail is refused like a failed one: the two-factor route
- * answers 503, and the log names the exception class.
+ * Mails with a code (password reset, two-factor) never go through the log transport, not even
+ * when MAIL_MAILER names it or a failover chain contains it: the log would hold the code
+ * (F-09; App\Support\CodeMail). The mail is refused like a failed one: the reset answers neutrally
+ * and keeps no code, the two-factor route answers 503, and the log names the exception class.
  *
  * The real mail manager runs here (no Mail::fake), so the transport that would send is the one
  * the configuration picks.
@@ -47,6 +48,34 @@ class CodeMailTest extends AppFeatureTestCase
         $errors = array_filter($this->logged, fn (array $r) => $r['level'] === 'error' && str_contains($r['text'], $prefix));
         $this->assertCount(1, $errors, "no '{$prefix}' error was logged");
         $this->assertStringContainsString(json_encode(RuntimeException::class), (string) array_values($errors)[0]['text']);
+    }
+
+    public function test_a_reset_code_mail_goes_out_on_a_real_transport(): void
+    {
+        // The positive control: phpunit.xml's array mailer is not the log, so the code is sent.
+        $user = $this->makeUser();
+
+        $this->postJson('/api/forgot-password', ['email' => $user->email])->assertOk();
+
+        $sent = app('mail.manager')->mailer('array')->getSymfonyTransport()->messages();
+        $this->assertCount(1, $sent);
+        $this->assertSame($user->email, $sent->first()->getEnvelope()->getRecipients()[0]->getAddress());
+        $this->assertSame(1, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'reset')->count());
+    }
+
+    public function test_reset_code_mails_are_refused_on_the_log_mailer(): void
+    {
+        config(['mail.default' => 'log']);
+        $user = $this->makeUser();
+
+        $this->postJson('/api/forgot-password', ['email' => $user->email])
+            ->assertOk()
+            ->assertJsonPath('status', 'sent');
+
+        $this->assertNoMailInTheLog();
+        $this->assertRefusalLogged('[password-reset] code mail not sent');
+        // A code nobody received is useless: it is gone, and a new request may mail at once.
+        $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'reset')->count());
     }
 
     public function test_two_factor_code_mails_are_refused_on_the_log_mailer(): void

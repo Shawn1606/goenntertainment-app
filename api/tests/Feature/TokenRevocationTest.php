@@ -6,7 +6,7 @@ use App\Models\User;
 use App\Support\Totp;
 use App\Support\TwoFactor;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\AppFeatureTestCase;
 
@@ -17,7 +17,8 @@ use Tests\AppFeatureTestCase;
  *
  * Denominator: every action that changes a credential is a row of credentialChanges() (the
  * e-mail change and the two-factor changes have their own rows in EmailChangeTest and
- * TwoFactorHardeningTest, next to their other checks).
+ * TwoFactorHardeningTest, next to their other checks). The password reset runs the code flow
+ * (F-09): the code from the reset mail, where it used to insert a link token row.
  */
 class TokenRevocationTest extends AppFeatureTestCase
 {
@@ -88,16 +89,13 @@ class TokenRevocationTest extends AppFeatureTestCase
                 ->putJson('/api/user/password', ['current_password' => self::TEST_PASSWORD, 'password' => $newPassword])
                 ->assertOk(),
             'password-reset' => (function () use ($user, $newPassword) {
-                // The reset row the mail would point to (written with Laravel's clock, like the
-                // other reset tests: the test MySQL runs in UTC, APP_TIMEZONE may not).
-                DB::table('password_reset_tokens')->insert([
-                    'email' => $user->email,
-                    'token' => Hash::make('fixture-reset-token-not-a-secret'),
-                    'created_at' => now(),
-                ]);
+                // The code the reset mail carries (signed out: no bearer token on these requests).
+                Mail::fake();
+                $this->postJson('/api/forgot-password', ['email' => $user->email])->assertOk();
+                Mail::assertSent('App\\Mail\\PasswordResetCode');
                 $this->postJson('/api/reset-password', [
-                    'token' => 'fixture-reset-token-not-a-secret',
                     'email' => $user->email,
+                    'code' => (string) Mail::sent('App\\Mail\\PasswordResetCode')->last()->code,
                     'password' => $newPassword,
                 ])->assertOk();
             })(),

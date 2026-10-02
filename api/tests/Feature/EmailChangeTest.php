@@ -7,7 +7,6 @@ use App\Models\User;
 use App\Support\Totp;
 use App\Support\TwoFactor;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Attributes\DataProviderExternal;
@@ -18,8 +17,9 @@ use Tests\AppFeatureTestCase;
 
 /**
  * Changing the e-mail address takes the current password, and the current code when two-factor
- * sign-in is on (F-04). It signs out every other session, drops open reset links and codes of
- * the old address, and notifies the OLD address; if that notice cannot be sent, nothing changes.
+ * sign-in is on (F-04). It signs out every other session, drops open reset codes and e-mail
+ * codes of the old address, and notifies the OLD address; if that notice cannot be sent, nothing
+ * changes.
  * PATCH /api/user can no longer change the address at all.
  *
  * The notice class is named as a string: the tests must run (and fail) on code without it.
@@ -274,16 +274,19 @@ class EmailChangeTest extends AppFeatureTestCase
         Mail::assertNothingSent();
     }
 
-    public function test_open_reset_links_and_codes_of_the_old_address_are_dropped(): void
+    /**
+     * Since the password reset works by a mailed code (F-09), an open reset is a 'reset' challenge
+     * whose code went to the OLD address; it is dropped with the e-mail codes. (This test used to
+     * insert a reset link row into password_reset_tokens, which nothing writes any more.) The
+     * reset challenge is made directly, with the purpose spelled out, so the test also runs where
+     * the code flow does not exist yet.
+     */
+    public function test_open_reset_codes_and_e_mail_codes_of_the_old_address_are_dropped(): void
     {
         Mail::fake();
         $user = $this->makeUser(['two_factor_method' => TwoFactor::METHOD_EMAIL, 'two_factor_confirmed_at' => now()]);
         $token = $this->issueToken($user);
-        DB::table('password_reset_tokens')->insert([
-            'email' => $user->email,
-            'token' => Hash::make('fixture-reset-token-not-a-secret'),
-            'created_at' => now(),
-        ]);
+        TwoFactor::createChallenge($user, 'reset', TwoFactor::METHOD_EMAIL);
 
         // The confirm code for this change, plus a second open one: both go.
         $this->withBearer($token)->postJson('/api/user/two-factor/code')->assertOk();
@@ -292,7 +295,10 @@ class EmailChangeTest extends AppFeatureTestCase
 
         $this->change($token, ['email' => $this->newAddress(), 'current_password' => self::TEST_PASSWORD, 'code' => $code])->assertOk();
 
-        $this->assertFalse(DB::table('password_reset_tokens')->where('email', $user->email)->exists());
+        $this->assertSame(0, DB::table('two_factor_challenges')
+            ->where('user_id', $user->id)
+            ->where('purpose', 'reset')
+            ->count(), 'an open reset code of the old address survived');
         $this->assertSame(0, DB::table('two_factor_challenges')
             ->where('user_id', $user->id)
             ->whereIn('purpose', [TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM])

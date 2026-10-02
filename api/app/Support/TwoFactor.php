@@ -27,7 +27,8 @@ use RuntimeException;
  * `users.two_factor_method` ist der einzige Schalter (NULL | 'email' | 'totp').
  * Alles, was auf einen Code wartet, ist ein „Vorgang" in two_factor_challenges -
  * die Anmeldung nach dem Passwort ('login'), das Einschalten per E-Mail
- * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm').
+ * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm'). The password reset
+ * code ('reset') lives there too, with its own rules (App\Support\PasswordReset).
  *
  * Die App haelt fuer einen Vorgang nur einen zufaelligen Token in der Hand, in
  * der Tabelle steht sein sha256. Er ist das, was „Passwort war richtig" von
@@ -81,6 +82,12 @@ final class TwoFactor
 
     /** Freigabe an Node fuer DELETE /api/me - siehe server/src/routes/internal.js. */
     public const PURPOSE_DELETE = 'delete';
+
+    /**
+     * A password reset code (F-09), signed out: App\Support\PasswordReset. It has its own counting
+     * and never goes through attempt(), so wrong reset codes do not feed the account's cap below.
+     */
+    public const PURPOSE_RESET = 'reset';
 
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
     public const CODE_TTL = 600;
@@ -169,11 +176,17 @@ final class TwoFactor
      * Der Klartext verlaesst diese Methode genau einmal - in die Antwort an die
      * App. Danach kennt ihn der Server nicht mehr.
      *
+     * `$prune` false skips the clean-up of expired challenges, for a caller that runs this inside
+     * a transaction and prunes before it (PasswordReset::issue): the clean-up touches every
+     * account's rows and should not hold their locks for a whole transaction.
+     *
      * @return array{0: TwoFactorChallenge, 1: string}
      */
-    public static function createChallenge(User $user, string $purpose, ?string $method): array
+    public static function createChallenge(User $user, string $purpose, ?string $method, bool $prune = true): array
     {
-        self::pruneExpired();
+        if ($prune) {
+            self::pruneExpired();
+        }
 
         $token = self::newToken();
 
@@ -836,8 +849,11 @@ final class TwoFactor
         return hash('sha256', $token);
     }
 
-    /** Der Code haengt am Vorgang: Derselbe Code in einem anderen Vorgang ist ein anderer Hash. */
-    private static function hashCode(string $tokenHash, string $code): string
+    /**
+     * Der Code haengt am Vorgang: Derselbe Code in einem anderen Vorgang ist ein anderer Hash.
+     * Public for the password reset code (PasswordReset), which is stored the same way.
+     */
+    public static function hashCode(string $tokenHash, string $code): string
     {
         return hash_hmac('sha256', 'code|'.$tokenHash.'|'.$code, self::key());
     }

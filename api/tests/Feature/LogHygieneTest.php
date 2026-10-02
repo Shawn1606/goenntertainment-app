@@ -108,6 +108,37 @@ class LogHygieneTest extends AppFeatureTestCase
         $this->assertLoggedWithoutCanary();
     }
 
+    /**
+     * The password reset code mail (F-09) the same way: the request is answered neutrally, the
+     * failure is logged with the exception class and the user id, never the transport's message
+     * or the address.
+     */
+    public function test_a_reset_code_mail_that_cannot_be_sent_logs_the_exception_class_only(): void
+    {
+        Mail::extend('failing-for-test', fn () => new class extends AbstractTransport
+        {
+            protected function doSend(SentMessage $message): void
+            {
+                throw new TransportException('fixture transport failure for '.LogHygieneTest::canary());
+            }
+
+            public function __toString(): string
+            {
+                return 'failing-for-test';
+            }
+        });
+        config(['mail.mailers.failing-for-test' => ['transport' => 'failing-for-test'], 'mail.default' => 'failing-for-test']);
+        $user = $this->makeUser();
+
+        $this->postJson('/api/forgot-password', ['email' => $user->email])->assertOk()->assertJsonPath('status', 'sent');
+
+        $this->assertLoggedWithoutCanary();
+        foreach ($this->logged as $line) {
+            $this->assertStringNotContainsString($user->email, $line);
+        }
+        $this->assertStringContainsString(TransportException::class, implode("\n", $this->logged));
+    }
+
     public static function canary(): string
     {
         return self::CANARY;

@@ -121,8 +121,9 @@ echo "base64:$(openssl rand -base64 32)"
 > niemand mit eingeschalteter 2FA mehr in sein Konto. Heb ihn zusätzlich
 > außerhalb des Servers auf (z. B. im Passwort-Manager).
 
-Für 2FA-Codes per E-Mail außerdem `MAIL_HOST`, `MAIL_USERNAME` und
-`MAIL_PASSWORD` eintragen. Ohne sie läuft alles, nur E-Mail-Codes kommen nicht an.
+Für 2FA-Codes per E-Mail und die Codes von „Passwort vergessen" außerdem
+`MAIL_HOST`, `MAIL_USERNAME` und `MAIL_PASSWORD` eintragen. Ohne sie läuft alles,
+nur E-Mail-Codes kommen nicht an – auch niemand kann dann sein Passwort zurücksetzen.
 
 ## Schritt 5 – Starten
 

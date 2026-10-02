@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Rules\ValidEmail;
 use App\Support\NodeInternal;
 use App\Support\PasswordPolicy;
+use App\Support\PasswordReset;
 use App\Support\Passwords;
 use App\Support\Sessions;
 use App\Support\StepUp;
@@ -56,7 +57,8 @@ class AccountController extends Controller
      * SETZEN, allein mit ihrer Anmeldung. Das ist nicht weniger sicher als
      * bisher: Wer den Token hat, konnte schon jetzt alles am Konto aendern, und
      * die Alternative - „Passwort vergessen" per Mail - gibt es erst, wenn der
-     * Mail-Versand steht.
+     * Mail-Versand steht. (The reset by mailed code exists since F-09; whether setting a first
+     * password should then need it is a backlog item.)
      *
      * Entscheidend ist, dass das NUR bei NULL/leer gilt. Ein Konto mit Passwort,
      * das zusaetzlich an Google haengt, muss sein Passwort kennen - sonst waere
@@ -108,8 +110,8 @@ class AccountController extends Controller
 
         Sessions::revokeOthers($user);
 
-        // Ein offener „Passwort vergessen"-Link soll das neue nicht gleich wieder ersetzen koennen.
-        DB::table('password_reset_tokens')->where('email', $user->email)->delete();
+        // Ein offener „Passwort vergessen"-Code soll das neue nicht gleich wieder ersetzen koennen.
+        PasswordReset::forget($user);
 
         return response()->json(['message' => 'Passwort geändert.']);
     }
@@ -127,7 +129,7 @@ class AccountController extends Controller
      * for good), so it must not be lost to a typo or a taken address.
      *
      * Then, in one transaction: the new address (not verified), every other session signed out,
-     * open reset links and e-mail codes of the old address dropped, and a notice to the OLD
+     * open reset codes and e-mail codes of the old address dropped, and a notice to the OLD
      * address. If that notice cannot be sent, nothing changes (503): it is the owner's only
      * signal that the recovery channel moved.
      */
@@ -172,9 +174,9 @@ class AccountController extends Controller
                 $user->forceFill(['email' => $new, 'email_verified_at' => null])->syncOriginal();
 
                 Sessions::revokeOthers($user);
-                DB::table('password_reset_tokens')->where('email', $old)->delete();
+                // Open reset codes (mailed to the old address) and e-mail codes.
                 TwoFactorChallenge::where('user_id', $user->getKey())
-                    ->whereIn('purpose', [TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM])
+                    ->whereIn('purpose', [TwoFactor::PURPOSE_RESET, TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM])
                     ->delete();
 
                 Mail::to($old)->send(new AccountSecurityNotice(AccountSecurityNotice::EMAIL_CHANGED, TwoFactor::maskEmail($new)));
