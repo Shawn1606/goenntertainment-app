@@ -192,3 +192,47 @@ test('the error handler answers body-parser errors with their 4xx and logs nothi
   assert.deepEqual(res.payload, { message: 'Die Anfrage ist kein gültiges JSON.' });
   assert.equal(out, '');
 });
+
+/** body-parser's error for a compressed body zlib cannot unpack: createError(400, zlibError), no `type`. */
+function unpackError() {
+  const err = new Error('incorrect header check');
+  err.errno = -3;
+  err.code = 'Z_DATA_ERROR';
+  err.status = 400;
+  err.statusCode = 400;
+  err.expose = true;
+  return err;
+}
+
+/** Express's error for a route parameter that is not valid percent-encoding (it quotes the raw text). */
+function paramDecodeError() {
+  const err = new URIError(`Failed to decode param '${CANARY}%ZZ'`);
+  err.status = 400;
+  err.statusCode = 400;
+  return err;
+}
+
+test('the error handler answers an unpack error or a param-decode error with 400 and logs nothing', async () => {
+  const { handleError } = await import('../src/app.js');
+  for (const err of [unpackError(), paramDecodeError()]) {
+    const res = fakeResponse();
+    const out = captured(() => handleError(err, { method: 'POST' }, res, () => assert.fail('next() called')));
+    assert.equal(res.statusCode, 400, err.name);
+    assert.deepEqual(res.payload, { message: 'Die Anfrage konnte nicht gelesen werden.' }, err.name);
+    assert.equal(out, '', err.name);
+  }
+});
+
+test('the error handler still answers other errors with 500: a URIError without 400, a 4xx not marked for the client', async () => {
+  const { handleError } = await import('../src/app.js');
+  // A URIError the code raised itself (no status) is the server's fault; so is an error that
+  // carries a 4xx status but is not marked as safe to expose.
+  const ownUriError = new URIError('URI malformed');
+  const unexposed = Object.assign(new Error('boom'), { status: 404 });
+  for (const err of [ownUriError, unexposed]) {
+    const res = fakeResponse();
+    const out = captured(() => handleError(err, { method: 'GET' }, res, () => assert.fail('next() called')));
+    assert.equal(res.statusCode, 500, err.message);
+    assert.match(out, /\[error\] request failed GET \(no route\)/);
+  }
+});

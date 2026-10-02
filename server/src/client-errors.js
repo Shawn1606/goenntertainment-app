@@ -1,9 +1,10 @@
 /**
  * Errors that are the client's fault, before any route runs: an unreadable or oversized request
- * body (body-parser in app.js) or multipart form (multer, uploads.js). They are answered with a
- * 4xx and a German message the app can show, and they are not logged (F-38): until this file they
- * ended as a 500, and the log line printed the error object, which carries the raw request text
- * (passwords included) in `err.body`.
+ * body (body-parser in app.js) or multipart form (multer, uploads.js), and a route parameter that
+ * is not valid percent-encoding (Express decodes parameters while it matches a route). They are
+ * answered with a 4xx and a German message the app can show, and they are not logged (F-38): until
+ * this file they ended as a 500, and the log line printed the error object, which carries the raw
+ * request text (passwords included) in `err.body` - or, for a parameter, in the error message.
  */
 import multer from 'multer';
 
@@ -43,8 +44,9 @@ const MULTER_ERRORS = {
 const answer = ([status, message]) => ({ status, message });
 
 /**
- * `{ status, message }` when `err` is a client error from the body parser or multer, else null
- * (then it is a server error: logged, answered with 500).
+ * `{ status, message }` when `err` is a client error from the body parser, multer or Express's
+ * parameter decoding, else null (then it is a server error: logged, answered with 500).
+ * The routes' own errors (HttpError) are answered before this is asked (app.js handleError).
  */
 export function clientErrorFor(err) {
   if (!err || typeof err !== 'object') return null;
@@ -52,10 +54,14 @@ export function clientErrorFor(err) {
     return answer(Object.hasOwn(MULTER_ERRORS, err.code) ? MULTER_ERRORS[err.code] : [400, MSG_UNREADABLE]);
   }
   if (typeof err.type === 'string' && Object.hasOwn(BODY_ERRORS, err.type)) return answer(BODY_ERRORS[err.type]);
-  // Any other body-parser error that is marked as the client's fault (http-errors: `expose`).
   const status = Number(err.status ?? err.statusCode);
-  if (typeof err.type === 'string' && err.expose === true && status >= 400 && status < 500) {
-    return answer([status, MSG_UNREADABLE]);
-  }
+  const is4xx = Number.isInteger(status) && status >= 400 && status < 500;
+  // Any other error marked as the client's fault (http-errors: `expose`), with or without a
+  // `type`: body-parser wraps a compressed body that zlib cannot unpack (gzip or deflate) in
+  // createError(400, zlibError), which has no `type`.
+  if (is4xx && err.expose === true) return answer([status, MSG_UNREADABLE]);
+  // Express's router could not percent-decode a route parameter: a URIError with status 400 whose
+  // message quotes the raw parameter text. A URIError without that status is the code's own.
+  if (err instanceof URIError && status === 400) return answer([400, MSG_UNREADABLE]);
   return null;
 }

@@ -162,7 +162,8 @@ export function createApp({
  * The central error handler (exported for test/logging.test.js).
  *
  * - HttpError: the route's own status and message.
- * - A client error from the body parser or multer (client-errors.js): 400/413/415, not logged.
+ * - A client error from the body parser, multer or Express's route-parameter decoding
+ *   (client-errors.js): 400/413/415, not logged.
  * - Anything else: 500, logged through log.js - name, codes and the route pattern, never the
  *   request body, SQL text or a driver message (F-38).
  */

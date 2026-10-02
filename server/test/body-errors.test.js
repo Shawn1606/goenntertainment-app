@@ -6,9 +6,13 @@
  * Body parsing runs before any route, so most requests here need no account: an unauthenticated
  * POST to any /api path is parsed first. The messages are literals on purpose (the app shows them
  * verbatim; src/client-errors.js is their one source in the server).
+ *
+ * The same holds for a route parameter that is not valid percent-encoding: Express decodes it while
+ * matching the route, before any handler runs.
  */
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import zlib from 'node:zlib';
 
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
@@ -18,6 +22,7 @@ import { cleanup, createUser } from './support/fixtures.js';
 const MSG_NOT_JSON = 'Die Anfrage ist kein gültiges JSON.';
 const MSG_TOO_LARGE = 'Die Anfrage ist zu groß.';
 const MSG_UNSUPPORTED = 'Dieses Format wird nicht unterstützt.';
+const MSG_UNREADABLE = 'Die Anfrage konnte nicht gelesen werden.';
 
 /** Obviously fake marker that must never show up in the log. */
 const CANARY = 'canary-limits-7f3a9c-not-a-secret';
@@ -103,6 +108,67 @@ test('a body with an unsupported content encoding is answered with 415', async (
   });
   assert.equal(res.status, 415);
   assert.deepEqual(await res.json(), { message: MSG_UNSUPPORTED });
+});
+
+/** What log.js prints for a logged error or warning (its line prefixes). */
+const LOG_LINE = /\[(?:error|warn)\]/;
+
+test('a valid gzip or deflate body is still read', async () => {
+  for (const [encoding, pack] of [['gzip', zlib.gzipSync], ['deflate', zlib.deflateSync]]) {
+    const res = await post('/test-only/echo', pack(JSON.stringify({ name: 'gepackt' })), {
+      'Content-Type': 'application/json',
+      'Content-Encoding': encoding,
+    });
+    assert.equal(res.status, 200, encoding);
+    assert.deepEqual((await res.json()).body, { name: 'gepackt' }, encoding);
+  }
+});
+
+test('a compressed body that cannot be unpacked is answered with 400, not 500, and not logged', async () => {
+  const json = { 'Content-Type': 'application/json' };
+  const form = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  const packed = zlib.gzipSync(JSON.stringify({ password: CANARY, pad: 'x'.repeat(200) }));
+  const cases = [
+    ['gzip announced, plain text sent', `{"password":"${CANARY}"}`, { ...json, 'Content-Encoding': 'gzip' }],
+    ['truncated gzip', packed.subarray(0, 20), { ...json, 'Content-Encoding': 'gzip' }],
+    ['deflate announced, plain text sent', `{"password":"${CANARY}"}`, { ...json, 'Content-Encoding': 'deflate' }],
+    ['urlencoded, gzip announced, plain text sent', `password=${CANARY}`, { ...form, 'Content-Encoding': 'gzip' }],
+  ];
+  const answers = [];
+  const output = await captureOutput(async () => {
+    for (const [name, body, headers] of cases) {
+      const res = await post('/api/posts', body, headers);
+      answers.push([name, res.status, (await res.json()).message]);
+    }
+  });
+  assert.deepEqual(
+    answers,
+    cases.map(([name]) => [name, 400, MSG_UNREADABLE]),
+  );
+  assert.doesNotMatch(output, LOG_LINE, 'a client error was logged as a server error');
+  assert.ok(!output.includes(CANARY), 'the request text was written to the log');
+});
+
+test('a route parameter that is not valid percent-encoding is answered with 400 and its text is never logged', async () => {
+  // Express decodes route parameters while it matches the route (before requireAuth), so no account
+  // is needed; the canary stands for whatever text the parameter carried.
+  const cases = [
+    ['GET', `/api/users/${CANARY}%E0%A4%A`],
+    ['POST', `/api/posts/${CANARY}%ZZ/like`],
+  ];
+  const answers = [];
+  const output = await captureOutput(async () => {
+    for (const [method, path] of cases) {
+      const res = await fetch(`${base}${path}`, { method, headers: { Accept: 'application/json' } });
+      answers.push([`${method} ${path}`, res.status, (await res.json()).message]);
+    }
+  });
+  assert.deepEqual(
+    answers,
+    cases.map(([method, path]) => [`${method} ${path}`, 400, MSG_UNREADABLE]),
+  );
+  assert.doesNotMatch(output, LOG_LINE, 'a client error was logged as a server error');
+  assert.ok(!output.includes(CANARY), 'the raw parameter text was written to the log');
 });
 
 test('JSON bodies are limited to 32 KB: 31 KB passes the parser, 40 KB is answered with 413', async () => {
