@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { pool } from './db.js';
 import { hashPassword } from './auth.js';
 import { isReservedUsername } from './reserved-accounts.js';
+import { findSystemAccount } from './system-accounts.js';
 
 /**
  * Fuellt die DB mit den Start-Daten (portiert aus den Laravel-Seedern):
@@ -16,6 +17,9 @@ import { isReservedUsername } from './reserved-accounts.js';
  * renames or resets an existing account. `npm run seed:admin` runs only that step and exits 1
  * when ADMIN_EMAIL or ADMIN_PASSWORD is empty, so a one-off seed container cannot look successful
  * without having created the admin.
+ *
+ * The venue hosts are taken over only when the account is exactly the host's (src/system-accounts.js):
+ * an account whose address only looks like a host address stops the seed (exit code 1).
  */
 
 /** Wie Laravels Str::slug: klein, Sonderzeichen -> '-', Raender getrimmt. */
@@ -281,11 +285,16 @@ export const PERMANENT = [
  * Business-Konto je Ort, damit in der App der Name des Hauses als Gastgeber steht
  * und sein Profil verlinkbar ist. Zufallspasswort, keine verifizierte Mail –
  * anmelden soll sich damit niemand.
+ *
+ * An existing account is taken over only when it is exactly the host's account (same address,
+ * expected username; see src/system-accounts.js). An account that merely matches the way the
+ * database compares addresses is refused with SystemAccountConflict before anything is written
+ * for this host, and the seed exits 1. Exported for test/system-hosts.test.js.
  */
-async function ensureVenueHost({ name, username }) {
+export async function ensureVenueHost({ name, username }) {
   const email = `dauerangebot+${username}@goenntertainment.local`;
-  const [found] = await pool.query('SELECT id FROM users WHERE email = ?', [email]);
-  if (found.length > 0) return found[0].id;
+  const existingId = await findSystemAccount(pool, { email, username });
+  if (existingId !== null) return existingId;
 
   const password = await hashPassword(
     `${username}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
