@@ -12,8 +12,8 @@
  *
  * Fails closed (F-06): when the model cannot be asked (no ANTHROPIC_API_KEY, network error,
  * timeout, an overloaded or failing provider, unreadable reply), the content is refused, unless
- * MODERATION_FAIL_OPEN=true says otherwise. A request the provider refuses (isOutage) is no
- * outage: its content is refused whatever the switch says. Only MODERATION_ENABLED=false switches
+ * MODERATION_FAIL_OPEN=true says otherwise. A request the provider refuses is no outage (see
+ * isOutage): its content is refused whatever the switch says. Only MODERATION_ENABLED=false switches
  * moderation off, and production refuses to start with that or without a key (config.js
  * startupProblems). The switches are read on every check (config.js moderationSettings), not when
  * this module is loaded.
