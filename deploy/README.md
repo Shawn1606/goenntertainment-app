@@ -104,6 +104,25 @@ routes (generate it once with `openssl rand -hex 32`), and `APP_NET_PREFIX`, the
 private /24 network (see the comment in `.env.example`). Without them `docker compose` refuses
 to start.
 
+Also required: `ANTHROPIC_API_KEY`, the key of the AI moderation that checks every new event,
+post, comment, profile image and story before it is stored. Node does not start without it, and
+in production it also refuses `MODERATION_ENABLED=false`. The operator decides whose provider
+account and key this is.
+
+And four retention settings, each a number of whole days. How long data that is no longer needed
+is kept is the operator's decision, so there are no defaults; node deletes what is older every
+hour (more in the comments in `.env.example`):
+
+- `EVIDENCE_RETENTION_DAYS`: evidence images of bans and of AI moderation reports (the image
+  goes, the record stays); at least 1.
+- `MODERATION_REPORT_RETENTION_DAYS`: the AI moderation log, which copies every checked text and
+  image; at least 1.
+- `TOKEN_RETENTION_DAYS`: sign-in tokens and two-factor and password-reset codes that are no
+  longer valid, counted from when they stopped being valid; at least 1.
+- `USAGE_RETENTION_DAYS`: event views and active days; at least 120 (the streak window).
+
+Without these five settings, too, `docker compose` refuses to start.
+
 Passwörter erzeugen:
 
 ```bash
@@ -207,6 +226,10 @@ git pull && docker compose up -d --build
 Docker baut nur neu, was sich geändert hat, und tauscht die Container aus. Die
 Datenbank und die Uploads bleiben dabei erhalten (sie liegen in `db-data` bzw.
 `deploy/storage/` und `deploy/storage-private/`).
+
+Coming from a version without the AI moderation key and the retention settings: add
+`ANTHROPIC_API_KEY` and the four `*_RETENTION_DAYS` settings to `deploy/.env` first (step 4),
+or the new version does not start.
 
 **Logs mitlesen:**
 
