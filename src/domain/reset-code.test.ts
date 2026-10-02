@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -25,8 +27,23 @@ test('anything but six digits is not a reset code', () => {
   }
 });
 
+/**
+ * Named mirrors of the server (api/): the countdown and the code message are written in the app
+ * and in Laravel. Read from the PHP source, so a change on one side fails here.
+ */
+const API = path.resolve(import.meta.dirname, '..', '..', 'api');
+const php = (file: string) => readFileSync(path.join(API, file), 'utf8');
+
+function phpConstant(file: string, name: string): string {
+  const match = new RegExp(`\\bconst ${name} = ([^;]+);`).exec(php(file));
+  assert.ok(match, `${name} not found in api/${file}`);
+  return match[1].trim();
+}
+
 test('the resend countdown mirrors the server spacing of one mail a minute', () => {
-  // PasswordReset::RESEND_AFTER in api/app/Support/PasswordReset.php.
+  // PasswordReset::RESEND_AFTER is TwoFactor's spacing, like every other code mail.
+  assert.equal(phpConstant('app/Support/PasswordReset.php', 'RESEND_AFTER'), 'TwoFactor::RESEND_AFTER');
+  assert.equal(String(RESET_RESEND_SECONDS), phpConstant('app/Support/TwoFactor.php', 'RESEND_AFTER'));
   assert.equal(RESET_RESEND_SECONDS, 60);
 });
 
@@ -45,6 +62,7 @@ test('the first problem is named in the order of the fields', () => {
 });
 
 test('the code message is the server text', () => {
-  // The same words as PasswordController (api/app/Http/Controllers/PasswordController.php).
+  // PasswordController answers a malformed code with the same words (MSG_CODE_SHAPE).
+  assert.equal(`'${MSG_RESET_CODE}'`, phpConstant('app/Http/Controllers/PasswordController.php', 'MSG_CODE_SHAPE'));
   assert.equal(MSG_RESET_CODE, 'Bitte gib den 6-stelligen Code aus der E-Mail ein.');
 });
