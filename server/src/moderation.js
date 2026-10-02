@@ -296,17 +296,9 @@ async function classify({ context, title, description, location, interests, labe
   }
 
   const text = response.content.find((b) => b.type === 'text')?.text ?? '';
+  let parsed;
   try {
-    const parsed = JSON.parse(text);
-    const severity = Number(parsed.severity);
-    return {
-      status: 'classified',
-      youth_safe: Boolean(parsed.youth_safe),
-      severity: Number.isFinite(severity) ? Math.max(0, Math.min(3, Math.round(severity))) : 0,
-      categories: Array.isArray(parsed.categories) ? parsed.categories.map(String) : [],
-      fields: Array.isArray(parsed.fields) ? parsed.fields.map(String) : [],
-      reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 300) : '',
-    };
+    parsed = JSON.parse(text);
   } catch {
     return {
       status: 'error',
@@ -314,9 +306,52 @@ async function classify({ context, title, description, location, interests, labe
       logDetail: 'reply was not valid JSON',
     };
   }
+  return readVerdict(parsed);
+}
+
+const isStringList = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+/**
+ * The parsed reply as a verdict, or an unreadable reply (F-06). Only a reply of the schema's shape
+ * counts: an object with a whole-number severity 0-3, a boolean youth_safe, lists of names and a
+ * reason. Anything else - a missing or non-integer severity, null, a list, a bare value - is the
+ * same case as a reply that is not JSON at all: the model's answer cannot be read, so it is never
+ * taken as "harmless" (status 'error'; decide() refuses unless MODERATION_FAIL_OPEN=true).
+ * Category and field names outside the schema's lists are dropped; the verdict still counts.
+ */
+function readVerdict(parsed) {
+  const shaped =
+    parsed !== null &&
+    typeof parsed === 'object' &&
+    !Array.isArray(parsed) &&
+    Number.isInteger(parsed.severity) &&
+    parsed.severity >= 0 &&
+    parsed.severity <= 3 &&
+    typeof parsed.youth_safe === 'boolean' &&
+    isStringList(parsed.categories) &&
+    isStringList(parsed.fields) &&
+    typeof parsed.reason === 'string';
+  if (!shaped) {
+    return {
+      status: 'error',
+      error: 'Antwort passte nicht zum Urteils-Schema.',
+      logDetail: 'reply did not match the verdict schema',
+    };
+  }
+  return {
+    status: 'classified',
+    youth_safe: parsed.youth_safe,
+    severity: parsed.severity,
+    categories: parsed.categories.filter((name) => CATEGORIES.includes(name)),
+    fields: parsed.fields.filter((name) => FIELDS.includes(name)),
+    reason: parsed.reason.slice(0, 300),
+  };
 }
 
 // --- Bewertung + Massnahmen -------------------------------------------------
+
+/** The answer when content is refused without a verdict (no ban). */
+const MSG_NOT_CHECKABLE = 'Der Inhalt konnte nicht geprueft werden und wurde vorsichtshalber abgelehnt.';
 
 /** Ordnet dem Klassifikations-Ergebnis Urteil und Massnahme zu. */
 function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
@@ -328,7 +363,7 @@ function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
       severity: blockSeverity,
       allowed: false,
       timeout: false,
-      reason: 'Der Inhalt konnte nicht geprueft werden und wurde vorsichtshalber abgelehnt.',
+      reason: MSG_NOT_CHECKABLE,
       categories: [],
       fields: [],
     };
@@ -344,6 +379,22 @@ function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
         ? null
         : 'Die Inhaltspruefung ist gerade nicht erreichbar. Bitte versuche es spaeter erneut.',
       categories: [],
+      fields: [],
+    };
+  }
+
+  if (!result.youth_safe && result.severity === 0) {
+    // The verdict contradicts itself: "not youth-safe" yet "harmless" (the system prompt has
+    // youth_safe true exactly at severity 0). The stricter half wins, as for a refusal: refused,
+    // but never a ban, which would need a clear reason. youth_safe true with a higher severity is
+    // decided by the severity below, as before.
+    return {
+      verdict: 'refusal',
+      severity: blockSeverity,
+      allowed: false,
+      timeout: false,
+      reason: MSG_NOT_CHECKABLE,
+      categories: result.categories,
       fields: [],
     };
   }

@@ -362,3 +362,114 @@ test('a refusal by the provider still refuses the content', async () => {
   assert.equal(r.status, 422, JSON.stringify(r.json));
   assert.equal(r.json.message, MSG_REFUSAL);
 });
+
+/* ------------------------------------------------- replies that are not a verdict (F-06) */
+
+/**
+ * Replies that parse as JSON but do not match the verdict schema (moderation.js VERDICT_SCHEMA):
+ * the model's answer cannot be read, which is the same case as an outage - never "harmless".
+ */
+const MALFORMED_VERDICTS = [
+  {},
+  [],
+  { youth_safe: false },
+  { youth_safe: false, severity: null },
+  { severity: 'high' },
+  'ok',
+  3,
+  null,
+  { ...verdict({ severity: 0 }), severity: 4 },
+  { ...verdict({ severity: 0 }), severity: -1 },
+  { ...verdict({ severity: 0 }), severity: 1.5 },
+  { ...verdict({ severity: 0 }), severity: '0' },
+  { ...verdict({ severity: 0 }), severity: true },
+  { ...verdict({ severity: 0 }), youth_safe: 'true' },
+  { ...verdict({ severity: 0 }), categories: 'sonstiges' },
+  { ...verdict({ severity: 0 }), fields: [1] },
+  { ...verdict({ severity: 0 }), reason: null },
+  { youth_safe: true, severity: 0, fields: [], reason: 'Unbedenklich.' },
+];
+
+test('a reply that does not match the verdict schema is refused when MODERATION_FAIL_OPEN is not set', async () => {
+  // Own account per reply: a reply read as a high severity would ban its author.
+  const failures = [];
+  for (const [i, reply] of MALFORMED_VERDICTS.entries()) {
+    // Letters, not digits, before the stamp (a digit there could form a blocked number code).
+    const author = await createUser(`modschema${String.fromCharCode(97 + i)}`, { accountType: 'creator', created: userIds });
+    mock.respond({ verdict: reply });
+    const r = await postAndCount(author.token, 'Ein ganz normaler Beitrag');
+    const label = JSON.stringify(reply);
+    if (r.calls < 1) failures.push(`${label}: the check did not reach the local stand-in`);
+    if (r.status !== 422 || r.json.message !== MSG_UNAVAILABLE) failures.push(`${label}: ${r.status} ${JSON.stringify(r.json)}`);
+    if ((await postCount(author.user.id)) !== 0) failures.push(`${label}: the post was stored`);
+    const report = { ...(await lastReport(author.user.id)) };
+    if (report.verdict !== 'error' || report.action !== 'blocked') failures.push(`${label}: report ${JSON.stringify(report)}`);
+  }
+  assert.deepEqual(failures, []);
+});
+
+test('MODERATION_FAIL_OPEN=true decides for an unreadable reply as for an outage', async () => {
+  const author = await createUser('modschemaopen', { accountType: 'creator', created: userIds });
+  await withEnv({ MODERATION_FAIL_OPEN: 'true' }, async () => {
+    for (const reply of [{}, [], { youth_safe: false }]) {
+      mock.respond({ verdict: reply });
+      const r = await postAndCount(author.token, `Durchgelassen trotz unlesbarer Antwort ${JSON.stringify(reply)}`);
+      assert.equal(r.status, 201, `${JSON.stringify(reply)}: ${JSON.stringify(r.json)}`);
+      assert.deepEqual({ ...(await lastReport(author.user.id)) }, { verdict: 'error', action: 'none' }, JSON.stringify(reply));
+    }
+  });
+});
+
+test('a borderline verdict (severity 1, youth_safe false) is still let through', async () => {
+  const author = await createUser('modborder', { accountType: 'creator', created: userIds });
+  mock.respond({ verdict: verdict({ severity: 1, categories: ['alkohol'], reason: 'Test.' }) });
+  const r = await postAndCount(author.token, 'Wir treffen uns zum Grillen');
+  assert.equal(r.status, 201, JSON.stringify(r.json));
+  assert.deepEqual({ ...(await lastReport(author.user.id)) }, { verdict: 'auffaellig', action: 'none' });
+});
+
+test('youth_safe false with severity 0 contradicts itself: refused without a ban, whatever MODERATION_FAIL_OPEN says', async () => {
+  const author = await createUser('modcontra', { accountType: 'creator', created: userIds });
+  for (const failOpen of ['', 'true']) {
+    await withEnv({ MODERATION_FAIL_OPEN: failOpen }, async () => {
+      mock.respond({ verdict: { youth_safe: false, severity: 0, categories: ['sonstiges'], fields: [], reason: 'Test.' } });
+      const before = await postCount(author.user.id);
+      const r = await postAndCount(author.token, 'Widerspruechliches Urteil');
+      assert.equal(r.status, 422, `MODERATION_FAIL_OPEN=${JSON.stringify(failOpen)}: ${JSON.stringify(r.json)}`);
+      assert.equal(r.json.message, MSG_REFUSAL);
+      assert.equal(await postCount(author.user.id), before, 'nothing was stored');
+      assert.deepEqual({ ...(await lastReport(author.user.id)) }, { verdict: 'refusal', action: 'blocked' });
+    });
+  }
+  const banned = await first('SELECT banned_until FROM users WHERE id = ?', [author.user.id]);
+  assert.equal(banned.banned_until, null, 'a contradictory verdict never bans');
+});
+
+test('youth_safe true with a blocking severity is still decided by the severity', async () => {
+  const author = await createUser('modsevere', { accountType: 'creator', created: userIds });
+  // An admin is never timed out, so the refusal stays a 422 with the model's reason.
+  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [author.user.id]);
+  await withEnv({ MODERATION_FAIL_OPEN: 'true' }, async () => {
+    mock.respond({ verdict: { youth_safe: true, severity: 3, categories: ['sonstiges'], fields: [], reason: 'Test-Grund.' } });
+    const r = await postAndCount(author.token, 'Schweres Urteil');
+    assert.equal(r.status, 422, JSON.stringify(r.json));
+    assert.equal(r.json.message, 'Test-Grund.');
+    assert.deepEqual({ ...(await lastReport(author.user.id)) }, { verdict: 'abgelehnt', action: 'blocked' });
+  });
+});
+
+test('category and field names outside the schema are dropped, the verdict still counts', async () => {
+  const author = await createUser('modnames', { accountType: 'creator', created: userIds });
+  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [author.user.id]);
+  mock.respond({
+    verdict: { youth_safe: false, severity: 2, categories: ['gewalt', 'erfunden'], fields: ['ort', 'erfunden'], reason: 'Test-Grund.' },
+  });
+  const r = await createEvent(author.token, { title: 'Treffen', description: 'Wir treffen uns.', location: 'Irgendwo' });
+  assert.equal(r.status, 422, JSON.stringify(r.json));
+  assert.deepEqual(r.json.errors, { location: ['Test-Grund.'] });
+  const report = await first(
+    'SELECT verdict, categories, fields FROM moderation_reports WHERE user_id = ? ORDER BY id DESC LIMIT 1',
+    [author.user.id],
+  );
+  assert.deepEqual({ ...report }, { verdict: 'abgelehnt', categories: 'gewalt', fields: 'ort' });
+});
