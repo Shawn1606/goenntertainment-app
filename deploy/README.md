@@ -89,8 +89,8 @@ The mobile app is not a container: it is built with EAS and carries the server a
 - **A Linux host** that runs Docker Engine and has `bash`, `git`, `openssl`, GNU `stat` and
   `realpath` (for the preflight), `curl`, and `ss` and `dig` for the checks. Which provider hosts
   it and how big it is: `______` (the operator). One data point, not a sizing: the idle test stack
-  this runbook was walked through on used about 0.7 GB of memory (MySQL about 0.5 GB of it), and
-  its images about 2.5 GB of disk.
+  this runbook was walked through on used 0.55 to 0.7 GB of memory in two runs (MySQL about
+  0.45 to 0.5 GB of it), and its images about 2.5 GB of disk.
 - **Docker Compose v2.24.4 or newer** (`docker compose version`). The production files use a
   top-level `name`, `additional_contexts` and a bind mount with `create_host_path: false`; the CI
   override uses `!reset`, which needs 2.24.4 (`deploy/docker-compose.ci.yml`). The files were
