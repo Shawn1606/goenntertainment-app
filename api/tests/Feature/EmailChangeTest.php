@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Testing\TestResponse;
+use PHPUnit\Framework\Attributes\DataProviderExternal;
 use Symfony\Component\Mailer\Exception\TransportException;
 use Symfony\Component\Mailer\SentMessage;
 use Symfony\Component\Mailer\Transport\AbstractTransport;
@@ -230,6 +231,24 @@ class EmailChangeTest extends AppFeatureTestCase
                 ->assertStatus(422)
                 ->assertJsonPath('errors.email.0', $message);
         }
+
+        $this->assertSame($user->email, $this->emailOf($user));
+        Mail::assertNothingSent();
+    }
+
+    /**
+     * A spelling of the system domain that users.email treats as the same address is refused
+     * like the domain itself (AUTH-1; the cases: ReservedAccountsTest::collationVariants).
+     */
+    #[DataProviderExternal(ReservedAccountsTest::class, 'collationVariants')]
+    public function test_spellings_the_database_treats_as_the_system_domain_are_refused(string $email, string $plain): void
+    {
+        Mail::fake();
+        $user = $this->makeUser();
+
+        $this->change($this->issueToken($user), ['email' => $email, 'current_password' => self::TEST_PASSWORD])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.email.0', 'Diese E-Mail-Adresse kann nicht verwendet werden.');
 
         $this->assertSame($user->email, $this->emailOf($user));
         Mail::assertNothingSent();

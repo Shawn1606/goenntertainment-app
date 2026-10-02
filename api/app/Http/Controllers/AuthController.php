@@ -16,6 +16,7 @@ use App\Support\TwoFactor;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
@@ -461,11 +462,14 @@ class AuthController extends Controller
         };
     }
 
-    /** An address in a domain the system reserves for its own accounts is refused. */
+    /**
+     * An address in a domain the system reserves for its own accounts is refused, including the
+     * spellings the database treats as the same address (ReservedAccounts::isReservedEmailInDatabase).
+     */
     public static function notReservedEmail(): Closure
     {
         return static function (string $attribute, mixed $value, Closure $fail): void {
-            if (ReservedAccounts::default()->isReservedEmail($value)) {
+            if (ReservedAccounts::default()->isReservedEmailInDatabase($value, DB::connection())) {
                 $fail(ReservedAccounts::MSG_EMAIL);
             }
         };

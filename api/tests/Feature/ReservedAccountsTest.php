@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Support\ReservedAccounts;
 use Illuminate\Support\Facades\DB;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\AppFeatureTestCase;
@@ -74,6 +75,66 @@ class ReservedAccountsTest extends AppFeatureTestCase
                 ->assertStatus(422)
                 ->assertJsonPath('errors.email.0', self::MSG_EMAIL);
         }
+    }
+
+    /**
+     * Spellings of the system domain that look different but that users.email treats as the same
+     * address (it ignores accents and width and expands œ to oe). The seed and the import find
+     * their accounts with a plain `email = ?`, so such an address would be adopted as the system
+     * account (AUTH-1).
+     *
+     * @return array<string, array{string, string}> the variant and the plain address it equals
+     */
+    public static function collationVariants(): array
+    {
+        return [
+            'precomposed accent' => ["someone@goenntertainment.loc\u{00E1}l", 'someone@goenntertainment.local'],
+            'combining accent' => ["someone@goenntertainment.loca\u{0301}l", 'someone@goenntertainment.local'],
+            'full-width letter' => ["someone@goenntertainment.\u{FF4C}ocal", 'someone@goenntertainment.local'],
+            'oe ligature' => ["someone@g\u{0153}nntertainment.local", 'someone@goenntertainment.local'],
+            'accent below a subdomain' => ["someone@import.GOENNTERTAINMENT.LOC\u{00C1}L", 'someone@import.goenntertainment.local'],
+            'zero-width space' => ["someone@goenn\u{200B}tertainment.local", 'someone@goenntertainment.local'],
+            'full-width dot before the domain' => ["someone@import\u{FF0E}goenntertainment.local", 'someone@import.goenntertainment.local'],
+        ];
+    }
+
+    /** The database itself compares the variant equal to the plain address: the case is real. */
+    private function assertTheDatabaseTreatsThemAsEqual(string $variant, string $plain): void
+    {
+        $same = DB::selectOne('SELECT CONVERT(? USING utf8mb4) COLLATE utf8mb4_unicode_ci = ? AS same', [$variant, $plain]);
+        $this->assertSame(1, (int) $same->same, "the database tells {$variant} apart from {$plain}");
+    }
+
+    #[DataProvider('collationVariants')]
+    public function test_sign_up_refuses_spellings_the_database_treats_as_the_system_domain(string $email, string $plain): void
+    {
+        $this->assertTheDatabaseTreatsThemAsEqual($email, $plain);
+
+        $this->postJson('/api/register', self::signUp(['email' => $email]))
+            ->assertStatus(422)
+            ->assertJsonPath('errors.email.0', self::MSG_EMAIL);
+
+        $this->assertFalse(DB::table('users')->where('email', $email)->exists());
+    }
+
+    public function test_addresses_the_database_tells_apart_from_the_system_domain_are_accepted(): void
+    {
+        // The last one: a letter outside ASCII right before the domain is no dot to the database.
+        foreach (['notgoenntertainment.local', 'goenntertainment.local.example.invalid', 'goenntertainment.locale', "x\u{00E1}goenntertainment.local"] as $domain) {
+            $email = self::freeUsername('lookalike').'@'.$domain;
+
+            $this->postJson('/api/register', self::signUp(['email' => $email]))->assertCreated();
+        }
+    }
+
+    /** The collation the check compares under is the one of users.email (named mirror). */
+    public function test_the_check_compares_under_the_collation_of_users_email(): void
+    {
+        $column = DB::selectOne(
+            "SELECT collation_name AS name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'email'",
+        );
+
+        $this->assertSame(ReservedAccounts::EMAIL_COLLATION, $column->name);
     }
 
     public function test_profile_change_refuses_a_reserved_username(): void

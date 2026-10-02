@@ -45,6 +45,35 @@ class ReservedAccountsListTest extends TestCase
         $this->assertFalse($list->isReservedEmail(42));
     }
 
+    /** The domain and its dot-suffixes, which the database compares with the reserved domains. */
+    public function test_domain_suffixes(): void
+    {
+        $this->assertSame(['a.b.c', 'b.c', 'c'], ReservedAccounts::domainSuffixes('x@a.b.c'));
+        $this->assertSame(['a.b.c', 'b.c', 'c'], ReservedAccounts::domainSuffixes(' "x@y"@a.b.c.. '));
+        $this->assertSame(['.b..c', 'b..c', '.c', 'c'], ReservedAccounts::domainSuffixes('x@.b..c'));
+        $this->assertSame(["loc\u{00E1}l"], ReservedAccounts::domainSuffixes("x@loc\u{00E1}l"));
+        $this->assertSame([], ReservedAccounts::domainSuffixes('x@'));
+        $this->assertSame([], ReservedAccounts::domainSuffixes('x@...'));
+        $this->assertSame([], ReservedAccounts::domainSuffixes('no-at-sign'));
+        $this->assertSame([], ReservedAccounts::domainSuffixes(null));
+    }
+
+    /** The suffixes after every character that may be a dot to the database, with that character. */
+    public function test_separated_suffixes(): void
+    {
+        $this->assertSame([['.', 'a.b'], ['.', 'b']], ReservedAccounts::separatedSuffixes('a.b'));
+        $this->assertSame(
+            [['.', "a\u{FF0E}b.c"], ["\u{FF0E}", 'b.c'], ['.', 'c']],
+            ReservedAccounts::separatedSuffixes("a\u{FF0E}b.c"),
+        );
+        $this->assertSame(
+            [['.', "x\u{00E1}y"], ["\u{00E1}", 'y']],
+            ReservedAccounts::separatedSuffixes("x\u{00E1}y"),
+        );
+        $this->assertSame([['.', 'abc']], ReservedAccounts::separatedSuffixes('abc'));
+        $this->assertSame([['.', 'a.']], ReservedAccounts::separatedSuffixes('a.'));
+    }
+
     public function test_a_missing_or_incomplete_list_throws(): void
     {
         foreach ([
