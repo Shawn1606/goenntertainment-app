@@ -509,6 +509,7 @@ operator, with whoever answers for data protection).
 | backup `unhealthy` | `docker compose logs backup`: `BACKUP_DIR` missing or not writable, an invalid `BACKUP_RETENTION_DAYS`, or a failed run (`nothing was deleted`) |
 | caddy logs certificate or challenge errors | the A record does not point to the server yet, or 80/443 are closed |
 | a request gets `413` from caddy | the body is over the edge's limit: 9 MB for uploads (multipart), 128 KiB for everything else |
+| images under `/storage/` answer `502` | the media service is not running: `docker compose ps media`, `docker compose logs media` |
 | uploads fail with "Serverfehler" | the upload volumes do not belong to uid 1000: `docker compose logs storage-init` |
 | `Das Bild darf hoechstens 5 MB gross sein.` | the image is over Node's 5 MB limit |
 | the app shows only a timeout when signing in | `EXPO_PUBLIC_API_URL` in `eas.json` ([The app build](#the-app-build)) |
