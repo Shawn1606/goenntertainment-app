@@ -512,6 +512,18 @@ check('F-30: every kind of answer carries the security headers, and http redirec
   }
 });
 
+check("F-28: Apache's own redirects through the edge keep the public https address, not port 8080", () => {
+  // Laravel's public/.htaccess redirects a path with a trailing slash; Apache writes the address.
+  const cases = [['GET', '/api/health/'], ['GET', '/api/activities/'], ['POST', '/api/login/']];
+  const res = stack.probe(cases.map(([method, p]) => apiRequest(method, p, method === 'GET' ? {} : { json: {} }))).results;
+  const wrong = cases.map(([method, p], i) => ({ method, p, r: res[i], want: `https://${domain}${p.slice(0, -1)}` }))
+    .filter(({ r, want }) => r.status !== 301 || header(r, 'location') !== want)
+    .map(({ method, p, r, want }) => `${method} ${p}: ${r.status ?? r.error} to ${header(r, 'location')} (expected 301 to ${want})`);
+  console.log(`trailing-slash redirects: ${cases.length} requests, locations ${JSON.stringify(res.map((r) => header(r, 'location')))}`);
+  assert.deepEqual(wrong, [], "redirects that leave the public address (Apache's own port or scheme)");
+  for (const r of res) assert.doesNotMatch(header(r, 'location') ?? '', /:8080|^http:/, 'a redirect names port 8080 or plain http');
+});
+
 // --------------------------------------------------------------------------- one owner per path
 
 check('F-10: every API route Laravel owns is answered by Laravel through the edge, and other /api paths reach Node', () => {

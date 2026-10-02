@@ -205,6 +205,22 @@ test('F-29: Apache in the api image refuses an upload folder mounted under its d
   assert.deepEqual(grants, [], `<Directory ${uploads}> grants access`);
 });
 
+// ------------------------------------------------------------------ Apache's own answers
+
+test("F-28: the api site names the public https origin, so Apache's own redirects never point at port 8080", (t) => {
+  const { instructions } = finalInstructions('api/Dockerfile');
+  const run = instructions.filter((i) => i.keyword === 'RUN').map((i) => i.args);
+  // ServerName inside the site that serves port 8080: a global one would lose to the site's port.
+  const insert = run.find((args) => /<VirtualHost \*:8080>\\n\\tServerName \$\{APP_URL\}\//.test(args));
+  t.diagnostic(`RUN instructions in the final chain: ${run.length}`);
+  assert.ok(insert, 'no RUN puts ServerName ${APP_URL} as the first line of <VirtualHost *:8080>');
+  assert.match(insert, /grep -A1 -x '<VirtualHost \\\*:8080>' \S+000-default\.conf \| grep -qx '\[\[:space:\]\]\*ServerName \$\{APP_URL\}'/, 'the build does not check the inserted line');
+  // APP_URL is the public origin, https and without a port.
+  const compose = read('deploy/docker-compose.yml');
+  const appUrl = [...compose.matchAll(/^\s+APP_URL:\s*(\S+)/gm)].map((m) => m[1]);
+  assert.deepEqual(appUrl, ['https://${DOMAIN:?DOMAIN'], 'the compose does not set APP_URL to https://<DOMAIN> for api');
+});
+
 // ------------------------------------------------------------------ F-25 and the server image
 
 const DOCKERFILES = ['api/Dockerfile', 'server/Dockerfile'];

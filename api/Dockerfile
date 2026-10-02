@@ -64,13 +64,21 @@ COPY docker/php.ini /usr/local/etc/php/conf.d/zz-goenn.ini
 # Port 8080 instead of 80: Apache runs as www-data (see USER below), and only root may open a
 # port below 1024. The greps stop the build if the base image's files no longer hold the lines
 # the replacements expect, instead of shipping an Apache that still wants port 80.
+#
+# ServerName ${APP_URL} (the public https://<DOMAIN>, set by the compose) as the first line of
+# that site: Apache builds the address of its own redirects (Laravel's trailing-slash rule in
+# public/.htaccess) from it, so they point at https://<DOMAIN>/... and not at the internal
+# http://<DOMAIN>:8080. It has to be inside the site: the site's own port would win over a
+# global ServerName. ${APP_URL} stays literal here, like ${APACHE_DOCUMENT_ROOT}: Apache reads it
+# from the environment when it starts.
 ENV APACHE_DOCUMENT_ROOT=/var/www/api/public
 RUN sed -ri 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf \
     && sed -ri 's/^Listen 80$/Listen 8080/' /etc/apache2/ports.conf \
-    && sed -ri 's/^<VirtualHost \*:80>$/<VirtualHost *:8080>/' /etc/apache2/sites-available/000-default.conf \
+    && sed -ri 's/^<VirtualHost \*:80>$/<VirtualHost *:8080>\n\tServerName ${APP_URL}/' /etc/apache2/sites-available/000-default.conf \
     && grep -qx 'Listen 8080' /etc/apache2/ports.conf \
     && ! grep -Eq '^Listen 80$' /etc/apache2/ports.conf \
     && grep -qx '<VirtualHost \*:8080>' /etc/apache2/sites-available/000-default.conf \
+    && grep -A1 -x '<VirtualHost \*:8080>' /etc/apache2/sites-available/000-default.conf | grep -qx '[[:space:]]*ServerName ${APP_URL}' \
     && a2enmod rewrite headers
 COPY docker/apache.conf /etc/apache2/conf-available/goenn.conf
 RUN a2enconf goenn
