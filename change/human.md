@@ -1536,6 +1536,11 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
     eigener kleiner Dateiserver (`media`) hinter Caddy aus, der weder Schlüssel noch Passwörter
     kennt; Laravel und PHP berühren sie nie. Lief ein Server schon mit den alten Ordnern,
     steht im Runbook unter „Updating", wie die Dateien einmal umziehen.
+  - Lief ein Server schon mit einer früheren Fassung von `deploy/`, steht im Runbook unter
+    „Updating" („From an earlier setup"), was einmal zu tun ist: vor `git pull` den alten Stand
+    mit `docker compose down` anhalten (nie mit `-v`, das löscht die Datenbank), danach die
+    tägliche Rotation des MySQL-Binärlogs anlegen (Runbook, „Logs"). Die Datenbank bleibt in
+    ihrem Volume.
   - Laravel läuft im Container ohne root-Rechte und hört deshalb auf Port 8080 statt 80.
   - Jede Nacht um 02:30 UTC sichert der Dienst `backup` die Datenbank und die Uploads nach
     `BACKUP_DIR` und löscht danach die abgelaufenen Sätze. Die Logs aller Container werden nach
