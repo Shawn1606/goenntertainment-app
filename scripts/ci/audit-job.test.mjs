@@ -1,8 +1,8 @@
 // The dependency audit job in .github/workflows/ci.yml must stay blocking and must cover every
 // lock file in the repository. scripts/ci/audit.mjs decides what is an open advisory; these tests
-// check the job that runs it, so a `continue-on-error` or a lock file without an audit step cannot
-// slip in unnoticed. The workflow is read line by line (no YAML dependency), like
-// scripts/ci/check-workflows.mjs.
+// check the job that runs it, so a `continue-on-error`, an `if:` that skips an audit step (for
+// example on pull requests) or a lock file without an audit step cannot slip in unnoticed. The
+// workflow is read line by line (no YAML dependency), like scripts/ci/check-workflows.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
@@ -30,14 +30,37 @@ function auditJobLines(text) {
   return out;
 }
 
-/** Problems that make the job non-blocking or let it be skipped. */
+/**
+ * The step conditions that never skip an audit step for a reason of their own: they only decide
+ * whether it runs after an earlier step failed (`success()` is the default).
+ */
+const KEEPS_AUDITING = ['!cancelled()', 'always()', 'success()'];
+
+/** The condition of an `if:` line without quotes, `${{ }}` and a trailing comment. */
+function condition(text) {
+  return text
+    .replace(/\s+#.*$/, '')
+    .trim()
+    .replace(/^(['"])(.*)\1$/, '$2')
+    .replace(/^\$\{\{\s*(.*?)\s*\}\}$/, '$1');
+}
+
+/** Problems that make the job non-blocking or let it, or one of its steps, be skipped. */
 function blockingProblems(jobLines) {
   if (jobLines.length === 0) return ['no `audit:` job under `jobs:`'];
   const problems = [];
   for (const { n, line } of jobLines) {
     if (line.trimStart().startsWith('#')) continue;
     if (/^\s*(?:-\s+)?continue-on-error\s*:/.test(line)) problems.push(`line ${n}: continue-on-error makes the audit non-blocking`);
-    if (/^ {4}if\s*:/.test(line)) problems.push(`line ${n}: a job-level if can skip the audit`);
+    if (/^ {4}if\s*:/.test(line)) {
+      problems.push(`line ${n}: a job-level if can skip the audit`);
+      continue;
+    }
+    // Any other `if:` in the job: a step's (`if:` or `- if:`), whatever its indentation.
+    const m = /^\s*(?:-\s+)?if\s*:\s*(.*?)\s*$/.exec(line);
+    if (m && !KEEPS_AUDITING.includes(condition(m[1]))) {
+      problems.push(`line ${n}: a step's if (${m[1]}) can skip a lock file's audit; only ${KEEPS_AUDITING.join(', ')} may stand there`);
+    }
   }
   return problems;
 }
@@ -64,7 +87,7 @@ function trackedLockFiles() {
   return r.stdout.split('\0').filter((p) => names.has(p.split('/').pop())).sort();
 }
 
-test('the dependency audit job is blocking: no continue-on-error and no job-level if', () => {
+test('the dependency audit job is blocking: no continue-on-error and no if that can skip an audit', () => {
   const job = auditJobLines(readFileSync(WORKFLOW, 'utf8'));
   console.log(`audit job: ${job.length} lines examined`);
   assert.ok(job.length > 1, 'the audit job was not found or is empty; refusing to report it blocking');
@@ -109,4 +132,38 @@ test('the checks fire: continue-on-error, a job-level if, a missing job and a lo
   assert.deepEqual(audited, ['package-lock.json', 'api/composer.lock']);
   assert.notDeepEqual(audited.sort(), ['api/composer.lock', 'package-lock.json', 'server/package-lock.json'], 'a missing step is seen');
   assert.deepEqual(blockingProblems(auditJobLines('name: CI\njobs:\n  client:\n    runs-on: x\n')), ['no `audit:` job under `jobs:`']);
+});
+
+test("the checks fire: a step's if that can skip an audit, and not the conditions that only follow a failed step", () => {
+  const workflow = [
+    'jobs:',
+    '  audit:',
+    '    runs-on: ubuntu-24.04',
+    '    steps:',
+    '      - name: npm (package-lock.json)',
+    "        if: github.event_name == 'push'",
+    '        run: node scripts/ci/audit.mjs npm .',
+    "      - if: ${{ !cancelled() && github.event_name == 'push' }}",
+    '        run: node scripts/ci/audit.mjs npm server',
+    '      - name: composer',
+    '        if: ${{ !cancelled() }}  # still runs after a failed audit step',
+    '        run: node scripts/ci/audit.mjs composer api',
+    '      - if: always()',
+    '        run: node scripts/ci/audit.mjs npm tools',
+    '      - name: quoted',
+    '        if: "${{ success() }}"',
+    '        run: node scripts/ci/audit.mjs npm docs',
+    '      # if: false  (a comment is not a condition)',
+    '      - name: never',
+    '        if: false',
+    '        run: node scripts/ci/audit.mjs npm site',
+  ].join('\n');
+  const job = auditJobLines(workflow);
+  assert.equal(job.length, 20);
+  const only = `only ${KEEPS_AUDITING.join(', ')} may stand there`;
+  assert.deepEqual(blockingProblems(job), [
+    `line 6: a step's if (github.event_name == 'push') can skip a lock file's audit; ${only}`,
+    `line 8: a step's if (\${{ !cancelled() && github.event_name == 'push' }}) can skip a lock file's audit; ${only}`,
+    `line 20: a step's if (false) can skip a lock file's audit; ${only}`,
+  ]);
 });
