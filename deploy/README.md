@@ -129,6 +129,10 @@ hour (more in the comments in `.env.example`):
 
 Without these six settings, too, `docker compose` refuses to start.
 
+Also required, each an operator decision without a default (the comments in `.env.example` say
+who decides and in which form): the mail provider and sender, `MAIL_HOST`, `MAIL_USERNAME`,
+`MAIL_PASSWORD` (both may be empty for a relay without login) and `MAIL_FROM_ADDRESS`.
+
 Passwörter erzeugen:
 
 ```bash

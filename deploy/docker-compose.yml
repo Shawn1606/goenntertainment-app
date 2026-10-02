@@ -8,11 +8,24 @@
 # Genau die Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node dahinter), nur
 # dass niemand außer Caddy von außen erreichbar ist.
 #
+# Networks (who can reach whom; the bottom of this file has the details):
+#   edge      caddy <-> api. caddy's ports, certificates and api's mail go through here.
+#   app       api <-> node, and both backends -> db. Internal: no way out.
+#   outbound  node alone: its way out to the moderation provider.
+# caddy reaches neither node nor db, db has no way out, and api and node share exactly one
+# network, so each backend sees the one before it at a fixed address (F-31).
+#
+# Every setting without a default is required: docker compose refuses to start until deploy/.env
+# sets it (deploy/.env.example lists them, with who decides each).
+#
 # Starten (im Ordner deploy/, nach dem Ausfüllen von .env):
 #
 #   docker compose up -d --build
 #
 # Anleitung Schritt für Schritt: deploy/README.md
+
+# Stable names for the volumes and networks, whatever the clone's folder is called.
+name: goenntertainment
 
 services:
   db:
@@ -21,8 +34,8 @@ services:
     environment:
       MYSQL_DATABASE: goenntertainment
       MYSQL_USER: goenn
-      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt in deploy/.env}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD fehlt in deploy/.env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
     volumes:
       - db-data:/var/lib/mysql
       # Legt beim ALLERERSTEN Start (leeres Volume) alle Tabellen an. Spätere
@@ -34,6 +47,7 @@ services:
       timeout: 5s
       retries: 20
       start_period: 30s
+    networks: [app]
 
   # Bereitet den Upload-Ordner vor und beendet sich dann wieder.
   #
@@ -56,6 +70,7 @@ services:
       - ./storage:/storage
       # Evidence and story images (F-11, server/src/storage.js): node only, never a web server.
       - ./storage-private:/storage-private
+    network_mode: none
 
   node:
     build:
@@ -76,12 +91,13 @@ services:
       DB_PORT: '3306'
       DB_DATABASE: goenntertainment
       DB_USERNAME: goenn
-      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       PORT: '8000'
       # Shared with api: Laravel sends it on Node's internal routes (account deletion).
       NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
-      # The only hop Node takes the client address from: api's fixed address below.
-      NODE_TRUST_PROXY: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
+      # The only hop Node takes the client address from: api's fixed address on the app network
+      # (below; deploy/test/static.test.mjs checks that both agree).
+      NODE_TRUST_PROXY: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.140
       # Access-token lifetime in minutes, the same setting as api's: Node refuses a token issued
       # longer ago too (src/auth.js). Empty = the default in code (30 days).
       SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
@@ -92,7 +108,7 @@ services:
       MODERATION_REPORT_RETENTION_DAYS: ${MODERATION_REPORT_RETENTION_DAYS:?MODERATION_REPORT_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
       TOKEN_RETENTION_DAYS: ${TOKEN_RETENTION_DAYS:?TOKEN_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
       USAGE_RETENTION_DAYS: ${USAGE_RETENTION_DAYS:?USAGE_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
-      PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
+      PUBLIC_URL: https://${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
       # AI moderation (F-06): required; who owns the provider account and key is the operator's
       # decision (deploy/.env.example). Node refuses to start without it and refuses
       # MODERATION_ENABLED=false (server/src/config.js).
@@ -141,6 +157,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+    networks: [app, outbound]
 
   api:
     build:
@@ -159,9 +176,9 @@ services:
       # Niemals true auf dem Server: Laravel zeigte dann bei jedem Fehler
       # Quelltext, Pfade und Umgebungsvariablen – auch Passwörter.
       APP_DEBUG: 'false'
-      APP_KEY: ${APP_KEY:?APP_KEY fehlt in deploy/.env (siehe README, Schritt 4)}
-      APP_URL: https://${DOMAIN:?}
-      PUBLIC_URL: https://${DOMAIN:?}
+      APP_KEY: ${APP_KEY:?APP_KEY is missing in deploy/.env (see deploy/.env.example)}
+      APP_URL: https://${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
+      PUBLIC_URL: https://${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
       # UTC – und zwar überall (MySQL und Node laufen im Container ohnehin in UTC).
       # Beide Backends hängen an Zeiten aus der Datenbank ein „Z" an, behandeln sie
       # also als UTC. Am Entwicklungs-PC läuft MySQL dagegen in deutscher Ortszeit;
@@ -179,12 +196,13 @@ services:
       DB_PORT: '3306'
       DB_DATABASE: goenntertainment
       DB_USERNAME: goenn
-      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       # Alles, was Laravel noch nicht selbst kann, geht an das Node-Backend.
       NODE_FALLBACK_URL: http://node:8000
       # Laravel sends it on Node's internal routes (account deletion); the same value as node's.
       NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
-      # The only proxy Laravel takes the client address from: caddy's fixed address below.
+      # The only proxy Laravel takes the client address from: caddy's fixed address on the edge
+      # network (below; deploy/test/static.test.mjs checks that both agree).
       TRUSTED_PROXIES: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
       # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
       # Standard-Tabellen für Sitzungen/Warteschlange gibt es dort nicht.
@@ -221,15 +239,17 @@ services:
       AUTH_LIMIT_LOCK_WAIT: ${AUTH_LIMIT_LOCK_WAIT:-}
       SESSION_DRIVER: array
       QUEUE_CONNECTION: sync
-      # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet
-      # die App „Wir konnten dir gerade keinen Code schicken".
-      MAIL_MAILER: ${MAIL_MAILER:-smtp}
-      MAIL_HOST: ${MAIL_HOST:-}
+      # Mail-Versand für 2FA-Codes und „Passwort vergessen". Always SMTP: the log mailer would
+      # write every code into the container log. Which provider and which sender address are
+      # operator decisions, so both are required.
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:?MAIL_HOST is missing in deploy/.env (the mail provider, an operator decision; see deploy/.env.example)}
       MAIL_PORT: ${MAIL_PORT:-587}
-      MAIL_USERNAME: ${MAIL_USERNAME:-}
-      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      # Must be in deploy/.env; may be empty for a relay that takes mail without a login.
+      MAIL_USERNAME: ${MAIL_USERNAME?MAIL_USERNAME is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
+      MAIL_PASSWORD: ${MAIL_PASSWORD?MAIL_PASSWORD is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
       MAIL_SCHEME: ${MAIL_SCHEME:-}
-      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-noreply@${DOMAIN}}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
     volumes:
       # Dieselben Uploads, die Node speichert – Laravel liefert sie unter /storage
@@ -237,9 +257,10 @@ services:
       # Geschrieben wird ausschließlich von Node.
       - ./storage:/var/www/api/public/storage:ro
     networks:
-      default:
+      edge: {}
+      app:
         # Fixed: node trusts the client address only from this one (NODE_TRUST_PROXY).
-        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.140
 
   caddy:
     image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
@@ -247,12 +268,16 @@ services:
     depends_on:
       - api
     ports:
-      - '80:80'
-      - '443:443'
+      # IPv4 only. The networks have no IPv6, so Docker would relay an IPv6 client with the
+      # network's gateway as its address: every IPv6 client would share one address in the
+      # rate limits. Until IPv6 is set up end to end the domain gets no AAAA record
+      # (deploy/.env.example, DOMAIN).
+      - '0.0.0.0:80:80'
+      - '0.0.0.0:443:443'
     environment:
-      DOMAIN: ${DOMAIN:?}
+      DOMAIN: ${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
     networks:
-      default:
+      edge:
         # Fixed: api trusts the client address only from this one (TRUSTED_PROXIES).
         ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
     volumes:
@@ -267,14 +292,27 @@ volumes:
   caddy-data:
   caddy-config:
 
-# One network for all services with a subnet the operator chooses (APP_NET_PREFIX: the first
-# three parts of a free private /24 on this host, see deploy/.env.example). caddy (.10) and api
-# (.20) get fixed addresses: Laravel trusts forwarding headers from caddy only, Node from api
-# only (F-31). Every other container gets an address from the upper half, so nothing else can
-# take a fixed one.
+# APP_NET_PREFIX (the first three parts of a free private /24 on this host, see
+# deploy/.env.example) is split into two halves with fixed proxy addresses (F-31):
+#   edge  <prefix>.0/25    caddy at .10; Laravel trusts forwarding headers from it only
+#                          (TRUSTED_PROXIES). Other containers get .64-.127.
+#   app   <prefix>.128/25  api at .140; Node trusts forwarding headers from it only
+#                          (NODE_TRUST_PROXY). Other containers get .192-.255.
+# So no other container can take a fixed address. outbound gets its addresses from Docker.
+# No network has IPv6 (see caddy's ports).
 networks:
-  default:
+  edge:
+    enable_ipv6: false
     ipam:
       config:
-        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.0/24
-          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.128/25
+        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.0/25
+          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.64/26
+  app:
+    internal: true
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.128/25
+          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.192/26
+  outbound:
+    enable_ipv6: false
