@@ -99,3 +99,57 @@ test('signing out clears the session in memory before the stored token', () => {
   // The 401 path never leaves a rejected promise behind.
   assert.match(context, /if \(endsSession\(401, rejected, tokenRef\.current\)\) void endLocalSession\(true\)\.catch\(/);
 });
+
+/*
+ * F-44: the search history leaves the device with the session. The tested logic is
+ * forgetSearchHistory (search-history.test.ts) and the history step of signOutLocally
+ * (session.test.ts); these checks prove that the app hands them the real storage on every path.
+ */
+
+test('every way the session ends removes the search history (F-44)', () => {
+  const context = code('lib/auth-context.tsx');
+
+  // Denominator: the places in the auth state that remove the stored token (the import aside).
+  // Each one must remove the search history as well.
+  const tokenSites = (context.match(/\bclearToken\b(?!, loadToken)/g) ?? []).length;
+  assert.equal(tokenSites, 2, 'expected two token removals: the one local sign-out and the token rejected at app start');
+
+  // 1. The one local sign-out (logout, the 401 during a session, the logout after deleting the
+  //    account): the history of the account that signs out, taken before the session is forgotten.
+  const start = context.indexOf('const endLocalSession = useCallback(');
+  const end = context.indexOf('sessionWatch.subscribe(', start);
+  assert.ok(start >= 0 && end > start, 'endLocalSession not found before the 401 listener');
+  const body = context.slice(start, end);
+  assert.match(body, /const signedOutId = userIdRef\.current;[\s\S]*signOutLocally\(/, 'the account id is not taken before signing out');
+  assert.match(body, /clearHistory: \(\) => clearSearchHistory\(signedOutId\),/, 'endLocalSession does not remove the search history');
+  assert.match(context, /userIdRef\.current = user\?\.id \?\? null;/, 'the account id for the sign-out is not kept');
+  assert.equal((context.match(/endLocalSession\((?:true|false)\)/g) ?? []).length, 2, 'logout and the 401 listener both end in endLocalSession');
+
+  // 2. A stored token rejected at app start: whose it was is unknown, so the listable storage is cleared.
+  assert.match(
+    context,
+    /if \(error instanceof ApiError && error\.status === 401\) \{\s*await clearToken\(\);\s*await clearSearchHistory\(null\);/,
+    'a token rejected at app start leaves the search histories behind',
+  );
+});
+
+test('the search history store removes histories from the real device storage (F-44)', () => {
+  const store = code('lib/search-history-store.ts');
+  assert.match(store, /export function clearSearchHistory\(/, 'src/lib/search-history-store.ts has no clearSearchHistory');
+  assert.match(store, /return forgetSearchHistory\(deviceStore, userId\);/);
+  // One key format for writing and removing.
+  assert.match(store, /function keyFor\(userId: number\): string \{\s*return searchHistoryKey\(userId\);\s*\}/);
+  // Web: localStorage, which can list its keys; phones: the secure store.
+  assert.match(store, /globalThis\.localStorage\?\.removeItem\(key\);/);
+  assert.match(store, /keys: webKeys,/);
+  assert.match(store, /remove: \(key\) => SecureStore\.deleteItemAsync\(key\)/);
+});
+
+test('deleting the account ends in the same sign-out (F-44)', () => {
+  const screen = code('app/security/delete-account.tsx');
+  const deletion = screen.indexOf('await api.deleteAccount(');
+  assert.ok(deletion >= 0, 'delete-account.tsx no longer deletes through api.deleteAccount');
+  assert.ok(screen.indexOf('await logout();', deletion) > deletion, 'deleting the account does not sign out through logout()');
+  const context = code('lib/auth-context.tsx');
+  assert.match(context, /logout: async \(\) => \{[\s\S]*?await endLocalSession\(false\);/);
+});

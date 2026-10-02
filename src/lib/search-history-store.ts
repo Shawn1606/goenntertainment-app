@@ -4,9 +4,12 @@ import { Platform } from 'react-native';
 
 import {
   addToHistory,
+  forgetSearchHistory,
   parseHistory,
   removeFromHistory,
+  searchHistoryKey,
   serializeHistory,
+  type HistoryStore,
   type SearchHistoryEntry,
 } from '@/domain/search-history';
 
@@ -15,10 +18,42 @@ import {
  * expo-secure-store, Web über localStorage.
  *
  * Der Schlüssel trägt die Konto-ID: Meldet sich auf demselben Gerät jemand
- * anderes an, sieht er nicht, wen die vorige Person gesucht hat.
+ * anderes an, sieht er nicht, wen die vorige Person gesucht hat. At sign-out the history is
+ * removed (clearSearchHistory below, F-44).
  */
 function keyFor(userId: number): string {
-  return `goenn_search_history_${userId}`;
+  return searchHistoryKey(userId);
+}
+
+/** Every key localStorage holds (the web can list its storage; the phones' secure store cannot). */
+async function webKeys(): Promise<string[]> {
+  const storage = globalThis.localStorage;
+  if (!storage) return [];
+  const keys: string[] = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (key !== null) keys.push(key);
+  }
+  return keys;
+}
+
+const deviceStore: HistoryStore =
+  Platform.OS === 'web'
+    ? {
+        remove: async (key) => {
+          globalThis.localStorage?.removeItem(key);
+        },
+        keys: webKeys,
+      }
+    : { remove: (key) => SecureStore.deleteItemAsync(key) };
+
+/**
+ * Removes the search history of `userId` (null: unknown) and, on the web, every other history left
+ * on this device. Called by the one local sign-out (src/lib/auth-context.tsx endLocalSession) and
+ * when the stored session is rejected at app start. Never throws (forgetSearchHistory).
+ */
+export function clearSearchHistory(userId: number | null | undefined): Promise<{ removed: number; failed: number }> {
+  return forgetSearchHistory(deviceStore, userId);
 }
 
 async function read(userId: number): Promise<SearchHistoryEntry[]> {

@@ -24,6 +24,11 @@ export type LocalSignOutSteps = {
   forget: () => void;
   /** Removes what the device stores for the session (the token). */
   clearStorage: () => Promise<void>;
+  /**
+   * Removes the signed-out account's search history from the device (F-44,
+   * src/domain/search-history.ts forgetSearchHistory).
+   */
+  clearHistory: () => Promise<unknown>;
   /** Tells the person why they were signed out (after a 401 only). */
   notice: () => Promise<void>;
 };
@@ -39,6 +44,11 @@ export type LocalSignOutSteps = {
  *   already refuses that token, and the next app start removes the stored copy after its own 401;
  * - after a deliberate sign-out it is passed on, so the caller does not report success while a
  *   token that may still work is left on the device.
+ *
+ * The search history (F-44) goes on every path, also when removing the token failed. Its own
+ * failure never stops or fails the sign-out: the session is over either way, and an error there
+ * would only show the person an unrelated message (after deleting the account, say). On the web
+ * the next sign-out removes a history left behind (forgetSearchHistory lists the keys).
  */
 export async function signOutLocally(steps: LocalSignOutSteps, rejected: boolean): Promise<void> {
   steps.forget();
@@ -47,6 +57,11 @@ export async function signOutLocally(steps: LocalSignOutSteps, rejected: boolean
     await steps.clearStorage();
   } catch (error) {
     failure = { error };
+  }
+  try {
+    await steps.clearHistory();
+  } catch {
+    // Never passed on (see above).
   }
   if (rejected) {
     await steps.notice();

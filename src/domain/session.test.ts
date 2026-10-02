@@ -72,8 +72,11 @@ test('a listener that unsubscribes while being called does not skip the others',
   assert.deepEqual(calls, ['first', 'second', 'second']);
 });
 
-/** Sign-out steps that record their order; `storage` makes removing the stored token fail. */
-function signOutSteps(storage: 'works' | 'fails' = 'works') {
+/**
+ * Sign-out steps that record their order; `storage` makes removing the stored token fail,
+ * `history` removing the search history (F-44).
+ */
+function signOutSteps(storage: 'works' | 'fails' = 'works', history: 'works' | 'fails' = 'works') {
   const calls: string[] = [];
   const steps = {
     forget: () => {
@@ -82,6 +85,10 @@ function signOutSteps(storage: 'works' | 'fails' = 'works') {
     clearStorage: async () => {
       calls.push('clearStorage');
       if (storage === 'fails') throw new Error('storage unavailable');
+    },
+    clearHistory: async () => {
+      calls.push('clearHistory');
+      if (history === 'fails') throw new Error('history storage unavailable');
     },
     notice: async () => {
       calls.push('notice');
@@ -93,21 +100,49 @@ function signOutSteps(storage: 'works' | 'fails' = 'works') {
 test('signing out forgets the session in memory before the storage is touched', async () => {
   const deliberate = signOutSteps();
   await signOutLocally(deliberate.steps, false);
-  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage'], 'a deliberate sign-out shows no notice');
+  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage', 'clearHistory'], 'a deliberate sign-out shows no notice');
 
   const rejected = signOutSteps();
   await signOutLocally(rejected.steps, true);
-  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'notice']);
+  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'clearHistory', 'notice']);
 });
 
 test('after a 401 a storage error still signs out and tells the person why', async () => {
   const { steps, calls } = signOutSteps('fails');
   await assert.doesNotReject(signOutLocally(steps, true));
-  assert.deepEqual(calls, ['forget', 'clearStorage', 'notice'], 'the session must be forgotten even when the storage fails');
+  assert.deepEqual(calls, ['forget', 'clearStorage', 'clearHistory', 'notice'], 'the session must be forgotten even when the storage fails');
 });
 
 test('a deliberate sign-out passes a storage error on, after forgetting the session', async () => {
   const { steps, calls } = signOutSteps('fails');
   await assert.rejects(signOutLocally(steps, false), /storage unavailable/);
-  assert.deepEqual(calls, ['forget', 'clearStorage'], 'the session must be forgotten even when the storage fails');
+  assert.deepEqual(calls, ['forget', 'clearStorage', 'clearHistory'], 'the session must be forgotten even when the storage fails');
+});
+
+test('every sign-out removes the search history, also when removing the token failed (F-44)', async () => {
+  for (const [storage, rejected] of [
+    ['works', false],
+    ['works', true],
+    ['fails', false],
+    ['fails', true],
+  ] as const) {
+    const { steps, calls } = signOutSteps(storage);
+    await signOutLocally(steps, rejected).catch(() => {});
+    assert.ok(calls.includes('clearHistory'), `no history removal (token storage ${storage}, ${rejected ? '401' : 'deliberate'})`);
+    assert.ok(calls.indexOf('forget') < calls.indexOf('clearHistory'), 'the session must be forgotten first');
+  }
+});
+
+test('a failing history removal never fails or stops a sign-out (F-44)', async () => {
+  const deliberate = signOutSteps('works', 'fails');
+  await assert.doesNotReject(signOutLocally(deliberate.steps, false));
+  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage', 'clearHistory']);
+
+  const rejected = signOutSteps('works', 'fails');
+  await assert.doesNotReject(signOutLocally(rejected.steps, true));
+  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'clearHistory', 'notice'], 'the person must still be told why');
+
+  // A token storage error is still passed on, not hidden by the history step.
+  const both = signOutSteps('fails', 'fails');
+  await assert.rejects(signOutLocally(both.steps, false), (err) => err instanceof Error && err.message === 'storage unavailable');
 });
