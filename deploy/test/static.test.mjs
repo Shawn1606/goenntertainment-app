@@ -905,6 +905,31 @@ test('F-17: the backup keeps the uploads archive when files change while tar rea
   assert.equal(broken.check, 'backup: no successful run yet');
 });
 
+test('F-17: the backup waits for the database without credentials and for a bounded time before it dumps', () => {
+  const runs = backupCases(['export DB_UP_AFTER=15; once late', 'export DB_UP_AFTER=1000000; once never']);
+  console.log(`database wait: ${Object.entries(runs).map(([n, r]) => `${n}: exit ${r.code}, ${r.pings} ping(s), ${r.sleeps}, ${r.dumps} dump(s)`).join('; ')}`);
+  assert.deepEqual(Object.keys(runs), ['late', 'never']);
+  const { late, never } = runs;
+  // Up after 15 s: three refused pings 5 s apart, the fourth answers, then the dump.
+  assert.equal(late.code, 0, `late: the run did not wait for the database:\n${late.out}`);
+  assert.equal(late.pings, '4');
+  assert.equal(late.sleeps, '3 of 5 s');
+  assert.equal(late.dumps, '1');
+  assert.match(late.out, /^backup: run \S+ written: /m);
+  // Never up: a bounded number of tries, no dump, a failed run the healthcheck reports.
+  assert.notEqual(never.code, 0, 'never: the run succeeded without a database');
+  assert.equal(never.pings, '60');
+  assert.equal(never.sleeps, '59 of 5 s');
+  assert.equal(never.dumps, '0', 'never: mysqldump ran against a database that did not answer');
+  assert.ok(never.out.includes('backup: ERROR: the database at db did not answer (60 tries, 5 s apart)'), `never:\n${never.out}`);
+  assert.equal(never.check, 'backup: no successful run yet');
+  // No credentials: no user, no password, no option file, no MYSQL_PWD.
+  for (const [name, r] of Object.entries(runs)) {
+    const args = r['ping arguments'];
+    assert.equal(args, 'ping -h db -P 3306 --connect-timeout=5 --silent |', `${name}: mysqladmin arguments`);
+  }
+});
+
 test('settings checked in two places use the same patterns (preflight and the services)', () => {
   const read = (file, name) => {
     const full = path.join(DEPLOY_DIR, 'scripts', file);

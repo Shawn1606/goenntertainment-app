@@ -525,7 +525,7 @@ operator, with whoever answers for data protection).
 | api stays `unhealthy` | `docker compose logs api`: `ERROR: required settings missing or invalid` names them; otherwise usually a wrong `DB_PASSWORD` |
 | db exits right away | `docker compose logs db`: `MYSQL_BINLOG_RETENTION_DAYS must be ...` means the value is not 1 to 9999 or `off` |
 | no container starts: `failed to initialize logging driver: compression cannot be enabled when max file count is 1` | `LOG_MAX_FILES=1`: set it to 2 or more (`scripts/preflight.sh` refuses 1), then `docker compose up -d` |
-| backup `unhealthy` | `docker compose logs backup`: `BACKUP_DIR` missing or not writable, an invalid `BACKUP_RETENTION_DAYS`, or a failed run (`nothing was deleted`) |
+| backup `unhealthy` | `docker compose logs backup`: `BACKUP_DIR` missing or not writable, an invalid `BACKUP_RETENTION_DAYS`, the database did not answer within about 5 minutes (`did not answer`; each run waits for it, also after a reboot), or a failed run (`nothing was deleted`) |
 | caddy logs certificate or challenge errors | the A record does not point to the server yet, or 80/443 are closed |
 | a request gets `413` from caddy | the body is over the edge's limit: 9 MB for uploads (multipart), 128 KiB for everything else |
 | images under `/storage/` answer `502` | the media service is not running: `docker compose ps media`, `docker compose logs media` |

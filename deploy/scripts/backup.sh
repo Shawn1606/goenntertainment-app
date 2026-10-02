@@ -5,6 +5,7 @@
 #
 #   backup.sh                       daemon: one run at start, then one every day at 02:30 UTC
 #   backup.sh --once                one run now; exit 0 = a complete, verified set was written
+#                                   (each run first waits up to about 5 minutes for the database)
 #   backup.sh --check               healthcheck: exit 0 when the last run succeeded within 26 hours
 #                                   and no run failed since
 #   backup.sh --seconds-until-next  the seconds until the next nightly run (BACKUP_NOW, a time in
@@ -39,6 +40,11 @@ readonly STALE_LOCK_SECONDS=$((6 * 3600))
 readonly RETENTION_PATTERN='^[1-9][0-9]{0,4}$'
 readonly CLIENT_CNF=/tmp/backup-client.cnf
 readonly LIST_FILE=/tmp/backup-list
+# Before each run: wait for the database, at most this many tries this many seconds apart. After a
+# host reboot or an engine restart Docker starts db and backup at the same time (depends_on applies
+# to `docker compose up` only), and the run at start would find MySQL still starting.
+readonly DB_WAIT_TRIES=60
+readonly DB_WAIT_STEP_SECONDS=5
 
 RETENTION_DAYS=''
 LOCK_HELD=0
@@ -133,6 +139,22 @@ write_client_cnf() {
     "$DB_HOST" "${DB_PORT:-3306}" "$DB_USERNAME" "$password" > "$CLIENT_CNF"
 }
 
+# Waits until the database answers. No credentials: mysqladmin ping exits 0 as soon as the server
+# answers, even when it refuses the login (the db healthcheck relies on the same), so a wrong
+# password still fails at mysqldump right away. Short steps keep a stop within Docker's grace time.
+wait_for_db() {
+  local try
+  for (( try = 1; try <= DB_WAIT_TRIES; try++ )); do
+    if mysqladmin ping -h "$DB_HOST" -P "${DB_PORT:-3306}" --connect-timeout=5 --silent > /dev/null 2>&1; then
+      if (( try > 1 )); then log "the database answered after $try tries"; fi
+      return 0
+    fi
+    if (( try < DB_WAIT_TRIES )); then sleep "$DB_WAIT_STEP_SECONDS"; fi
+  done
+  fail "the database at $DB_HOST did not answer ($DB_WAIT_TRIES tries, $DB_WAIT_STEP_SECONDS s apart)"
+  return 1
+}
+
 prune() {
   local deleted count
   deleted=$(find "$BACKUP_ROOT" -maxdepth 1 -type f \
@@ -173,6 +195,7 @@ run_once() {
       return 1
     fi
   done
+  wait_for_db
   acquire_lock
 
   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
