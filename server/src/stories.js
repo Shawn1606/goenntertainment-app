@@ -209,7 +209,7 @@ export async function sweepExpiredStories() {
     }
     return rows.length;
   } catch (err) {
-    logError('[stories] Aufraeumen abgelaufener Storys fehlgeschlagen', err);
+    logError('[stories] Removing expired stories failed', err);
     return 0;
   }
 }

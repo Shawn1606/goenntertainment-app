@@ -26,9 +26,9 @@ async function start() {
   // public /storage route refuses those folders by path in any case.
   try {
     const moved = await migrateLegacyPrivateFiles();
-    if (moved > 0) logInfo(`Private Dateien aus storage/ verschoben: ${moved}`);
+    if (moved > 0) logInfo(`Moved ${moved} private file(s) out of public storage`);
   } catch (err) {
-    logError('Verschieben privater Dateien fehlgeschlagen', err);
+    logError('Moving private files out of public storage failed', err);
   }
 
   const app = createApp();
