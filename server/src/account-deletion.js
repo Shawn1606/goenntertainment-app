@@ -226,7 +226,8 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
     try {
       await conn.query('DELETE FROM sessions WHERE user_id = ?', [user.id]);
     } catch (err) {
-      // Ohne Laravel (z. B. im Docker-Abbild aus deploy/) gibt es die Tabelle nicht.
+      // Only Laravel's own migrations make this table (a local `composer setup`); the deploy loads
+      // server/schema.sql, which has none, and runs Laravel with SESSION_DRIVER=array.
       if (err?.code !== 'ER_NO_SUCH_TABLE') throw err;
     }
     await conn.query('DELETE FROM users WHERE id = ?', [user.id]);
