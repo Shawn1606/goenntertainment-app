@@ -11,21 +11,28 @@
  * working prune the aged rows are simply still there.
  *
  * The prune deletes by age across the whole database. Other test files write only rows of today,
- * which no setting used here reaches.
+ * which no setting used here reaches. Files are another matter: the prune also removes aged
+ * evidence files that no row shows, and src/storage.js finds the private root through the working
+ * directory. So the command runs in a folder of this test (PRUNE_DIR) and every file it may remove
+ * lies there, never in the checkout's own storage-private.
  */
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { ensureSchema, first, pool } from '../src/db.js';
-import { PRIVATE_ROOT, rootFor } from '../src/storage.js';
+import { PRIVATE_ROOT, removeStored, resolveStored, rootFor } from '../src/storage.js';
 import { TOKENABLE_TYPE, createUser, deleteTestUsers } from './support/fixtures.js';
 
 const SERVER_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+/** The working directory of the command, and so the parent of its private root (see above). */
+const PRUNE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'goenn-retention-'));
 
 /** Test-only retention settings for the command; not a retention decision. */
 const SETTINGS = {
@@ -42,13 +49,12 @@ const LIFETIME_MINUTES = 43200;
 const CACHE_GRACE_SECONDS = 24 * 60 * 60;
 
 const createdUserIds = [];
-const createdFiles = [];
 const cleanup = { tokens: [], challenges: [], resetEmails: [], cacheKeys: [], reports: [] };
 
 const stamp = () => crypto.randomBytes(6).toString('hex');
-// Evidence lives in the private root (src/storage.js); the prune runs with cwd SERVER_DIR, so the
-// files are written and checked under SERVER_DIR/storage-private whatever this process's cwd is.
-const storagePath = (relative) => path.join(SERVER_DIR, 'storage-private', relative);
+// Evidence lives in the private root (src/storage.js); the prune runs with cwd PRUNE_DIR, so the
+// files are written and checked under PRUNE_DIR/storage-private whatever this process's cwd is.
+const storagePath = (relative) => path.join(PRUNE_DIR, 'storage-private', relative);
 
 /** A small evidence file, where the moderation and the admin panel store them (private root). */
 function evidenceFile() {
@@ -56,7 +62,6 @@ function evidenceFile() {
   fs.mkdirSync(storagePath('evidence'), { recursive: true });
   const relative = `evidence/zret-test-${stamp()}.png`;
   fs.writeFileSync(storagePath(relative), Buffer.from('test-only image bytes'));
-  createdFiles.push(relative);
   return relative;
 }
 
@@ -69,8 +74,8 @@ async function insert(sql, params) {
 
 /** `npm run prune` with `env` on top of the test process's environment (database settings). */
 function runPrune(env) {
-  return spawnSync(process.execPath, ['src/prune.js'], {
-    cwd: SERVER_DIR,
+  return spawnSync(process.execPath, [path.join(SERVER_DIR, 'src', 'prune.js')], {
+    cwd: PRUNE_DIR,
     env: { ...process.env, SANCTUM_EXPIRATION: '', ...env },
     encoding: 'utf8',
     timeout: 60_000,
@@ -99,14 +104,9 @@ after(async () => {
     }
     if (cleanup.reports.length) await pool.query('DELETE FROM moderation_reports WHERE id IN (?)', [cleanup.reports]);
     await deleteTestUsers(pool, createdUserIds);
-    for (const file of createdFiles) {
-      try {
-        fs.unlinkSync(storagePath(file));
-      } catch {
-        /* removed by the prune - which is what the tests check */
-      }
-    }
   } finally {
+    // Every file and folder of this test, whatever the prune left of them.
+    fs.rmSync(PRUNE_DIR, { recursive: true, force: true });
     await pool.end();
   }
 });
@@ -312,6 +312,71 @@ test('npm run prune removes what is older than each retention setting and keeps 
   for (const secretish of [resets.old, files.banOld]) {
     assert.ok(!r.stdout.includes(secretish) && !r.stderr.includes(secretish), 'the output must hold counts only');
   }
+});
+
+/** A name storeImage() gives (src/storage.js STORED_NAME): 40 hex characters and an extension. */
+const storedName = () => `evidence/${crypto.randomBytes(20).toString('hex')}.png`;
+
+/** An evidence file with a stored name whose modification time lies `daysAgo` days back. */
+function agedEvidenceFile(daysAgo) {
+  fs.mkdirSync(storagePath('evidence'), { recursive: true });
+  const relative = storedName();
+  fs.writeFileSync(storagePath(relative), Buffer.from('test-only image bytes'));
+  const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+  fs.utimesSync(storagePath(relative), when, when);
+  return relative;
+}
+
+test('npm run prune removes aged evidence files that no row shows, and counts failed removals', async () => {
+  const owner = (await createUser('zretorphan', { created: createdUserIds })).user;
+
+  // EVIDENCE_RETENTION_DAYS = 30. An earlier run cleared the row of `orphan` and stopped before it
+  // removed the file (or its removal failed): no row selects that path again.
+  const files = {
+    orphan: agedEvidenceFile(40),
+    // Stored a moment ago, its row not written yet (the moderation stores the image first).
+    young: agedEvidenceFile(0),
+    // An old file that a young ban evidence row still shows.
+    referenced: agedEvidenceFile(40),
+  };
+  await banEvidence(owner.id, files.referenced, 0);
+  // A removal that fails: the image of an aged ban evidence row is a folder, which unlink refuses.
+  const stuck = storedName();
+  fs.mkdirSync(storagePath(stuck), { recursive: true });
+  await banEvidence(owner.id, stuck, 40);
+
+  const r = runPrune(SETTINGS);
+
+  assert.equal(fileExists(files.orphan), false, 'an aged evidence file that no row shows is still there');
+  assert.equal(fileExists(files.young), true, 'a young evidence file without a row was removed');
+  assert.equal(fileExists(files.referenced), true, 'an aged evidence file that a row still shows was removed');
+  assert.equal(fileExists(stuck), true, 'control: the folder cannot be removed');
+
+  assert.equal(r.status, 0, `exit code ${r.status}\n${r.stderr}`);
+  const counts = printedCounts(r.stdout);
+  assert.ok(counts.filesRemoved >= 1, `filesRemoved: printed ${counts.filesRemoved}, the orphan alone is 1`);
+  assert.ok(counts.filesFailed >= 1, `filesFailed: printed ${counts.filesFailed}, the folder alone is 1`);
+  for (const name of [files.orphan, stuck]) {
+    assert.ok(!r.stdout.includes(name) && !r.stderr.includes(name), 'the output must hold counts only');
+  }
+});
+
+test('removing a stored file tells a file that is already gone apart from a removal that failed', async () => {
+  // In this process, so in its own private root (src/storage.js); the file and folder are removed here.
+  const relative = storedName();
+  const target = resolveStored(relative);
+  assert.ok(target, 'a stored evidence name resolves to a file');
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, Buffer.from('test-only image bytes'));
+  assert.equal(await removeStored(relative), 'removed');
+  assert.equal(await removeStored(relative), 'gone', 'a file that is already gone is no failure');
+  fs.mkdirSync(target);
+  try {
+    assert.equal(await removeStored(relative), 'failed', 'a removal the file system refuses must be told apart');
+  } finally {
+    fs.rmdirSync(target);
+  }
+  assert.equal(await removeStored('elsewhere/x.png'), 'invalid', 'a value outside the upload folders names no file');
 });
 
 test('npm run prune names every missing or invalid setting and deletes nothing', async () => {

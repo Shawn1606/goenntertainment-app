@@ -61,11 +61,23 @@ export function resolveStored(value) {
   return target.startsWith(base + path.sep) ? target : null;
 }
 
-/** Removes a stored file, best effort: a file that is already gone is no error. Never throws. */
+/**
+ * Removes a stored file, best effort. Never throws; says what happened, so a caller can count
+ * removals that failed (the retention prune does) without logging any path:
+ *   'removed'  the file was removed;
+ *   'gone'     there was no such file (already removed): no error;
+ *   'failed'   the file system refused (permissions, a read-only or broken disk, a folder);
+ *   'invalid'  the value names no stored file (resolveStored), so there is nothing to remove.
+ */
 export async function removeStored(value) {
   const target = resolveStored(value);
-  if (!target) return false;
-  return fs.unlink(target).then(() => true, () => false);
+  if (!target) return 'invalid';
+  try {
+    await fs.unlink(target);
+    return 'removed';
+  } catch (err) {
+    return err?.code === 'ENOENT' ? 'gone' : 'failed';
+  }
 }
 
 /**

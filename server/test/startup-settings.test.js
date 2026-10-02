@@ -245,7 +245,7 @@ test('with the retention settings the server prunes once at start', async () => 
 
   const out = await outputUntil(startupEnv(), /Retention prune: .*\n/);
   assert.ok(out !== null, 'the server never logged a retention prune');
-  for (const key of ['tokens', 'activityViews', 'activeDays', 'evidenceImages', 'moderationReports', 'filesRemoved']) {
+  for (const key of ['tokens', 'activityViews', 'activeDays', 'evidenceImages', 'moderationReports', 'filesRemoved', 'filesFailed']) {
     assert.match(out, new RegExp(`Retention prune: .*\\b${key}=\\d+`), `the log line has no count for ${key}`);
   }
   assert.equal(

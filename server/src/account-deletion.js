@@ -80,22 +80,47 @@ async function stillReferenced(filePath) {
   return false;
 }
 
+/** Values per query in referencedAmong(). */
+const REFERENCE_CHUNK = 500;
+
 /**
- * Removes the stored files among `paths` that no column references any more (FILE_REFERENCES),
- * best effort; returns how many it removed. Used after an account deletion and by the retention
- * prune (retention.js), so a file another row still shows stays.
+ * The values among `paths` that some column of FILE_REFERENCES still holds. One query per column
+ * and chunk instead of one per column and file (stillReferenced): the retention prune's sweep
+ * (retention.js) checks many files at once. Compared without case, so a value the database
+ * matches is never taken for unreferenced.
  */
-export async function removeUnreferencedFiles(paths) {
-  let removed = 0;
-  for (const file of new Set(paths.filter(isStoredFile))) {
-    if (await stillReferenced(file)) continue;
-    if (await removeStoredFile(file)) removed += 1;
+export async function referencedAmong(paths) {
+  const values = [...new Set(paths.filter(isStoredFile))];
+  const found = new Set();
+  for (let i = 0; i < values.length; i += REFERENCE_CHUNK) {
+    const chunk = values.slice(i, i + REFERENCE_CHUNK);
+    for (const [table, column] of FILE_REFERENCES) {
+      const [rows] = await pool.query(`SELECT DISTINCT ${column} AS p FROM ${table} WHERE ${column} IN (?)`, [chunk]);
+      for (const row of rows) found.add(String(row.p).toLowerCase());
+    }
   }
-  return removed;
+  return new Set(values.filter((value) => found.has(value.toLowerCase())));
 }
 
 /**
- * Datei unter storage/ entfernen – best effort. Returns true when a file was removed.
+ * Removes the stored files among `paths` that no column references any more (FILE_REFERENCES),
+ * best effort; returns how many it removed and how many removals failed (a file that is already
+ * gone is neither, storage.js removeStored). Used after an account deletion and by the retention
+ * prune (retention.js), so a file another row still shows stays.
+ */
+export async function removeUnreferencedFiles(paths) {
+  const result = { removed: 0, failed: 0 };
+  for (const file of new Set(paths.filter(isStoredFile))) {
+    if (await stillReferenced(file)) continue;
+    const outcome = await removeStoredFile(file);
+    if (outcome === 'removed') result.removed += 1;
+    else if (outcome === 'failed') result.failed += 1;
+  }
+  return result;
+}
+
+/**
+ * Datei unter storage/ entfernen – best effort. Returns the outcome of storage.js removeStored.
  *
  * Der Pfad kommt zwar aus der eigenen DB, trotzdem wird geprueft, dass er
  * innerhalb seines Ordners bleibt: Ein `../` in einer Zeile waere sonst ein
