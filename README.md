@@ -134,7 +134,12 @@ docker stop goenn-api-tests   # removes the container and its data
 
 Point the tests at a database of their own, not at a development database.
 `api/tests/Probes/` is not a suite: tests of `AppFeatureTestCase` run the probe there in a
-child PHPUnit process.
+child PHPUnit process. One class runs outside the rolled-back transaction:
+`api/tests/Feature/ConcurrentCapsTest.php` starts ten `php -S` processes on free local ports
+(`api/tests/Support/ParallelServers.php`) and sends them bursts of requests, to show that the
+per-account caps hold for requests that arrive at the same time. Those processes must see its
+accounts, so it writes committed rows and deletes them again afterwards; its cache rows carry a
+prefix of their own.
 
 ## Get a fresh project
 
