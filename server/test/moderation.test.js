@@ -13,6 +13,7 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { hasMetadataTrace, JPEG_8X8, PNG_1X1, withJpegExif } from './support/images.js';
 import { assertLoopbackBaseUrl, startModelMock, verdict } from './support/model-mock.js';
 
 /** What test/test.env gave this process, before this file changes it. */
@@ -77,6 +78,20 @@ function createPost(token, body) {
   const form = new FormData();
   form.append('body', body);
   return fetch(`${base}/api/posts`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+}
+
+/** A post with an image (multipart, as the app sends it). */
+function createImagePost(token, bytes, mime) {
+  const form = new FormData();
+  form.append('body', 'Mit Bild');
+  form.append('image', new Blob([bytes], { type: mime }), 'bild');
+  return fetch(`${base}/api/posts`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form });
+}
+
+/** The image block of the last request that reached the stand-in. */
+function lastImageBlock() {
+  const call = mock.messageCalls().at(-1);
+  return call?.body?.messages?.[0]?.content?.find((block) => block.type === 'image') ?? null;
 }
 
 const postCount = async (userId) => Number((await first('SELECT COUNT(*) AS c FROM posts WHERE user_id = ?', [userId])).c);
@@ -167,6 +182,24 @@ test('without an API key content is refused, unless moderation is switched off o
       assert.equal(off.calls, 0);
     });
   });
+});
+
+test('the image sent to the model is the re-encoded one, typed by its bytes (F-11)', async () => {
+  mock.respond({ verdict: verdict({ severity: 0 }) });
+  const withExif = withJpegExif(JPEG_8X8);
+  assert.ok(hasMetadataTrace(withExif), 'precondition: the upload carries EXIF and GPS data');
+
+  const jpeg = await createImagePost(creator.token, withExif, 'image/jpeg');
+  assert.equal(jpeg.status, 201, JSON.stringify(await jpeg.json()));
+  const jpegBlock = lastImageBlock();
+  assert.ok(jpegBlock, 'the image reached the local stand-in');
+  assert.equal(jpegBlock.source.media_type, 'image/jpeg');
+  assert.equal(hasMetadataTrace(Buffer.from(jpegBlock.source.data, 'base64')), false, 'no metadata goes to the model');
+
+  // PNG bytes declared as a JPEG: the model is told what the bytes are.
+  const png = await createImagePost(creator.token, PNG_1X1, 'image/jpeg');
+  assert.equal(png.status, 201, JSON.stringify(await png.json()));
+  assert.equal(lastImageBlock().source.media_type, 'image/png');
 });
 
 test('a refusal by the provider still refuses the content', async () => {

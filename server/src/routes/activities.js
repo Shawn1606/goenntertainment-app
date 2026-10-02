@@ -1,6 +1,5 @@
 import { createRouter } from '../router.js';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
@@ -16,11 +15,12 @@ import { blockExistsBetween, transformUser } from '../people.js';
 import { logError } from '../log.js';
 import { singleUpload } from '../uploads.js';
 import { rateLimit } from '../rate-limit.js';
+import { ALLOWED_MIME, processImageOr422 } from '../images.js';
+import { storeImage } from '../storage.js';
 
 const router = createRouter();
 
-const BANNER_DIR = path.join(process.cwd(), 'storage', 'banners');
-const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+const MSG_BANNER_TYPE = 'Das Banner muss ein Bild sein (jpeg, png, webp).';
 
 /**
  * The banner (5 MB, uploads.js) and the form's text fields: title, description, location,
@@ -488,10 +488,14 @@ router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, 
       .slice(0, MAX_INTERESTS);
 
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
-      v.add('banner', 'Das Banner muss ein Bild sein (jpeg, png, webp).');
+      v.add('banner', MSG_BANNER_TYPE);
     }
 
     v.throwIfFails();
+
+    // Only a real image gets further, and only as a fresh encoding without metadata (F-11): the
+    // moderation sees and the disk keeps exactly that, never the uploaded bytes (images.js).
+    const banner = req.file ? await processImageOr422(req.file, 'banner', MSG_BANNER_TYPE) : null;
 
     // KI-Verifizierung (Jugendschutz) VOR dem Speichern: nicht jugendfreie
     // Inhalte kommen so gar nicht erst in die DB bzw. auf die Platte. Ab der
@@ -501,7 +505,7 @@ router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, 
       title: b.title,
       description: b.description,
       interests: [...(await interestNames(interests)), ...customInterests],
-      image: req.file ? { buffer: req.file.buffer, mimetype: req.file.mimetype } : null,
+      image: banner,
     });
 
     if (!check.allowed) {
@@ -523,14 +527,7 @@ router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, 
     }
 
     // Banner speichern
-    let bannerPath = null;
-    if (req.file) {
-      fs.mkdirSync(BANNER_DIR, { recursive: true });
-      const ext = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[req.file.mimetype];
-      const name = `${crypto.randomBytes(20).toString('hex')}.${ext}`;
-      fs.writeFileSync(path.join(BANNER_DIR, name), req.file.buffer);
-      bannerPath = `banners/${name}`;
-    }
+    const bannerPath = banner ? await storeImage('banners', banner) : null;
 
     // starts_at als UTC 'YYYY-MM-DD HH:MM:SS'
     const startsAtSql = startsAt.toISOString().slice(0, 19).replace('T', ' ');

@@ -25,7 +25,6 @@
  */
 import { createRouter } from '../router.js';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
@@ -37,6 +36,8 @@ import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { notifyFollowers } from '../notifications.js';
 import { loadUser } from '../people.js';
 import { singleUpload } from '../uploads.js';
+import { ALLOWED_MIME, processImageOr422 } from '../images.js';
+import { storeImage } from '../storage.js';
 // Spalten, Umwandlung und Filter wohnen in `../stories.js`: Profilseite und
 // Personenlisten fragen dasselbe, und vier Abschriften derselben Abfrage sind
 // vier Wahrheiten darueber, was „laufende Story" heisst (siehe dort).
@@ -51,9 +52,7 @@ import {
 
 const router = createRouter();
 
-const STORY_DIR = path.join(process.cwd(), 'storage', 'stories');
-const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const MSG_IMAGE_TYPE = 'Das Bild muss jpeg, png oder webp sein.';
 
 /** Laenge der Bildunterschrift – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_CAPTION = 200;
@@ -156,7 +155,7 @@ router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, u
     // Beitrag auf dem Profil. Bild ist also Pflicht, die Unterschrift nicht.
     if (!req.file) v.add('image', 'Waehle ein Bild fuer deine Story.');
     else if (!ALLOWED_MIME.includes(req.file.mimetype)) {
-      v.add('image', 'Das Bild muss jpeg, png oder webp sein.');
+      v.add('image', MSG_IMAGE_TYPE);
     }
     if (caption.length > MAX_CAPTION) {
       v.add('caption', `Die Unterschrift fasst hoechstens ${MAX_CAPTION} Zeichen.`);
@@ -166,12 +165,15 @@ router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, u
     }
     v.throwIfFails();
 
+    // A real image, encoded again without metadata, before anything looks at it (F-11).
+    const image = await processImageOr422(req.file, 'image', MSG_IMAGE_TYPE);
+
     // KI-Verifizierung VOR dem Speichern – wie bei Events und Beitraegen.
     const check = await moderateContent({
       user: req.user,
       context: 'story',
       description: caption || 'Story ohne Unterschrift',
-      image: { buffer: req.file.buffer, mimetype: req.file.mimetype },
+      image,
     });
 
     if (!check.allowed) {
@@ -194,14 +196,12 @@ router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, u
       );
     }
 
-    fs.mkdirSync(STORY_DIR, { recursive: true });
-    const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[req.file.mimetype]}`;
-    fs.writeFileSync(path.join(STORY_DIR, name), req.file.buffer);
+    const imagePath = await storeImage('stories', image);
 
     const [result] = await pool.query(
       `INSERT INTO stories (user_id, caption, image_path, created_at, expires_at)
        VALUES (?, ?, ?, NOW(), DATE_ADD(NOW(), INTERVAL ? HOUR))`,
-      [req.user.id, caption || null, `stories/${name}`, STORY_HOURS],
+      [req.user.id, caption || null, imagePath, STORY_HOURS],
     );
 
     const row = await first(

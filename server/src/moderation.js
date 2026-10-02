@@ -17,14 +17,13 @@
  * check (config.js moderationSettings), not when this module is loaded.
  */
 import 'dotenv/config';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import fs from 'node:fs';
 import Anthropic from '@anthropic-ai/sdk';
 import { pool } from './db.js';
 import { setBan, recordBanEvidence } from './auth.js';
 import { moderationSettings } from './config.js';
+import { isProcessedImage } from './images.js';
 import { describeError, logError, logWarn } from './log.js';
+import { storeImage } from './storage.js';
 
 // --- Konfiguration (alles per .env uebersteuerbar) ---------------------------
 
@@ -49,11 +48,6 @@ function tuning(env = process.env) {
     requestTimeoutMs: intEnv(env, 'MODERATION_TIMEOUT_MS', 45000),
   };
 }
-
-const EVIDENCE_DIR = path.join(process.cwd(), 'storage', 'evidence');
-const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-/** Claude akzeptiert nur diese media_types fuer Bilder. */
-const VISION_MIME = { 'image/jpeg': 'image/jpeg', 'image/jpg': 'image/jpeg', 'image/png': 'image/png', 'image/webp': 'image/webp' };
 
 // Server-seitige Fallbacks: lehnt ein Sicherheits-Klassifikator die Anfrage ab
 // (bei Moderations-Inhalten durchaus moeglich), beantwortet Anthropic sie
@@ -254,11 +248,13 @@ async function createMessage(params) {
 async function classify({ context, title, description, interests, image }) {
   const blocks = [];
   if (image) {
+    // A processed image (images.js): fresh bytes without metadata, and a type taken from the
+    // bytes - one of the three the model accepts.
     blocks.push({
       type: 'image',
       source: {
         type: 'base64',
-        media_type: VISION_MIME[image.mimetype] ?? 'image/jpeg',
+        media_type: image.mimetype,
         data: image.buffer.toString('base64'),
       },
     });
@@ -365,13 +361,10 @@ function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
 }
 
 /** Legt das beanstandete Bild als Beweis ab (nur bei automatischer Sperre). */
-function saveEvidenceImage(image) {
+async function saveEvidenceImage(image) {
   if (!image) return null;
   try {
-    fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
-    const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[image.mimetype] ?? 'jpg'}`;
-    fs.writeFileSync(path.join(EVIDENCE_DIR, name), image.buffer);
-    return `evidence/${name}`;
+    return await storeImage('evidence', image);
   } catch (err) {
     logError('[moderation] Beweis-Bild konnte nicht gespeichert werden', err);
     return null;
@@ -426,7 +419,8 @@ async function saveReport({ userId, context, decision, snapshot, imagePath, late
  * @param {string}   [options.title]
  * @param {string}   options.description
  * @param {string[]} [options.interests] Namen der Interessen (ausgewaehlte + eigene)
- * @param {{buffer: Buffer, mimetype: string}|null} [options.image]  noch nicht gespeichert
+ * @param {object|null} [options.image]  noch nicht gespeichert; only an image from
+ *   processImageUpload() (images.js), never the uploaded bytes
  * @returns {Promise<{allowed: boolean, skipped?: boolean, timedOut: boolean,
  *   bannedUntil: string|null, banReason: string|null, reason: string|null,
  *   severity: number, categories: string[], fields: string[]}>}
@@ -439,6 +433,9 @@ export async function moderateContent({
   interests = [],
   image = null,
 }) {
+  if (image && !isProcessedImage(image)) {
+    throw new TypeError('moderateContent: the image must come from processImageUpload() (images.js)');
+  }
   const settings = moderationSettings();
   if (!settings.enabled) {
     // Only with MODERATION_ENABLED=false, which production refuses (config.js).
@@ -464,7 +461,7 @@ export async function moderateContent({
   }
 
   // Beweis-Bild nur aufbewahren, wenn wirklich gesperrt wird.
-  const imagePath = decision.timeout ? saveEvidenceImage(image) : null;
+  const imagePath = decision.timeout ? await saveEvidenceImage(image) : null;
 
   await saveReport({
     userId: user?.id ?? null,

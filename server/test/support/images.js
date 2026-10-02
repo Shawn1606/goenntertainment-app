@@ -181,6 +181,25 @@ export function withPngText(png, { marker = METADATA_MARKER } = {}) {
   return Buffer.concat([png.subarray(0, ihdrEnd), text, exif, png.subarray(ihdrEnd)]);
 }
 
+/**
+ * A valid PNG of any size that stays a few kilobytes as a file: 1-bit grayscale, every pixel black
+ * (rows of zeros compress to almost nothing). For the decoded-size guard.
+ */
+export function pngOfSize(width, height) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 1; // bit depth
+  ihdr[9] = 0; // grayscale
+  const raw = Buffer.alloc(height * (1 + Math.ceil(width / 8))); // filter byte 0 + pixels, all zero
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 /** Bytes appended after the image's end (after IEND, EOI or the RIFF container). */
 export function withTrailer(image, trailer) {
   return Buffer.concat([image, Buffer.from(trailer, 'latin1')]);

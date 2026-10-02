@@ -13,7 +13,6 @@
  */
 import { createRouter } from '../router.js';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
@@ -29,15 +28,12 @@ import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
 import { notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
 import { singleUpload } from '../uploads.js';
+import { ALLOWED_MIME, processImageOr422 } from '../images.js';
+import { storeImage } from '../storage.js';
 
 const router = createRouter();
 
-const POST_DIR = path.join(process.cwd(), 'storage', 'posts');
-/** Profilbilder und Karten-Hintergruende ("Banner") des Kontos. */
-const AVATAR_DIR = path.join(process.cwd(), 'storage', 'avatars');
-const USER_BANNER_DIR = path.join(process.cwd(), 'storage', 'user-banners');
-const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+const MSG_IMAGE_TYPE = 'Das Bild muss jpeg, png oder webp sein.';
 
 /** So viele Beitraege liefert ein Profil hoechstens aus. */
 const POST_LIMIT = 50;
@@ -505,8 +501,8 @@ router.put('/me/links', requireAuth, rateLimit('content'), requireProfile, async
  * deshalb liegt es auch in einem eigenen Ordner.
  */
 const IMAGE_KINDS = {
-  avatar: { column: 'avatar', dir: AVATAR_DIR, folder: 'avatars', label: 'Profilbild' },
-  banner: { column: 'banner', dir: USER_BANNER_DIR, folder: 'user-banners', label: 'Banner' },
+  avatar: { column: 'avatar', folder: 'avatars', label: 'Profilbild' },
+  banner: { column: 'banner', folder: 'user-banners', label: 'Banner' },
 };
 
 /**
@@ -551,16 +547,16 @@ function setProfileImage(kind) {
         });
       }
       if (!ALLOWED_MIME.includes(req.file.mimetype)) {
-        throw new HttpError(422, 'Das Bild muss jpeg, png oder webp sein.', {
-          image: ['Das Bild muss jpeg, png oder webp sein.'],
-        });
+        throw new HttpError(422, MSG_IMAGE_TYPE, { image: [MSG_IMAGE_TYPE] });
       }
+      // A real image, encoded again without metadata, before anything looks at it (F-11).
+      const image = await processImageOr422(req.file, 'image', MSG_IMAGE_TYPE);
 
       const check = await moderateContent({
         user: req.user,
         context: 'profile',
         description: spec.label,
-        image: { buffer: req.file.buffer, mimetype: req.file.mimetype },
+        image,
       });
 
       if (!check.allowed) {
@@ -583,16 +579,14 @@ function setProfileImage(kind) {
         );
       }
 
-      fs.mkdirSync(spec.dir, { recursive: true });
-      const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[req.file.mimetype]}`;
-      fs.writeFileSync(path.join(spec.dir, name), req.file.buffer);
+      const stored = await storeImage(spec.folder, image);
 
       // Erst das neue Bild eintragen, dann das alte wegwerfen: Kippt das UPDATE,
       // zeigt das Konto weiter auf ein Bild, das es noch gibt.
       const previous = req.user[spec.column] ?? null;
       await pool.query(
         `UPDATE users SET ${spec.column} = ?, updated_at = NOW() WHERE id = ?`,
-        [`${spec.folder}/${name}`, req.user.id],
+        [stored, req.user.id],
       );
       removeStoredImage(previous);
 
@@ -651,9 +645,12 @@ router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploa
       rejectBlockedTerms(v, 'body', body, 'text');
     }
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
-      v.add('image', 'Das Bild muss jpeg, png oder webp sein.');
+      v.add('image', MSG_IMAGE_TYPE);
     }
     v.throwIfFails();
+
+    // A real image, encoded again without metadata, before anything looks at it (F-11).
+    const image = req.file ? await processImageOr422(req.file, 'image', MSG_IMAGE_TYPE) : null;
 
     // KI-Verifizierung VOR dem Speichern – wie bei den Events. Ab der
     // eingestellten Schwere sperrt die Moderation das Konto automatisch.
@@ -661,7 +658,7 @@ router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploa
       user: req.user,
       context: 'post',
       description: body || 'Beitrag ohne Text',
-      image: req.file ? { buffer: req.file.buffer, mimetype: req.file.mimetype } : null,
+      image,
     });
 
     if (!check.allowed) {
@@ -686,13 +683,7 @@ router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploa
       );
     }
 
-    let imagePath = null;
-    if (req.file) {
-      fs.mkdirSync(POST_DIR, { recursive: true });
-      const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[req.file.mimetype]}`;
-      fs.writeFileSync(path.join(POST_DIR, name), req.file.buffer);
-      imagePath = `posts/${name}`;
-    }
+    const imagePath = image ? await storeImage('posts', image) : null;
 
     const [result] = await pool.query(
       'INSERT INTO posts (user_id, body, image_path, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())',
