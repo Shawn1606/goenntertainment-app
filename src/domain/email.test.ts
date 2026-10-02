@@ -52,7 +52,7 @@ test('agrees with the former pattern on 20,000 short strings', () => {
 });
 
 test('known cases', () => {
-  for (const ok of ['a@b.c', 'first.last@example.invalid', 'a.b@c.d.e', 'ü@ü.de', 'a@b..c', 'a@.b.c']) {
+  for (const ok of ['a@b.c', 'first.last@example.invalid', 'a.b@c.d.e', 'ü@ü.example.invalid', 'a@b..c', 'a@.b.c']) {
     assert.equal(isEmailAddress(ok), true, ok);
   }
   for (const bad of ['', 'a', '@b.c', 'a@', 'a@b', 'a@b.', 'a@.b', 'a@@b.c', 'a@b@c.d', 'a b@c.d', 'a@b.c\n', null, 42]) {
@@ -62,7 +62,7 @@ test('known cases', () => {
 
 test('the length cap is 254 characters, the same as the server', () => {
   assert.equal(EMAIL_MAX_LENGTH, 254);
-  const address = (total: number) => `${'a'.repeat(total - '@example.de'.length)}@example.de`;
+  const address = (total: number) => `${'a'.repeat(total - '@example.invalid'.length)}@example.invalid`;
   assert.equal(address(254).length, 254);
   assert.equal(isEmailAddress(address(254)), true);
   assert.equal(isEmailAddress(address(255)), false);
@@ -71,7 +71,7 @@ test('the length cap is 254 characters, the same as the server', () => {
 
 test('100,000-character inputs are rejected fast', () => {
   const inputs: Record<string, string> = {
-    'long local part': `${'a'.repeat(100000)}@example.de`,
+    'long local part': `${'a'.repeat(100000)}@example.invalid`,
     'many dots in the domain, trailing blank': `a@${'b.'.repeat(50000)} `,
     'only at signs': '@'.repeat(100000),
     'no at sign': 'x'.repeat(100000),

@@ -40,12 +40,12 @@ test('missing, malformed or address-less legacy entries give nothing', () => {
 });
 
 test('a saved address is trimmed, and empty or over-long values are not saved', () => {
-  assert.equal(normalizeSavedEmail('  a@b.de '), 'a@b.de');
+  assert.equal(normalizeSavedEmail('  someone@example.invalid '), 'someone@example.invalid');
   assert.equal(normalizeSavedEmail(''), null);
   assert.equal(normalizeSavedEmail('   '), null);
   assert.equal(normalizeSavedEmail(null), null);
-  assert.equal(normalizeSavedEmail({ email: 'a@b.de' }), null);
-  assert.equal(normalizeSavedEmail(`${'a'.repeat(250)}@b.de`), null);
+  assert.equal(normalizeSavedEmail({ email: 'someone@example.invalid' }), null);
+  assert.equal(normalizeSavedEmail(`${'a'.repeat(250)}@example.invalid`), null);
 });
 
 test('the new entry has its own key, apart from the legacy one', () => {

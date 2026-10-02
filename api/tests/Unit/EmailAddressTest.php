@@ -64,7 +64,7 @@ class EmailAddressTest extends TestCase
 
     public function test_known_cases(): void
     {
-        foreach (['a@b.c', 'first.last@example.invalid', 'a.b@c.d.e', 'ü@ü.de', 'a@b..c', 'a@.b.c'] as $ok) {
+        foreach (['a@b.c', 'first.last@example.invalid', 'a.b@c.d.e', 'ü@ü.example.invalid', 'a@b..c', 'a@.b.c'] as $ok) {
             $this->assertTrue(EmailAddress::isValid($ok), $ok);
         }
         foreach (['', 'a', '@b.c', 'a@', 'a@b', 'a@b.', 'a@.b', 'a@@b.c', 'a@b@c.d', 'a b@c.d', "a@b.c\n", "a\t@b.c", null, 42, ['a@b.c']] as $bad) {
@@ -74,7 +74,7 @@ class EmailAddressTest extends TestCase
 
     public function test_the_length_cap_is_254_characters(): void
     {
-        $address = static fn (int $total): string => str_repeat('a', $total - strlen('@example.de')).'@example.de';
+        $address = static fn (int $total): string => str_repeat('a', $total - strlen('@example.invalid')).'@example.invalid';
 
         $this->assertSame(254, mb_strlen($address(254)));
         $this->assertTrue(EmailAddress::isValid($address(254)));
@@ -82,7 +82,7 @@ class EmailAddressTest extends TestCase
         $this->assertSame(1, preg_match(self::FORMER, $address(255)), 'the former pattern had no cap');
 
         // Characters, not bytes: 254 two-byte letters are still 254 characters.
-        $wide = str_repeat('ü', 254 - strlen('@example.de')).'@example.de';
+        $wide = str_repeat('ü', 254 - strlen('@example.invalid')).'@example.invalid';
         $this->assertTrue(EmailAddress::isValid($wide));
         $this->assertFalse(EmailAddress::isValid('ü'.$wide));
     }
@@ -90,7 +90,7 @@ class EmailAddressTest extends TestCase
     public function test_100000_character_inputs_are_rejected_fast(): void
     {
         $inputs = [
-            'long local part' => str_repeat('a', 100000).'@example.de',
+            'long local part' => str_repeat('a', 100000).'@example.invalid',
             'many dots in the domain, trailing blank' => 'a@'.str_repeat('b.', 50000).' ',
             'only at signs' => str_repeat('@', 100000),
             'no at sign' => str_repeat('x', 100000),
