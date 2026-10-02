@@ -25,9 +25,10 @@ use Tests\AppFeatureTestCase;
  *      ends only after the deferred mail; without a length the client waited for its end.
  *
  * What only the container can show: that Apache and Caddy end the client's response at the
- * stated length. That is Apache's and Go's documented HTTP/1.1 behaviour; the evidence for this
- * change measures it with PHP's built-in web server, which, like mod_php, has no
- * fastcgi_finish_request().
+ * stated length, which is their HTTP/1.1 behaviour for a response with a Content-Length. PHP's
+ * built-in web server, which like mod_php has no fastcgi_finish_request(), shows the effect
+ * outside the container: with a mail server that takes two seconds, a known address answered
+ * two seconds later than an unknown one before this change, and as fast after it.
  */
 class ForgotPasswordTimingTest extends AppFeatureTestCase
 {
