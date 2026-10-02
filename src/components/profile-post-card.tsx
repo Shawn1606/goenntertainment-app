@@ -33,6 +33,7 @@ import { Icon } from '@/components/ui/icon';
 import { HeartFilledIcon, HeartIcon } from '@/components/ui/icons';
 import { TextField } from '@/components/ui/text-field';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
+import { commentGoneAfterDeleteError } from '@/domain/activity-social';
 import { formatRelativeShort } from '@/domain/date-format';
 import { useBrandSurface } from '@/hooks/use-theme';
 import { ApiError, api, type PostComment, type ProfilePost } from '@/lib/api';
@@ -158,6 +159,12 @@ export function ProfilePostCard({ post, isMine, onChanged, onDelete }: ProfilePo
       onChanged(res.data);
       feedback.left();
     } catch (err) {
+      // 404: the comment is gone - deleted earlier, or deleted now while the post is hidden by a
+      // block (F-13). It leaves the list; there is nothing to report.
+      if (err instanceof ApiError && commentGoneAfterDeleteError(err.status)) {
+        setComments((current) => (current ?? []).filter((row) => row.id !== comment.id));
+        return;
+      }
       feedback.failed();
       setError(err instanceof ApiError ? err.firstError() : 'Löschen hat nicht geklappt.');
     }

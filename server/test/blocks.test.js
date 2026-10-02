@@ -4,9 +4,10 @@
  * ## The denominator
  *
  * COVERAGE_ROUTES (R01-R20) are the cross-user routes the security review checked for block
- * enforcement; EXTRA_ROUTES (R21-R28) are further cross-user paths of F-13: joining an event, the
- * leaderboard, event comments and likes, participant lists and notifications. Every route has at least one row in ROWS below, or
- * is delegated to the backend that owns it (the leaderboard is Laravel's). The first test checks
+ * enforcement; EXTRA_ROUTES (R21-R29) are further cross-user paths of F-13: joining an event, the
+ * leaderboard, event comments and likes, participant lists, notifications and deleting one's own
+ * comment under the other person's post. Every route has at least one row in ROWS below, or is
+ * delegated to the backend that owns it (the leaderboard is Laravel's). The first test checks
  * that, checks that every Node row names a route the app really serves, and refuses a count of 0.
  *
  * ## What a block means (the same for every row)
@@ -16,14 +17,15 @@
  *   404     reads addressed to the other person or their things answer like "does not exist",
  *           with the same message, so the answer is no block oracle;
  *   refuse  writes that create contact keep their neutral answer (403 / 422);
- *   allow   withdrawing one's own action always works.
+ *   allow   withdrawing one's own action always works; where its answer would show the other
+ *           person's things, it answers 404 after the withdrawal ("allow + 404").
  *
  * ## The fixture
  *
  * A, B and C are creators. C is friends with both and owns group G with A and B; C hosts event
  * E_C, which A and B joined; A hosts E_A, B hosts E_B. Posts P_A, P_B, P_C; B likes P_A and E_A.
  * Live stories S_A, S_B. In G, C then A then B wrote a message; in E_C, A then B. A, B and C
- * commented on E_C, B on P_C. B follows A, and B's comment left A a notification (plus one from C).
+ * commented on E_C; B commented on P_C and P_A, A on P_B, C on P_A. B follows A, and B's comment left A a notification (plus one from C).
  * Then A blocks B through the real route. Content is written straight to the database, so no
  * row depends on the moderation mode; the routes under test are called over HTTP. C sees
  * everything and is the positive control of most rows: a hidden row that C still sees was hidden
@@ -63,7 +65,7 @@ const COVERAGE_ROUTES = [
   'R20 DELETE /api/users/:id/follow',
 ];
 
-/** Further cross-user paths of F-13, R21-R28. */
+/** Further cross-user paths of F-13, R21-R29. */
 const EXTRA_ROUTES = [
   'R21 POST /api/activities/:id/join',
   'R22 GET /api/leaderboard',
@@ -73,6 +75,7 @@ const EXTRA_ROUTES = [
   'R26 DELETE /api/activities/:id/like',
   'R27 GET /api/activities/:id',
   'R28 GET /api/notifications',
+  'R29 DELETE /api/comments/:id',
 ];
 
 /** Routes another backend owns, with the test that covers them there. */
@@ -200,6 +203,9 @@ before(async () => {
     await insert('INSERT INTO activity_comments (activity_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())', [f.eventC, id, body]);
   }
   await insert('INSERT INTO post_comments (post_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())', [f.postC, f.b, 'b-on-p-c']);
+  f.commentBonA = await insert('INSERT INTO post_comments (post_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())', [f.postA, f.b, 'b-on-p-a']);
+  f.commentAonB = await insert('INSERT INTO post_comments (post_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())', [f.postB, f.a, 'a-on-p-b']);
+  f.commentConA = await insert('INSERT INTO post_comments (post_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())', [f.postA, f.c, 'c-on-p-a']);
 
   // Stories, a follow, notifications for A (one from B, one from C).
   f.storyA = await story(f.a);
@@ -544,11 +550,26 @@ const ROWS = [
       assert.equal(marked.body.unread, 0, "the counter after marking one read counts B's notification");
     },
   },
+  {
+    id: 'R29', route: 'DELETE /api/comments/:id', semantics: 'allow + 404', who: "B deletes B's comment on P_A, A A's on P_B",
+    async run() {
+      for (const [who, commentId] of [[f.B, f.commentBonA], [f.A, f.commentAonB]]) {
+        const res = await call('DELETE', `/api/comments/${commentId}`, who.token);
+        assert.equal(await first('SELECT 1 AS ok FROM post_comments WHERE id = ?', [commentId]), null, 'the comment stays');
+        assert.equal(res.status, 404);
+        assert.equal(res.body.message, 'Diesen Beitrag gibt es nicht.');
+        assert.equal(res.body.data, undefined, "the answer carries the other person's post");
+      }
+      const control = await call('DELETE', `/api/comments/${f.commentConA}`, f.C.token);
+      assert.equal(control.status, 200, 'control: C');
+      assert.equal(control.body.data.id, f.postA, 'control: C gets the post back');
+    },
+  },
 ];
 
-test('denominator: each of the 28 cross-user routes listed above has a row or a delegated test', () => {
+test('denominator: each of the 29 cross-user routes listed above has a row or a delegated test', () => {
   assert.equal(COVERAGE_ROUTES.length, 20);
-  assert.equal(EXTRA_ROUTES.length, 8);
+  assert.equal(EXTRA_ROUTES.length, 9);
   const keys = [...COVERAGE_ROUTES, ...EXTRA_ROUTES];
   assert.equal(new Set(keys).size, keys.length, 'a route is listed twice');
 

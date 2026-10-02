@@ -986,7 +986,14 @@ router.delete('/comments/:id', requireAuth, rateLimit('content'), async (req, re
       Number(row.post_user_id) === Number(req.user.id);
     if (!mayDelete) throw new HttpError(403, 'Das darfst du nicht.');
 
+    // Deleting one's own comment always works, also after a block (F-13) ...
     await pool.query('DELETE FROM post_comments WHERE id = ?', [row.id]);
+    // ... but the answer shows the post only to someone it is not hidden from, like DELETE
+    // /posts/:id/like. Admins are left out: removing a reported comment is moderation, and the
+    // admin panel goes on to close the report after this answer.
+    if (!req.user.is_admin && (await hiddenByBlock(req.user.id, row.post_user_id))) {
+      throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    }
     res.json({ data: transformPost(req, await loadPost(row.post_id, req.user.id)) });
   } catch (err) {
     next(err);

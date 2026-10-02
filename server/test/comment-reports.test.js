@@ -171,6 +171,20 @@ test('the host is notified of a comment on their event, but not of their own (F-
   assert.equal(later.length, 1, 'the host was notified of their own comment');
 });
 
+test('an admin in a block relation with the post owner can still remove a comment (F-13)', async () => {
+  const author = await createUser('crepauthor', { accountType: 'creator' });
+  const writer = await createUser('crepwriter');
+  const admin = await createUser('crepadmin', { isAdmin: true });
+  const postId = await postOf(author.user.id);
+  const commentId = await postComment(postId, writer.user.id, 'gemeldet');
+  assert.equal((await call('POST', '/api/blocks', author.token, { user_id: admin.user.id })).status, 201);
+
+  // The moderation action deletes and then closes the report: it must not end in a 404.
+  const res = await call('DELETE', `/api/comments/${commentId}`, admin.token);
+  assert.equal(res.status, 200);
+  assert.equal(await first('SELECT 1 AS ok FROM post_comments WHERE id = ?', [commentId]), null);
+});
+
 test('server and app know the same notification types', () => {
   const file = path.join(import.meta.dirname, '..', '..', 'src', 'domain', 'notification.ts');
   const block = fs.readFileSync(file, 'utf8').match(/export const NOTIFICATION_TYPES = \[([^\]]*)\]/);
