@@ -10,11 +10,19 @@
  */
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
+import { NOTIFICATION_TYPES } from '../src/notifications.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { cleanup, createUser } from './support/fixtures.js';
+
+// TEST-ONLY: the AI moderation off for this process (read per request, src/moderation.js). The
+// comment route is called once below for its notification; whether moderation passes it is
+// not what that test is about.
+process.env.MODERATION_ENABLED = 'false';
 
 let base;
 let server;
@@ -132,4 +140,42 @@ test('admins may delete any post comment, and the comment list says so', async (
   assert.equal(list.body.data.find((c) => c.id === commentId)?.can_delete, true, 'the list hides the delete action from admins');
   assert.equal((await call('DELETE', `/api/comments/${commentId}`, admin.token)).status, 200);
   assert.equal(await first('SELECT 1 AS ok FROM post_comments WHERE id = ?', [commentId]), null);
+});
+
+/** The notifications of `userId`, newest first, straight from the table. */
+const notificationsOf = async (userId) => {
+  const [rows] = await pool.query('SELECT actor_id, type, ref_id, title, body FROM notifications WHERE user_id = ? ORDER BY id DESC', [userId]);
+  return rows;
+};
+
+test('the host is notified of a comment on their event, but not of their own (F-08)', async () => {
+  const host = await createUser('crephost', { accountType: 'creator' });
+  const guest = await createUser('crepguest');
+  const activityId = await event(host.user.id);
+
+  const sent = await call('POST', `/api/activities/${activityId}/comments`, guest.token, { body: 'Bin dabei!' });
+  assert.equal(sent.status, 201);
+
+  const forHost = (await notificationsOf(host.user.id)).filter((n) => n.type === 'activity_comment');
+  assert.equal(forHost.length, 1, 'the host got no notification about the comment');
+  assert.equal(Number(forHost[0].actor_id), guest.user.id);
+  assert.equal(Number(forHost[0].ref_id), activityId);
+  assert.equal(forHost[0].body, 'Bin dabei!');
+
+  // Through the API the host sees it in the list (the bell's data).
+  const listed = await call('GET', '/api/notifications', host.token);
+  assert.ok(listed.body.data.some((n) => n.type === 'activity_comment' && n.ref_id === activityId));
+
+  assert.equal((await call('POST', `/api/activities/${activityId}/comments`, host.token, { body: 'Willkommen' })).status, 201);
+  const later = (await notificationsOf(host.user.id)).filter((n) => n.type === 'activity_comment');
+  assert.equal(later.length, 1, 'the host was notified of their own comment');
+});
+
+test('server and app know the same notification types', () => {
+  const file = path.join(import.meta.dirname, '..', '..', 'src', 'domain', 'notification.ts');
+  const block = fs.readFileSync(file, 'utf8').match(/export const NOTIFICATION_TYPES = \[([^\]]*)\]/);
+  const app = block ? [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+  assert.ok(app.length > 0, 'NOTIFICATION_TYPES not found in src/domain/notification.ts');
+  assert.deepEqual([...app].sort(), [...NOTIFICATION_TYPES].sort());
+  for (const type of NOTIFICATION_TYPES) assert.ok(type.length <= 20, `${type} does not fit notifications.type`);
 });

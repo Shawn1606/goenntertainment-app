@@ -8,7 +8,7 @@ import { abilitiesFor } from '../accounts.js';
 import { accountTiersEnabled, hideImportedSql } from '../features.js';
 import { awardActivityPoints } from '../rewards.js';
 import { mediaUrl, publicBase } from '../media.js';
-import { notifyFollowers } from '../notifications.js';
+import { notifyFollowers, notifyQuietly } from '../notifications.js';
 import { blockExistsBetween, notBlockedWith, transformUser } from '../people.js';
 import { logError } from '../log.js';
 import { singleUpload } from '../uploads.js';
@@ -784,8 +784,9 @@ router.delete('/:id/join', requireAuth, rateLimit('state'), async (req, res, nex
 //
 // Dasselbe Muster wie bei Beitraegen (routes/profile.js). Alle Pfade haben zwei
 // Segmente (/:id/like, /:id/comments, …) und kommen '/history' und '/saved'
-// deshalb nicht in die Quere. Benachrichtigungen gibt es hier bewusst keine:
-// Die Glocke ist in der App gerade ausgeblendet.
+// deshalb nicht in die Quere. A new comment leaves the host a notification row (F-08), like a
+// comment under a post; the bell that shows it is currently hidden in the app (a product
+// decision), so the row waits there until it is shown.
 
 /** Das Event zu :id – oder ein 404. Traegt den Host fuer Block- und Rechtepruefung. */
 async function loadActivityOr404(id) {
@@ -950,6 +951,18 @@ router.post('/:id/comments', requireAuth, rateLimit('comment'), async (req, res,
       'INSERT INTO activity_comments (activity_id, user_id, body, created_at) VALUES (?, ?, ?, NOW())',
       [activity.id, req.user.id, body],
     );
+
+    // The host hears about it (F-08): never about their own comment (notify skips the actor),
+    // and a host in a block relation never gets here (refused above). After the insert and
+    // without failing it, like every notification (notifications.js).
+    await notifyQuietly({
+      userId: activity.user_id,
+      actorId: req.user.id,
+      type: 'activity_comment',
+      refId: activity.id,
+      title: `${req.user.name} hat dein Event kommentiert`,
+      body,
+    });
 
     const row = await first(
       `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}

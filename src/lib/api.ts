@@ -765,7 +765,7 @@ export type PublicProfile = {
  * Bewusst als String-Union UND mit Rückfall im Symbol-Mapping: Ein neuerer
  * Server darf eine Sorte mehr schicken, ohne dass die Liste hier leer bleibt.
  */
-export type NotificationType = 'story' | 'activity' | 'post' | 'like' | 'comment' | 'follow';
+export type NotificationType = 'story' | 'activity' | 'post' | 'like' | 'comment' | 'follow' | 'activity_comment';
 
 /** Eine Benachrichtigung (GET /api/notifications). */
 export type AppNotification = {

@@ -73,3 +73,10 @@ test('eine unbekannte Sorte ist nicht antippbar', () => {
 
 // Der Zähler an der Glocke wird in `unread-badge.test.ts` geprüft – es ist
 // derselbe wie der an einem Chat.
+
+test('a comment on my event leads to the event and shows the chat icon (F-08)', () => {
+  assert.deepEqual(notificationTarget(note('activity_comment', { ref: 42 }), me), { kind: 'activity', id: 42 });
+  assert.equal(notificationTarget(note('activity_comment', { ref: null }), me), null);
+  assert.equal(notificationIcon('activity_comment'), 'chat');
+  assert.ok((NOTIFICATION_TYPES as readonly string[]).includes('activity_comment'), 'the app does not know the type');
+});

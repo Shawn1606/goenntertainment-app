@@ -42,8 +42,12 @@ import { notBlockedWith } from './people.js';
  */
 export const VISIBLE_NOTIFICATION = `(n.actor_id IS NULL OR ${notBlockedWith('n.actor_id')})`;
 
-/** Sorten, die es gibt. Neue Sorte = Zeile hier und ein Symbol in der App. */
-export const NOTIFICATION_TYPES = ['story', 'activity', 'post', 'like', 'comment', 'follow'];
+/**
+ * Sorten, die es gibt. Neue Sorte = Zeile hier und ein Symbol in der App. `activity_comment`: a
+ * comment on the recipient's event (F-08). Keys fit notifications.type (VARCHAR(20)). Named
+ * mirror: NOTIFICATION_TYPES in src/domain/notification.ts (test/comment-reports.test.js).
+ */
+export const NOTIFICATION_TYPES = ['story', 'activity', 'post', 'like', 'comment', 'follow', 'activity_comment'];
 
 /** So viele Empfaenger pro INSERT. */
 const CHUNK = 200;
