@@ -1,6 +1,6 @@
 /**
- * A 401 during a session ends it on this device (F-20; the review's missed finding on in-session
- * 401 handling). The server answers 401 once a token has expired or was revoked - by a password
+ * A 401 during a session ends it on this device (F-20).
+ * The server answers 401 once a token has expired or was revoked - by a password
  * reset, a password or e-mail change or a two-factor change on another device. Without this the
  * app kept showing a signed-in state that the server no longer accepted.
  *

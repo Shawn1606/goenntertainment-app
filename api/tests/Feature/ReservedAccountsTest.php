@@ -81,7 +81,7 @@ class ReservedAccountsTest extends AppFeatureTestCase
      * Spellings of the system domain that look different but that users.email treats as the same
      * address (it ignores accents and width and expands œ to oe). The seed and the import find
      * their accounts with a plain `email = ?`, so such an address would be adopted as the system
-     * account (AUTH-1).
+     * account.
      *
      * @return array<string, array{string, string}> the variant and the plain address it equals
      */

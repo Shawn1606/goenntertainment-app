@@ -99,7 +99,7 @@ class TwoFactorHardeningTest extends AppFeatureTestCase
         $this->assertSame($mailsBefore, Mail::sent(TwoFactorCode::class)->count());
     }
 
-    /** At the cap no step-up code is mailed either (review AUTH-3). */
+    /** At the cap no step-up code is mailed either. */
     public function test_at_the_cap_no_step_up_code_is_mailed(): void
     {
         Mail::fake();
@@ -121,7 +121,7 @@ class TwoFactorHardeningTest extends AppFeatureTestCase
         $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', TwoFactor::PURPOSE_CONFIRM)->count());
     }
 
-    /** At the cap no setup code is mailed either, even with the right password (review AUTH-3). */
+    /** At the cap no setup code is mailed either, even with the right password. */
     public function test_at_the_cap_no_setup_code_is_mailed(): void
     {
         Mail::fake();

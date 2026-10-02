@@ -10,8 +10,8 @@ use Illuminate\Support\Facades\RateLimiter;
 use Tests\AppFeatureTestCase;
 
 /**
- * The locks that make a check and its count one step (review findings RL-2 and AUTH-4;
- * ConcurrentCapsTest shows what they are for): a request that cannot get its lock in time
+ * The locks that make a check and its count one step (ConcurrentCapsTest
+ * shows what they are for): a request that cannot get its lock in time
  * (config ratelimits.lock-wait) gets the limiters' 429 answer, and nothing is checked or counted.
  * Another request holding the lock is simulated by a row in cache_locks.
  */

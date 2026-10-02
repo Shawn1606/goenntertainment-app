@@ -10,8 +10,8 @@ use Tests\AppFeatureTestCase;
 use Tests\Support\ParallelServers;
 
 /**
- * The per-account caps hold EXACTLY when requests arrive at the same time (REVIEW F-19; review
- * findings RL-2 and AUTH-4). One request after the other, a cap is easy to keep; what counts is
+ * The per-account caps hold EXACTLY when requests arrive at the same time (REVIEW F-19).
+ * One request after the other, a cap is easy to keep; what counts is
  * a burst, where many PHP processes look at the same counter at once and each must see the
  * count of the ones before it.
  *

@@ -96,7 +96,7 @@ final class ReservedAccounts
 
     /**
      * Whether the address's domain is a reserved one or below it, as the database compares
-     * addresses (AUTH-1). The seed and the import find their accounts with a plain `email = ?`,
+     * addresses. The seed and the import find their accounts with a plain `email = ?`,
      * which compares under users.email's collation: it ignores case and accents, treats
      * full-width letters as their plain ones and expands ligatures such as œ to oe. A byte
      * comparison misses those, so an address that only looks different would be accepted and

@@ -162,8 +162,8 @@ class RouteThrottleCoverageTest extends TestCase
     }
 
     /**
-     * `throttle` is the variant that checks and counts each counter as one step (review RL-2:
-     * the stock middleware lets a burst past a per-account cap), and no route names the stock
+     * `throttle` is the variant that checks and counts each counter as one step (the
+     * stock middleware lets a burst past a per-account cap), and no route names the stock
      * class directly, which would step around the alias.
      */
     public function test_every_limiter_checks_and_counts_as_one_step(): void

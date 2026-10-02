@@ -48,7 +48,7 @@ class TokenRevocationTest extends AppFeatureTestCase
 
     /**
      * A sign-in that has passed the password and waits for the second factor is a session in the
-     * making, and a credential change ends it too (review AUTH-2): the old challenge does not
+     * making, and a credential change ends it too: the old challenge does not
      * turn into a token, even with a valid code. The account uses an authenticator app, so a
      * valid code is at hand.
      */

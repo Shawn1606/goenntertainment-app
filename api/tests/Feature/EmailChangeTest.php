@@ -168,7 +168,7 @@ class EmailChangeTest extends AppFeatureTestCase
         $this->withBearer($tokenA)->getJson('/api/user')->assertOk();
     }
 
-    /** A sign-in waiting for its second factor ends with the change too (review AUTH-2). */
+    /** A sign-in waiting for its second factor ends with the change too. */
     public function test_the_change_ends_open_two_factor_sign_ins(): void
     {
         Mail::fake();
@@ -258,7 +258,7 @@ class EmailChangeTest extends AppFeatureTestCase
 
     /**
      * A spelling of the system domain that users.email treats as the same address is refused
-     * like the domain itself (AUTH-1; the cases: ReservedAccountsTest::collationVariants).
+     * like the domain itself (the cases: ReservedAccountsTest::collationVariants).
      */
     #[DataProviderExternal(ReservedAccountsTest::class, 'collationVariants')]
     public function test_spellings_the_database_treats_as_the_system_domain_are_refused(string $email, string $plain): void
