@@ -641,7 +641,9 @@ echo "events: $(q 'SELECT COUNT(*) FROM information_schema.EVENTS')"
 echo "event: $(q "SELECT CONCAT_WS('|', EVENT_SCHEMA, EVENT_NAME, STATUS, INTERVAL_VALUE, INTERVAL_FIELD, DEFINER, EVENT_DEFINITION) FROM information_schema.EVENTS")"
 echo "shortened: $(q "SET GLOBAL binlog_expire_logs_seconds = 4; ALTER EVENT $MYSQL_DATABASE.binlog_rotate ON SCHEDULE EVERY 2 SECOND")"
 marker="binlog-marker-$(od -An -tx1 -N8 /dev/urandom | tr -d ' \n')"
-echo "row: $(q "CREATE TABLE $MYSQL_DATABASE.binlog_marker (v VARCHAR(64)); INSERT INTO $MYSQL_DATABASE.binlog_marker VALUES ('$marker'); DELETE FROM $MYSQL_DATABASE.binlog_marker")"
+# The marker is an account name written and removed again: account statements go to the binary log
+# like a row that is written and deleted, so the check needs no table of its own.
+echo "row: $(q "CREATE USER '$marker'@'localhost'; DROP USER '$marker'@'localhost'")"
 holding() { grep -l -F "$marker" /var/lib/mysql/binlog.[0-9]* 2>/dev/null | wc -l; }
 echo "files with the row: $(holding)"
 gone=never
