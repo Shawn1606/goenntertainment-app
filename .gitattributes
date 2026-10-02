@@ -1,0 +1,9 @@
+# Files that Linux containers read straight from the working tree (bind mounts of
+# deploy/docker-compose.yml) or that Linux tools parse keep LF line ends, also in a Windows
+# checkout with core.autocrlf=true: bash stops at a carriage return ("$'\r': command not found").
+*.sh text eol=lf
+deploy/Caddyfile text eol=lf
+deploy/scripts/** text eol=lf
+deploy/test/** text eol=lf
+deploy/ci.env text eol=lf
+deploy/.env.example text eol=lf
