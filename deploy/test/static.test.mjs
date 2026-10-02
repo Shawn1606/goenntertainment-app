@@ -2,7 +2,8 @@
 // them, the Caddyfile as Caddy adapts it, the env files and the helper scripts. They need Docker
 // (the CLI and the pinned mysql and caddy images) but no network and no running stack.
 //
-//   node --test deploy/test/static.test.mjs        (npm run test:deploy runs every deploy test)
+//   node --test deploy/test/static.test.mjs        (npm run test:deploy runs every deploy test but
+//                                                    the stack test, npm run test:deploy:stack)
 //
 // DEPLOY_DIR=<folder> runs the same checks against another deploy/ folder (lib.mjs).
 import { test } from 'node:test';
@@ -20,7 +21,8 @@ import {
 
 const composeText = () => readText(path.join(DEPLOY_DIR, COMPOSE_FILE));
 const base = () => renderConfig({ profiles: ['tools'] });
-const ci = () => renderConfig({ files: [COMPOSE_FILE, CI_OVERRIDE], profiles: ['tools'] });
+// With the stack test's probe (profile test), so its image and settings are checked as well.
+const ci = () => renderConfig({ files: [COMPOSE_FILE, CI_OVERRIDE], profiles: ['tools', 'test'] });
 const ciValues = () => envFileValues(CI_ENV);
 const posix = (p) => String(p).replaceAll('\\', '/');
 
@@ -424,10 +426,14 @@ test('F-45: every service rotates its log with the required limits', () => {
   const values = ciValues();
   const services = servicesOf(base());
   assert.ok(services.length > 0);
-  const wrong = services.filter(([, s]) => s.logging?.driver !== 'local'
+  // The CI override's own services (the mail catcher, the stack test's probe) as well.
+  const ciOnly = servicesOf(ci()).filter(([name]) => !base().services[name]);
+  const wrong = [...services, ...ciOnly].filter(([, s]) => s.logging?.driver !== 'local'
     || s.logging.options?.['max-size'] !== values.LOG_MAX_SIZE
     || s.logging.options?.['max-file'] !== values.LOG_MAX_FILES).map(([n]) => n);
-  console.log(`logging: ${services.length} services checked (${services.filter(([, s]) => s.restart).length} long-running)`);
+  console.log(`logging: ${services.length} services checked (${services.filter(([, s]) => s.restart).length} long-running), `
+    + `and ${ciOnly.length} of the CI override (${ciOnly.map(([n]) => n).join(', ')})`);
+  assert.ok(ciOnly.length > 0, 'no service of the CI override found');
   assert.deepEqual(wrong, []);
 });
 
@@ -755,6 +761,33 @@ test('the CI override closes every network, publishes no port and keeps the mode
   assert.equal(config.services.node.environment.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9');
   assert.equal(config.services.api.environment.MAIL_HOST, 'mailpit');
   assert.deepEqual(Object.keys(config.services.mailpit.networks), ['app']);
+});
+
+test('every deploy test file is run by exactly one npm script: test:deploy (static) or test:deploy:stack', () => {
+  const scripts = JSON.parse(readText(path.join(REPO_ROOT, 'package.json'))).scripts ?? {};
+  const globs = Object.fromEntries(['test:deploy', 'test:deploy:stack'].map((name) => [
+    name, [...String(scripts[name] ?? '').matchAll(/"?(deploy\/test\/[^\s"]+\.test\.mjs)"?/g)].map((m) => m[1]),
+  ]));
+  for (const [name, list] of Object.entries(globs)) assert.ok(list.length > 0, `no deploy test glob in the npm script ${name}`);
+  const files = fs.readdirSync(path.join(REPO_ROOT, 'deploy', 'test')).filter((f) => f.endsWith('.test.mjs')).sort();
+  assert.ok(files.length > 0, 'no deploy test file found');
+  const runBy = (file) => Object.keys(globs).filter((name) => globs[name].some((g) => path.posix.matchesGlob(`deploy/test/${file}`, g)));
+  console.log(`deploy test files: ${files.length} (${files.map((f) => `${f} -> ${runBy(f).join(', ') || 'none'}`).join('; ')})`);
+  assert.deepEqual(files.filter((f) => runBy(f).length !== 1), [], 'files run by no script or by both');
+  assert.deepEqual(runBy('stack.test.mjs'), ['test:deploy:stack'], 'the stack test (it builds and starts the stack) runs only on its own');
+});
+
+test("the stack test's probe is a visitor on the edge network only, and only with the test profile", () => {
+  const probe = ci().services.probe;
+  assert.ok(probe, 'no probe service in the CI override');
+  assert.deepEqual(probe.profiles, ['test'], 'the probe must never start with a plain `docker compose up`');
+  assert.deepEqual(Object.keys(probe.networks ?? {}), ['edge'], 'the probe reaches caddy only');
+  assert.equal(base().services.probe, undefined, 'the production compose has no probe');
+  assert.deepEqual(probe.entrypoint, ['node', '/checks/probe.mjs']);
+  const checks = (probe.volumes ?? []).find((v) => v.target === '/checks');
+  assert.ok(checks && checks.read_only === true && /\/deploy\/test$/.test(posix(checks.source)), 'deploy/test mounted read-only at /checks');
+  assert.ok(probe.read_only === true && (probe.cap_drop ?? []).includes('ALL') && probe.user === 'node', 'probe hardening');
+  assert.equal(probe.environment.DOMAIN, ciValues().DOMAIN);
 });
 
 test('hardening: no new privileges anywhere, and no capabilities for api, node and the jobs', () => {

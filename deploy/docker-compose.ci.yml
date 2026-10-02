@@ -4,12 +4,16 @@
 # What it changes, and why:
 #   - every network is internal: the test stack reaches nothing outside this machine, not even
 #     the internet (no ACME: DOMAIN=localhost makes Caddy use its internal CA);
-#   - caddy publishes no host port: tests reach it over the edge network;
+#   - caddy publishes no host port: tests reach it over the edge network, from the `probe`
+#     service below;
 #   - Mailpit catches every mail (no code ever lands in a log);
 #   - node's moderation client points at a closed local port;
 #   - the backups go to a throw-away volume instead of BACKUP_DIR.
+# The two services this file adds (mailpit, probe) rotate their logs like every other container.
 #
-# Start command and settings for a local run: see the header of deploy/ci.env.
+# Start command and settings for a local run: see the header of deploy/ci.env. The stack test
+# (deploy/test/stack.test.mjs, `npm run test:deploy:stack`) builds, starts, checks and removes the
+# whole stack with this file.
 
 services:
   caddy:
@@ -49,6 +53,36 @@ services:
       service: mailpit
     ports: !reset []
     networks: [app]
+    security_opt: ['no-new-privileges:true']
+    logging:
+      driver: local
+      options:
+        max-size: ${LOG_MAX_SIZE:?LOG_MAX_SIZE is missing in the env file (see deploy/ci.env)}
+        max-file: ${LOG_MAX_FILES:?LOG_MAX_FILES is missing in the env file (see deploy/ci.env)}
+
+  # The visitor's side of the stack test (deploy/test/probe.mjs): it sits on the edge network next
+  # to caddy and reaches caddy only, so its requests arrive at caddy the way a visitor's do, from
+  # the probe's own address. Only with `--profile test`. The same Node image and digest as
+  # server/Dockerfile (deploy/test/static.test.mjs checks that every copy of a pin agrees).
+  probe:
+    profiles: [test]
+    image: node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
+    entrypoint: ['node', '/checks/probe.mjs']
+    command: ['--idle']
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is missing in the env file (see deploy/ci.env)}
+    volumes:
+      - ./test:/checks:ro
+    networks: [edge]
+    user: node
+    read_only: true
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging:
+      driver: local
+      options:
+        max-size: ${LOG_MAX_SIZE:?LOG_MAX_SIZE is missing in the env file (see deploy/ci.env)}
+        max-file: ${LOG_MAX_FILES:?LOG_MAX_FILES is missing in the env file (see deploy/ci.env)}
 
 volumes:
   ci-backups:
