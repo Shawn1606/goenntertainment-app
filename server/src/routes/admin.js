@@ -7,7 +7,7 @@ import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEviden
 import { rateLimit } from '../rate-limit.js';
 import { Validator, HttpError, isAlphaDash } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
-import { MSG_RESERVED_USERNAME, isReservedUsername } from '../reserved-accounts.js';
+import { MSG_RESERVED_USERNAME, isReservedUsernameInDatabase } from '../reserved-accounts.js';
 import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
 import { transformRequest } from './upgrades.js';
 import { mediaUrl, publicBase } from '../media.js';
@@ -197,10 +197,11 @@ router.patch('/users/:id', requireAuth, rateLimit('admin'), requireAdmin, async 
       v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
     } else if (
       username.toLowerCase() !== String(user.username ?? '').toLowerCase() &&
-      isReservedUsername(username)
+      (await isReservedUsernameInDatabase(pool, username))
     ) {
       // The system's own names (shared/reserved-accounts.json) are not handed to another account,
-      // not even by an admin (F-05); an account that already has one keeps it.
+      // not even by an admin (F-05); an account that already has one keeps it. Compared the way
+      // the database compares usernames, so a lookalike of a reserved name is refused as well.
       v.add('username', MSG_RESERVED_USERNAME);
     } else {
       // Auch fuer Admins: Umbenennen ist genau der Weg, auf dem ein anstoessiger

@@ -53,6 +53,51 @@ test('an admin cannot rename an account to a reserved username, in any case', as
   assert.equal((await first('SELECT username FROM users WHERE id = ?', [user.id])).username, user.username);
 });
 
+/**
+ * Lookalikes of reserved names that users.username (utf8mb4_unicode_ci) compares as equal to them:
+ * an accented letter, a combining accent, full-width letters, the ligature "œ" for "oe".
+ */
+const RESERVED_LOOKALIKES = ['Ádmin', 'bówling-goettingen', 'ａｄｍｉｎ', 'nœrgelbuff'];
+
+test('an admin cannot rename an account to a lookalike of a reserved username either', async () => {
+  // Today the format rule (ASCII letters, digits, "-" and "_") refuses these first. The reserved
+  // check must not depend on that: it compares the way the database does (next test).
+  const admin = await createUser('renameadmin', { isAdmin: true });
+  const { user } = await createUser('renametarget');
+
+  for (const name of RESERVED_LOOKALIKES) {
+    const res = await rename(admin.token, user.id, name);
+    assert.equal(res.status, 422, name);
+  }
+
+  assert.equal((await first('SELECT username FROM users WHERE id = ?', [user.id])).username, user.username);
+});
+
+test('the reserved-name check of the rename compares the way users.username does', async () => {
+  // A namespace import: the database check exists only since the rename uses it.
+  const reserved = await import('../src/reserved-accounts.js');
+  assert.equal(typeof reserved.isReservedUsernameInDatabase, 'function', 'reserved-accounts.js exports isReservedUsernameInDatabase');
+
+  // The check names the column's collation itself; it must be the one schema.sql gives the column.
+  const column = await first(
+    `SELECT collation_name AS name FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'username'`,
+  );
+  assert.equal(column?.name, 'utf8mb4_unicode_ci');
+
+  const refused = [];
+  for (const name of ['admin', 'ADMIN', ' Admin ', 'freibad-goettingen', ...RESERVED_LOOKALIKES]) {
+    if (!(await reserved.isReservedUsernameInDatabase(pool, name))) refused.push(name);
+  }
+  assert.deepEqual(refused, [], 'reserved names (or lookalikes) the check let through');
+
+  const free = [];
+  for (const name of ['administrator', 'admin2', 'bowling_goettingen', 'bowlinggoettingen', '', null]) {
+    if (await reserved.isReservedUsernameInDatabase(pool, name)) free.push(name);
+  }
+  assert.deepEqual(free, [], 'free names the check refused');
+});
+
 test('other names still work, and an account keeps the reserved name it has', async () => {
   const admin = await createUser('renameadmin', { isAdmin: true });
   const { user } = await createUser('renametarget');
