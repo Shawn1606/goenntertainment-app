@@ -9,8 +9,9 @@
 #
 # - 8.4, weil lokal (Herd) dieselbe Version läuft: Was am PC geht, geht hier.
 # - Apache with PHP built in (mod_php) is ONE process: no second web server next to php-fpm.
-#   Apache serves no uploads: the edge (Caddy, deploy/Caddyfile) serves those as static files,
-#   and this image refuses an upload folder under its docroot (docker/apache.conf).
+#   Apache serves no uploads: the edge (Caddy, deploy/Caddyfile, with its file server
+#   deploy/Caddyfile.media) serves those as static files, and this image refuses an upload folder
+#   under its docroot (docker/apache.conf).
 # - Laravel bringt in public/.htaccess die Umleitungen für Apache mit – inklusive
 #   der Zeile, die den `Authorization`-Kopf (das Anmelde-Token) an PHP weiterreicht.
 #   Ohne sie wäre jede Anfrage der App „nicht angemeldet".

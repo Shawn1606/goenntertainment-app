@@ -1531,8 +1531,9 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
     ein Einmal-Container das Admin-Konto an, bevor die Domain erreichbar ist; Caddy startet erst,
     wenn es ein Admin-Konto gibt. Die Schritte stehen im Runbook unter „First start".
   - Die Uploads liegen nicht mehr in `deploy/storage/` und `deploy/storage-private/`, sondern in
-    den benannten Volumes `uploads` und `private-media`. Die öffentlichen Bilder liefert Caddy
-    direkt aus; Laravel und PHP berühren sie nie. Lief ein Server schon mit den alten Ordnern,
+    den benannten Volumes `uploads` und `private-media`. Die öffentlichen Bilder liefert ein
+    eigener kleiner Dateiserver (`media`) hinter Caddy aus, der weder Schlüssel noch Passwörter
+    kennt; Laravel und PHP berühren sie nie. Lief ein Server schon mit den alten Ordnern,
     steht im Runbook unter „Updating", wie die Dateien einmal umziehen.
   - Laravel läuft im Container ohne root-Rechte und hört deshalb auf Port 8080 statt 80.
   - Jede Nacht um 02:30 UTC sichert der Dienst `backup` die Datenbank und die Uploads nach

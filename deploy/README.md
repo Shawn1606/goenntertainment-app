@@ -18,7 +18,8 @@ Contents: [What runs](#what-runs) · [Prerequisites](#prerequisites) · [Setting
 ## What runs
 
 ```
-Internet ─► caddy :80/:443   HTTPS, security headers, public uploads (read-only files)
+Internet ─► caddy :80/:443   HTTPS, security headers, the upload allow-list
+              ├─► media :8080  public uploads (read-only files; holds no secrets)
               └─► api :8080  Laravel: sign-up, sign-in, account, two-factor, password reset
                     └─► node :8000   Node: everything Laravel does not answer itself
             db    MySQL 8.4 ◄── api, node, and the backup, admin-gate and seed services
@@ -26,7 +27,8 @@ Internet ─► caddy :80/:443   HTTPS, security headers, public uploads (read-o
 
 | Service | Image | What it does | Networks | Volumes | Lifetime |
 |---|---|---|---|---|---|
-| `caddy` | `caddy:2-alpine` (pinned) | the only service with host ports; gets and renews the certificate for `<DOMAIN>`; sends the security headers; serves public uploads from a read-only volume; forwards everything else to `api` | edge | `uploads` (read-only), `caddy-data`, `caddy-config`, `deploy/Caddyfile` | long-running; starts only after `admin-gate` succeeded and `api` is healthy |
+| `caddy` | `caddy:2-alpine` (pinned) | the only service with host ports; gets and renews the certificate for `<DOMAIN>`; sends the security headers; passes the allowed upload paths to `media` and everything else to `api` | edge, media | `caddy-data`, `caddy-config`, `deploy/Caddyfile` | long-running; starts only after `admin-gate` succeeded and `api` is healthy |
+| `media` | `caddy:2-alpine` (pinned) | serves the public uploads as plain files, for caddy only (`deploy/Caddyfile.media`); runs as `nobody`, read-only, without settings or keys | media | `uploads` (read-only), `deploy/Caddyfile.media` | long-running |
 | `api` | built from `api/Dockerfile` | Laravel on port 8080 as the user `www-data`; answers its own routes and forwards the rest to Node; sends mail over SMTP | edge, app | none | long-running |
 | `node` | built from `server/Dockerfile` | the Node backend on port 8000 as the user `node` (uid 1000); applies its schema step before it listens; stores uploads; calls the moderation provider | app, outbound | `uploads`, `private-media` | long-running |
 | `db` | `mysql:8.4` (pinned) | the database `goenntertainment`; on the very first start (empty volume) it loads `server/schema.sql` | app, data | `db-data` | long-running |
@@ -40,6 +42,7 @@ Networks (the compose file's footer has the details):
 | Network | Who is on it | Way out |
 |---|---|---|
 | edge | caddy (fixed address `<APP_NET_PREFIX>.10`), api | yes: certificates for caddy, SMTP for api |
+| media | caddy, media | none (internal) |
 | app | api (fixed address `<APP_NET_PREFIX>.140`), node, db | none (internal) |
 | data | db, backup, admin-gate, seed | none (internal) |
 | outbound | node | yes: the moderation provider |
@@ -47,12 +50,18 @@ Networks (the compose file's footer has the details):
 caddy reaches neither node nor db, and db has no way out. Laravel trusts the client address only
 from caddy's fixed address, Node only from api's (F-31).
 
+Why the uploads have a file server of their own: Caddy follows symbolic links, and it has no
+setting to refuse them. A link planted in the `uploads` volume under an allowed name would make
+the server that reads the volume hand out whatever the link points to. caddy holds the
+certificate and account keys (`caddy-data`), so it mounts no volume that another service writes;
+`media` has nothing to hand out but the uploads themselves.
+
 Volumes (named `goenntertainment_<name>` on the server; `docker volume ls`):
 
 | Volume | Holds | Notes |
 |---|---|---|
 | `db-data` | the database, including MySQL's binary log | the one part nothing else can rebuild |
-| `uploads` | public images: avatars, banners, posts, profile banners | node writes, caddy serves read-only |
+| `uploads` | public images: avatars, banners, posts, profile banners | node writes, media serves read-only (behind caddy) |
 | `private-media` | ban and moderation evidence, story images | node only (and the backup, read-only); never mounted into a web server |
 | `caddy-data` | certificates and caddy's ACME account | lost: caddy requests new certificates, which the certificate authority rate-limits |
 | `caddy-config` | caddy's own saved configuration | |
@@ -78,6 +87,7 @@ The mobile app is not a container: it is built with EAS and carries the server a
 |---|---|
 | `deploy/docker-compose.yml` | the production stack, the only compose file for a server |
 | `deploy/Caddyfile` | HTTPS, security headers, body limits, the upload rule, the access log |
+| `deploy/Caddyfile.media` | the media service: the same upload rule, plain files from the `uploads` volume |
 | `deploy/.env.example` | the template for `deploy/.env`, with who decides each setting |
 | `deploy/scripts/preflight.sh` | checks `deploy/.env` and `<BACKUP_DIR>` before a start |
 | `deploy/scripts/backup.sh`, `deploy/scripts/admin-gate.sh`, `deploy/scripts/db-entrypoint.sh` | the scripts of the backup, admin-gate and db services |
@@ -430,6 +440,15 @@ of its own, not into the new `<BACKUP_DIR>`: the backup service deletes sets the
      tar -xzf /backups/uploads-$stamp.tar.gz -C /storage --strip-components=1 uploads
      tar -xzf /backups/uploads-$stamp.tar.gz -C /storage-private --strip-components=1 private-media
      chown -R 1000:1000 /storage /storage-private"
+   ```
+
+   The archive keeps symbolic links as links. Node writes only regular files into both volumes,
+   so a link did not come from the app: list them, expect nothing, and treat any link as a sign
+   that someone wrote into the volume outside the app (remove it, and find out how it got there
+   before going live again):
+
+   ```bash
+   docker compose run --rm --no-deps storage-init find /storage /storage-private -type l
    ```
 
 5. Start everything and check:

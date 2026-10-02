@@ -3,6 +3,7 @@
 # checkout with core.autocrlf=true: bash stops at a carriage return ("$'\r': command not found").
 *.sh text eol=lf
 deploy/Caddyfile text eol=lf
+deploy/Caddyfile.media text eol=lf
 deploy/scripts/** text eol=lf
 deploy/test/** text eol=lf
 deploy/ci.env text eol=lf

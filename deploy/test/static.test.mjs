@@ -262,18 +262,34 @@ test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> n
     assert.equal(services.api.environment.NODE_FALLBACK_URL, 'http://node:8000');
     assert.equal(services.api.environment.DB_HOST, 'db');
     assert.equal(services.node.environment.DB_HOST, 'db');
-    const dials = caddyHandlers(caddyAdapt(path.join(DEPLOY_DIR, 'Caddyfile')))
-      .filter((h) => h.handler === 'reverse_proxy')
-      .flatMap((h) => (h.upstreams ?? []).map((u) => u.dial));
+    // Two upstreams: the allow-listed uploads go to the media file server, everything else to
+    // Laravel (the last route, without a matcher).
+    const routes = siteRoutes();
+    const dials = caddyHandlers(routes).filter((h) => h.handler === 'reverse_proxy').flatMap((h) => (h.upstreams ?? []).map((u) => u.dial));
     console.log(`caddy upstreams: ${dials.join(', ')}`);
-    assert.equal(dials.length, 1, 'caddy has exactly one upstream');
-    assert.equal(dials[0].split(':')[0], 'api', "caddy's upstream is the Laravel service");
+    assert.deepEqual(dials.map((d) => d.split(':')[0]).sort(), ['api', 'media'], "caddy's upstreams are the Laravel service and the media file server");
+    const last = routes.at(-1);
+    assert.equal(last.match, undefined, 'the last route takes every request the others left');
+    assert.deepEqual(caddyHandlers(last).filter((h) => h.handler === 'reverse_proxy').flatMap((h) => h.upstreams.map((u) => u.dial.split(':')[0])), ['api'], 'everything else goes to Laravel');
   });
 });
 
+/** The routes inside the site block of deploy/Caddyfile (adapted). */
+function siteRoutes() {
+  return caddyAdapt().apps.http.servers.srv0.routes[0].handle[0].routes;
+}
+
+/** The reverse_proxy handlers of the edge, by upstream service name: { api: [...], media: [...] }. */
+function edgeProxies() {
+  const out = {};
+  for (const h of caddyHandlers(caddyAdapt()).filter((x) => x.handler === 'reverse_proxy')) {
+    for (const u of h.upstreams ?? []) (out[u.dial.split(':')[0]] ??= []).push(h);
+  }
+  return out;
+}
+
 test('F-28: caddy and the api healthcheck use the port of the non-root Apache (8080)', () => {
-  const dials = caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'reverse_proxy').flatMap((h) => h.upstreams.map((u) => u.dial));
-  assert.deepEqual(dials, ['api:8080']);
+  assert.deepEqual((edgeProxies().api ?? []).flatMap((h) => h.upstreams.map((u) => u.dial)), ['api:8080']);
   assert.ok(healthTest(base().services.api).join(' ').includes('http://127.0.0.1:8080/api/health'), 'api healthcheck');
 });
 
@@ -326,7 +342,7 @@ test('F-18: no healthcheck carries a password', () => {
 
 // ------------------------------------------------------------------------------ F-29
 
-test('F-29: uploads are mounted read-only into caddy, read-write only into node, never into api', () => {
+test('F-29: uploads are mounted read-only into media, read-write only into node, never into api or caddy', () => {
   const config = base();
   const all = mounts(config);
   console.log(`mounts: ${all.length} checked`);
@@ -335,33 +351,97 @@ test('F-29: uploads are mounted read-only into caddy, read-write only into node,
   assert.deepEqual(binds.map((m) => `${m.service}: ${posix(m.source)}`), [], 'an upload folder bound from the clone');
   const of = (source) => all.filter((m) => m.type === 'volume' && m.source === source)
     .map((m) => `${m.service}:${m.read_only ? 'ro' : 'rw'}`).sort();
-  assert.deepEqual(of('uploads'), ['backup:ro', 'caddy:ro', 'node:rw', 'storage-init:rw']);
+  assert.deepEqual(of('uploads'), ['backup:ro', 'media:ro', 'node:rw', 'storage-init:rw']);
   assert.deepEqual(of('private-media'), ['backup:ro', 'node:rw', 'storage-init:rw']);
 });
 
-test('F-29: caddy serves only stored public images from the volume and answers 404 for anything else under /storage', () => {
+test('F-29: caddy, which holds the certificate and account keys, mounts no volume another service mounts', () => {
+  // Caddy follows symbolic links: a link planted in a volume someone else writes would let caddy
+  // serve its own files (caddy-data) under an allowed name. So it shares no volume at all.
+  const all = mounts(base());
+  const own = all.filter((m) => m.service === 'caddy' && m.type === 'volume');
+  console.log(`caddy: ${own.length} volumes (${own.map((m) => m.source).join(', ')}), ${all.length} mounts of the compose checked`);
+  assert.ok(own.length > 0, 'caddy mounts no volume: refusing to report clean');
+  assert.deepEqual(own.map((m) => m.source).sort(), ['caddy-config', 'caddy-data']);
+  const shared = all.filter((m) => m.service !== 'caddy' && own.some((o) => o.source === m.source));
+  assert.deepEqual(shared.map((m) => `${m.service}: ${m.source}`), [], 'a volume of caddy is mounted elsewhere');
+  const binds = all.filter((m) => m.service === 'caddy' && m.type === 'bind').map((m) => `${posix(m.source).split('/').pop()} -> ${m.target}:${m.read_only ? 'ro' : 'rw'}`);
+  assert.deepEqual(binds, ['Caddyfile -> /etc/caddy/Caddyfile:ro']);
+});
+
+/** PUBLIC_FOLDERS, PRIVATE_FOLDERS and the allow-list pattern built from server/src/storage.js. */
+function uploadAllowList() {
   const storage = readText(path.join(REPO_ROOT, 'server', 'src', 'storage.js'));
   const folders = /export const PUBLIC_FOLDERS = \[([^\]]+)\]/.exec(storage)?.[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
   const privateFolders = /export const PRIVATE_FOLDERS = \[([^\]]+)\]/.exec(storage)?.[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
   const name = /export const STORED_NAME = \/\^(.+)\$\/;/.exec(storage)?.[1];
   assert.ok(folders?.length && privateFolders?.length && name, 'cannot read PUBLIC_FOLDERS, PRIVATE_FOLDERS or STORED_NAME in server/src/storage.js');
-  const expected = `^/storage/(${folders.join('|')})/${name}$`;
+  return { folders, privateFolders, expected: `^/storage/(${folders.join('|')})/${name}$` };
+}
 
-  const routes = caddyAdapt().apps.http.servers.srv0.routes[0].handle[0].routes;
+test('F-29: caddy passes only stored public images to the media file server and answers 404 for anything else under /storage', () => {
+  const { folders, privateFolders, expected } = uploadAllowList();
+  const routes = siteRoutes();
   const uploadAt = routes.findIndex((r) => r.match?.[0]?.path_regexp);
   const storageAt = routes.findIndex((r) => r.match?.[0]?.path?.includes('/storage/*'));
-  assert.ok(uploadAt >= 0, 'caddy has no route that serves uploads itself');
+  assert.ok(uploadAt >= 0, 'caddy has no route for uploads');
   assert.ok(storageAt > uploadAt, 'no /storage 404 after the upload route');
   assert.equal(routes[uploadAt].match[0].path_regexp.pattern, expected, 'the allow-list mirrors server/src/storage.js');
   for (const folder of privateFolders) assert.ok(!expected.includes(folder), `private folder ${folder} is served`);
   const upload = caddyHandlers(routes[uploadAt]);
-  assert.deepEqual(upload.map((h) => h.handler), ['subroute', 'vars', 'headers', 'file_server']);
-  assert.equal(upload[1].root, '/srv');
-  assert.match(upload[2].response.set['Content-Security-Policy'][0], /sandbox/);
+  assert.deepEqual(upload.map((h) => h.handler), ['subroute', 'headers', 'reverse_proxy']);
+  // Set when the answer is written: the sandbox policy is sent whatever the file server answers.
+  assert.equal(upload[1].response.deferred, true, 'the upload policy is not deferred');
+  assert.match(upload[1].response.set['Content-Security-Policy'][0], /default-src 'none'.*sandbox/);
+  assert.deepEqual(upload[2].upstreams.map((u) => u.dial), ['media:8080']);
   assert.deepEqual(caddyHandlers(routes[storageAt]).map((h) => [h.handler, h.status_code ?? null]), [['subroute', null], ['static_response', 404]]);
   assert.equal(routes[storageAt].match[0].path.includes('/storage'), true);
-  assert.equal(caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'file_server').length, 1, 'one file server only');
-  console.log(`uploads: ${folders.length} public folders served, ${privateFolders.length} private folders not served`);
+  assert.deepEqual(caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'file_server'), [], 'the edge serves files itself');
+  console.log(`uploads: ${folders.length} public folders passed to media, ${privateFolders.length} private folders not served`);
+});
+
+test('F-29: the media file server serves only the same allow-list from /srv and 404 for everything else', () => {
+  const { expected } = uploadAllowList();
+  const config = caddyAdapt(path.join(DEPLOY_DIR, 'Caddyfile.media'));
+  assert.equal(config.admin?.disabled, true, 'the admin endpoint is on');
+  assert.equal(config.admin?.config?.persist, false, 'media saves its configuration');
+  const servers = Object.values(config.apps?.http?.servers ?? {});
+  assert.equal(servers.length, 1, 'media runs exactly one server');
+  const [server] = servers;
+  assert.deepEqual(server.listen, [':8080'], 'media listens on 8080 only (it runs without root)');
+  assert.equal(server.automatic_https?.disable, true, 'media must not manage certificates');
+  assert.equal(Object.keys(config.apps).join(','), 'http', 'media runs another app (tls, pki: keys of its own)');
+  const routes = server.routes;
+  assert.equal(routes.length, 2, 'the allow-list and the 404 for everything else');
+  assert.equal(routes[0].match?.[0]?.path_regexp?.pattern, expected, "media's allow-list mirrors server/src/storage.js");
+  const files = caddyHandlers(routes[0]);
+  assert.deepEqual(files.map((h) => h.handler), ['subroute', 'vars', 'file_server']);
+  assert.equal(files[1].root, '/srv');
+  assert.equal(files[2].browse, undefined, 'media lists folders');
+  assert.equal(routes[1].match, undefined);
+  assert.deepEqual(caddyHandlers(routes[1]).map((h) => [h.handler, h.status_code ?? null]), [['subroute', null], ['static_response', 404]]);
+  console.log(`media: ${routes.length} routes, allow-list ${expected}`);
+});
+
+test('F-29: media is a file server without secrets: no settings, no keys, nobody, read-only, on its own internal network', () => {
+  const config = base();
+  const media = config.services.media;
+  assert.ok(media, 'no media service');
+  assert.equal(media.image, config.services.caddy.image, 'media runs the pinned caddy image');
+  assert.equal(media.user, '65534:65534', 'media runs as nobody');
+  assert.equal(media.read_only, true);
+  assert.deepEqual([...(media.tmpfs ?? [])].sort(), ['/config', '/data'], "caddy's data and config folders are empty and temporary");
+  assert.deepEqual(media.environment ?? {}, {}, 'media gets settings');
+  assert.deepEqual(media.ports ?? [], [], 'media publishes a port');
+  assert.deepEqual(Object.keys(media.networks ?? {}), ['media']);
+  assert.equal(config.networks.media?.internal, true, 'the media network has a way out');
+  assert.deepEqual(media.cap_drop, ['ALL']);
+  assert.deepEqual(media.cap_add, ['NET_BIND_SERVICE'], 'the caddy binary carries this file capability; nothing else');
+  assert.ok((media.security_opt ?? []).includes('no-new-privileges:true'));
+  const own = mounts(config).filter((m) => m.service === 'media')
+    .map((m) => `${m.type === 'bind' ? posix(m.source).split('/').pop() : m.source} -> ${m.target}:${m.read_only ? 'ro' : 'rw'}`).sort();
+  console.log(`media: ${own.length} mounts (${own.join(', ')})`);
+  assert.deepEqual(own, ['Caddyfile.media -> /etc/caddy/Caddyfile:ro', 'uploads -> /srv/storage:ro']);
 });
 
 // ------------------------------------------------------------------------------ F-30
@@ -394,7 +474,7 @@ test('F-30: the Caddyfile validates and sets the security headers on normal and 
 });
 
 test("F-31: caddy sends the client's TCP address to Laravel and overwrites a client-sent X-Forwarded-For", () => {
-  const proxy = caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'reverse_proxy');
+  const proxy = edgeProxies().api ?? [];
   assert.equal(proxy.length, 1);
   assert.deepEqual(proxy[0].headers?.request?.set?.['X-Forwarded-For'], ['{http.request.remote.host}']);
   assert.deepEqual(proxy[0].headers?.request?.set?.['X-Forwarded-Proto'], ['{http.request.scheme}']);
@@ -409,8 +489,7 @@ test('request bodies: 9 MB only for multipart uploads, otherwise the largest bod
   const post = Number(/^post_max_size = (\d+)M/m.exec(readText(path.join(REPO_ROOT, 'api', 'docker', 'php.ini')))?.[1]) * 1024 * 1024;
   assert.ok(upload > 0 && post > 0, 'cannot read the upload limit or post_max_size');
 
-  const routes = caddyAdapt().apps.http.servers.srv0.routes[0].handle[0].routes;
-  const limits = routes.filter((r) => r.handle?.[0]?.handler === 'request_body');
+  const limits = siteRoutes().filter((r) => r.handle?.[0]?.handler === 'request_body');
   assert.equal(limits.length, 2, 'two request_body handlers');
   const multipart = limits.find((r) => r.match?.[0]?.header?.['Content-Type']?.[0] === 'multipart/form-data*');
   const other = limits.find((r) => r.match?.[0]?.not?.[0]?.header?.['Content-Type']?.[0] === 'multipart/form-data*');
@@ -600,7 +679,7 @@ test('scripts the containers read from the working tree keep LF line ends', () =
   assert.ok(fs.existsSync(path.join(DEPLOY_DIR, 'scripts')), 'no deploy/scripts folder');
   const files = [
     ...fs.readdirSync(path.join(DEPLOY_DIR, 'scripts')).map((f) => path.join(DEPLOY_DIR, 'scripts', f)),
-    path.join(DEPLOY_DIR, 'Caddyfile'),
+    ...fs.readdirSync(DEPLOY_DIR).filter((f) => /^Caddyfile/.test(f)).map((f) => path.join(DEPLOY_DIR, f)),
   ];
   assert.ok(files.length > 1);
   assert.deepEqual(files.filter((f) => readText(f).includes('\r')).map(posix), []);
@@ -715,6 +794,10 @@ test('networks: only caddy publishes ports (IPv4), db and the jobs sit on intern
   assert.deepEqual(Object.keys(nets).filter((n) => !internal(n)).sort(), ['edge', 'outbound'], 'networks with a way out');
   assert.deepEqual(services.filter(([n]) => on(n).includes('edge')).map(([n]) => n).sort(), ['api', 'caddy']);
   assert.deepEqual(services.filter(([n]) => on(n).includes('outbound')).map(([n]) => n), ['node']);
+  // The file server: caddy only, on an internal network of their own.
+  assert.deepEqual(services.filter(([n]) => on(n).includes('media')).map(([n]) => n).sort(), ['caddy', 'media']);
+  assert.deepEqual(on('media'), ['media']);
+  assert.ok(internal('media'), 'the media network has a way out');
   assert.ok(on('db').length > 0 && on('db').every(internal), 'db sits on internal networks only');
   for (const job of ['backup', 'admin-gate', 'seed']) assert.deepEqual(on(job), ['data'], job);
   assert.equal(config.services['storage-init'].network_mode, 'none');
@@ -819,12 +902,14 @@ test('hardening: no new privileges anywhere, and no capabilities for api, node a
   for (const [name, s] of services) {
     if (!(s.security_opt ?? []).includes('no-new-privileges:true')) problems.push(`${name}: no-new-privileges`);
   }
-  for (const name of ['api', 'node', 'caddy', 'backup', 'admin-gate', 'seed']) {
+  for (const name of ['api', 'node', 'caddy', 'media', 'backup', 'admin-gate', 'seed']) {
     const s = base().services[name];
     if (!s) problems.push(`${name}: no such service`);
     else if (!(s.cap_drop ?? []).includes('ALL')) problems.push(`${name}: cap_drop ALL`);
   }
-  if (JSON.stringify(base().services.caddy?.cap_add) !== '["NET_BIND_SERVICE"]') problems.push('caddy: cap_add NET_BIND_SERVICE only');
+  for (const name of ['caddy', 'media']) {
+    if (JSON.stringify(base().services[name]?.cap_add) !== '["NET_BIND_SERVICE"]') problems.push(`${name}: cap_add NET_BIND_SERVICE only`);
+  }
   console.log(`hardening: ${services.length} services checked`);
   assert.deepEqual(problems, []);
 });

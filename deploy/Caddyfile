@@ -42,13 +42,16 @@
 	# Only the public folders and the names Node gives a stored image (server/src/storage.js:
 	# PUBLIC_FOLDERS, STORED_NAME); everything else under /storage is a 404 from Caddy, so no
 	# other file there is ever served or handed to Laravel. Evidence and story images live in the
-	# private-media volume, which Caddy does not mount; Node serves them through checked routes.
+	# private-media volume, which no web server mounts; Node serves them through checked routes.
+	# The files themselves come from the `media` service (deploy/Caddyfile.media), not from this
+	# container: Caddy follows symbolic links, and this container holds the certificate and
+	# account keys (caddy-data), so it mounts no volume anyone else writes to.
 	@upload path_regexp upload ^/storage/(avatars|banners|posts|user-banners)/[0-9a-f]{40}\.(jpg|png|webp)$
 	handle @upload {
-		root * /srv
-		# The browser shows the image and runs nothing in it.
-		header Content-Security-Policy "default-src 'none'; sandbox"
-		file_server
+		# The browser shows the image and runs nothing in it. Set when the answer is written, so
+		# this policy is the one sent, whatever the file server answers.
+		header >Content-Security-Policy "default-src 'none'; sandbox"
+		reverse_proxy media:8080
 	}
 	@storage path /storage /storage/*
 	handle @storage {

@@ -345,10 +345,10 @@ check('F-29: a PHP file planted in any upload folder is never executed, through 
     const uploadMounts = (api.Mounts ?? []).filter((m) => /uploads|private-media|storage/.test(`${m.Name ?? ''} ${m.Source ?? ''} ${m.Destination}`));
     assert.deepEqual(uploadMounts.map((m) => `${m.Source} -> ${m.Destination}`), [], 'api mounts an upload folder');
 
-    // And the planted public files did lie where caddy serves files from: the 404s above are
-    // caddy refusing them, not files it could not see.
-    const seen = stack.sh('caddy', `${pub.map((f) => `test -f /srv/storage/${f}/${name} && echo ${f}`).join('; ')}; true`);
-    assert.deepEqual(seen.stdout.trim().split(/\s+/).filter(Boolean).sort(), [...pub].sort(), 'the planted files are in the volume caddy serves');
+    // And the planted public files did lie where media serves files from: the 404s above are
+    // the edge refusing them, not files the file server could not see.
+    const seen = stack.sh('media', `${pub.map((f) => `test -f /srv/storage/${f}/${name} && echo ${f}`).join('; ')}; true`);
+    assert.deepEqual(seen.stdout.trim().split(/\s+/).filter(Boolean).sort(), [...pub].sort(), 'the planted files are in the volume media serves');
   } finally {
     remove('node', planted);
   }
@@ -378,12 +378,15 @@ check('F-29/F-30: a stored image is a plain file with nosniff and a sandbox CSP;
       assert.ok(r.status >= 400 && r.status < 500, `${urls[pub.length + j]} answered ${r.status ?? r.error}`);
       assert.notEqual(r.bodySha256, sha256(bytes), `${urls[pub.length + j]} was served`);
     });
-    const caddy = stack.containersOf('caddy')[0];
-    const mounts = caddy.Mounts ?? [];
-    assert.deepEqual(mounts.filter((m) => /private-media/.test(m.Name ?? '')).map((m) => m.Destination), [], 'caddy mounts the private media');
-    const uploads = mounts.find((m) => m.Destination === '/srv/storage');
-    assert.ok(uploads, 'caddy has no uploads volume at /srv/storage');
-    assert.equal(uploads.RW, false, 'caddy mounts the uploads writable');
+    // The files come from media, read-only; the edge, which holds the keys, mounts no upload.
+    const caddyMounts = stack.containersOf('caddy')[0]?.Mounts ?? [];
+    const mediaMounts = stack.containersOf('media')[0]?.Mounts ?? [];
+    const named = (list, re) => list.filter((m) => re.test(m.Name ?? '')).map((m) => m.Destination);
+    assert.deepEqual(named(caddyMounts, /(uploads|private-media)$/), [], 'caddy mounts an upload volume');
+    assert.deepEqual(named(mediaMounts, /private-media$/), [], 'media mounts the private media');
+    const uploads = mediaMounts.find((m) => m.Destination === '/srv/storage');
+    assert.ok(uploads && /uploads$/.test(uploads.Name ?? ''), 'media has no uploads volume at /srv/storage');
+    assert.equal(uploads.RW, false, 'media mounts the uploads writable');
   } finally {
     remove('node', planted);
   }
@@ -410,7 +413,52 @@ check("F-11/F-13: a story image leaves the server only through Node's checked ro
   assert.ok(asFile.status >= 400 && asFile.status < 500, `/storage/stories/ answered ${asFile.status ?? asFile.error}`);
   assert.notEqual(asFile.bodySha256, withToken.bodySha256, 'the story image was served as a file');
   assert.equal(stack.exec('node', ['test', '-f', `/app/storage-private/stories/${file}`]).status, 0, 'the story image is not in the private media');
+  assert.notEqual(stack.exec('media', ['test', '-e', `/srv/storage/stories/${file}`]).status, 0, 'media can see the story image');
   assert.notEqual(stack.exec('caddy', ['test', '-e', `/srv/storage/stories/${file}`]).status, 0, 'caddy can see the story image');
+});
+
+check('uploads: a symbolic link planted in the uploads volume never hands out the edge\'s private keys', () => {
+  // Caddy's file server follows links, and an allowed name is all a link needs. The edge holds
+  // the certificate and account keys (caddy-data; in CI the keys of Caddy's internal authority
+  // for DOMAIN=localhost), so the links point there: absolute, and relative from the folder.
+  const keys = [
+    { folder: 'posts', target: '/data/caddy/pki/authorities/local/root.key' },
+    { folder: 'banners', target: `/data/caddy/certificates/local/${domain}/${domain}.key` },
+    { folder: 'avatars', target: '/data/caddy/pki/authorities/local/intermediate.key', relative: '../../../data/caddy/pki/authorities/local/intermediate.key' },
+  ];
+  // The keys exist at the edge: a 404 below is a refusal, not a missing target. Only a hash of
+  // each key leaves the container, never the key.
+  const hashes = keys.map((k) => {
+    const r = stack.sh('caddy', `test -f '${k.target}' && sha256sum '${k.target}' | cut -d' ' -f1`);
+    assert.equal(r.status, 0, `the edge has no ${k.target}: the check would prove nothing`);
+    return r.stdout.trim();
+  });
+  const control = { folder: 'user-banners', name: storedName('png'), bytes: png([0x51, 0x52, 0x53]) };
+  const links = keys.map((k) => ({ ...k, file: `/app/storage/${k.folder}/${storedName(k.folder === 'avatars' ? 'webp' : 'png')}` }));
+  const planted = [...links.map((l) => l.file), `/app/storage/${control.folder}/${control.name}`];
+  for (const l of links) {
+    const r = stack.exec('node', ['ln', '-s', l.relative ?? l.target, l.file]);
+    assert.equal(r.status, 0, `cannot plant a link at ${l.file}: ${r.stderr}`);
+  }
+  plant('node', `/app/storage/${control.folder}/${control.name}`, control.bytes);
+  try {
+    const urls = [...links.map((l) => l.file.replace('/app/storage/', '/storage/')), `/storage/${control.folder}/${control.name}`];
+    const res = stack.probe(urls.map((p) => apiRequest('GET', p))).results;
+    const served = links.map((l, i) => ({ l, r: res[i], hash: hashes[i] }))
+      .filter(({ r, hash }) => r.error || r.status !== 404 || r.bodySha256 === hash || /PRIVATE KEY/.test(r.body ?? ''))
+      // Status and what was found only: never the body.
+      .map(({ l, r, hash }) => `${l.relative ? 'relative' : 'absolute'} link to ${l.target}: ${r.status ?? r.error}, the key's bytes ${r.bodySha256 === hash ? 'served' : 'not served'}, PRIVATE KEY in the body: ${/PRIVATE KEY/.test(r.body ?? '')}`);
+    console.log(`planted links: ${links.length} (${links.filter((l) => l.relative).length} relative) to the edge's keys, answers ${JSON.stringify(tally(res.slice(0, links.length)))}; control file ${res.at(-1).status}`);
+    assert.deepEqual(served, [], "the edge's private keys were served through a planted link");
+    const ctl = res.at(-1);
+    assert.equal(ctl.status, 200, `a stored file next to the links: ${ctl.status ?? ctl.error}`);
+    assert.equal(ctl.bodySha256, sha256(control.bytes), 'the control file is not the stored bytes');
+    // The links are in the volume the file server reads, and resolve to nothing there.
+    const inMedia = stack.sh('media', links.map((l) => `test -L '${l.file.replace('/app/storage/', '/srv/storage/')}' && ! test -e '${l.file.replace('/app/storage/', '/srv/storage/')}' && echo ok`).join('; '));
+    assert.equal(inMedia.stdout.trim().split(/\s+/).filter((w) => w === 'ok').length, links.length, `media does not see the links as dangling: ${inMedia.stderr}`);
+  } finally {
+    remove('node', planted);
+  }
 });
 
 // --------------------------------------------------------------------------- headers

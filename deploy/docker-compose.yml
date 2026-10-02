@@ -1,6 +1,7 @@
 # GÖ4Fun auf einem Server – alle Teile als Container.
 #
-#   Internet ─► caddy (HTTPS, Port 80/443)       Uploads als einfache Dateien (nur lesend)
+#   Internet ─► caddy (HTTPS, Port 80/443)
+#                 ├─► media (public uploads as plain files, read-only; holds no secrets)
 #                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
 #                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
 #                 db  (MySQL)  ◄── beide Backends, die nächtliche Sicherung (backup)
@@ -10,6 +11,7 @@
 #
 # Networks (who can reach whom; the bottom of this file has the details):
 #   edge      caddy <-> api. caddy's ports, certificates and api's mail go through here.
+#   media     caddy <-> media. Internal: the file server has no way out and reaches nothing else.
 #   app       api <-> node, and both backends -> db. Internal: no way out.
 #   data      db <-> backup, admin-gate, seed. Internal.
 #   outbound  node alone: its way out to the moderation provider.
@@ -169,10 +171,12 @@ services:
       WRITE_LIMIT_ADMIN: ${WRITE_LIMIT_ADMIN:-}
       WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
-      # Public uploads: written by Node only, served by caddy from the same volume (read-only).
+      # Public uploads: written by Node only, served from the same volume (read-only) by media,
+      # behind caddy.
       - uploads:/app/storage
       # Private uploads (ban evidence, AI moderation evidence, story images): served only by
-      # Node's checked routes. Never mount this volume into api, caddy or any other web server.
+      # Node's checked routes. Never mount this volume into api, caddy, media or any other web
+      # server.
       - private-media:/app/storage-private
     healthcheck:
       # Node's own health route; /api/health belongs to Laravel. The start period covers the
@@ -279,7 +283,7 @@ services:
       MAIL_SCHEME: ${MAIL_SCHEME:-}
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
-    # No volumes: uploads are served by caddy, never by Laravel or PHP (F-29).
+    # No volumes: uploads are served by media behind caddy, never by Laravel or PHP (F-29).
     healthcheck:
       # Checks the way to the database (/api/health asks MySQL), not only that Apache answers.
       # `php -r`: the image has no curl. Port 8080: Apache runs as www-data and cannot bind 80.
@@ -319,17 +323,39 @@ services:
       edge:
         # Fixed: api trusts the client address only from this one (TRUSTED_PROXIES).
         ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
+      media: {}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      # Public uploads, read-only: caddy serves them as plain files (deploy/Caddyfile).
-      - uploads:/srv/storage:ro
       # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
       # bei jedem Neustart neue und läuft irgendwann ins Rate-Limit.
       - caddy-data:/data
       - caddy-config:/config
+      # No uploads volume: caddy follows symbolic links, so a link planted there would hand out
+      # the keys in caddy-data. The media service serves the uploads (deploy/Caddyfile.media).
     security_opt: ['no-new-privileges:true']
     cap_drop: [ALL]
     # Runs as root in its image and binds 80 and 443.
+    cap_add: [NET_BIND_SERVICE]
+    logging: *logging
+
+  # The public uploads as plain files (deploy/Caddyfile.media), for caddy only: caddy forwards the
+  # allow-listed /storage paths here and adds the security headers. A container of its own because
+  # Caddy's file server follows symbolic links: one planted in the uploads volume resolves in here,
+  # where there is nothing secret to read (no settings, no keys, empty temporary /data and /config).
+  media:
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    restart: unless-stopped
+    user: '65534:65534'
+    read_only: true
+    tmpfs: [/data, /config]
+    volumes:
+      - ./Caddyfile.media:/etc/caddy/Caddyfile:ro
+      - uploads:/srv/storage:ro
+    networks: [media]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    # Port 8080 needs no privilege, but the image's caddy binary carries the file capability
+    # cap_net_bind_service; without it in the bounding set, no-new-privileges refuses to start it.
     cap_add: [NET_BIND_SERVICE]
     logging: *logging
 
@@ -426,7 +452,7 @@ volumes:
   db-data:
   caddy-data:
   caddy-config:
-  # Public uploads (avatars, banners, posts, user banners): node writes, caddy serves (read-only).
+  # Public uploads (avatars, banners, posts, user banners): node writes, media serves (read-only).
   uploads:
   # Private media (evidence, stories): node only; the backup reads it.
   private-media:
@@ -437,8 +463,8 @@ volumes:
 #                          (TRUSTED_PROXIES). Other containers get .64-.127.
 #   app   <prefix>.128/25  api at .140; Node trusts forwarding headers from it only
 #                          (NODE_TRUST_PROXY). Other containers get .192-.255.
-# So no other container can take a fixed address. data and outbound get addresses from Docker.
-# No network has IPv6 (see caddy's ports).
+# So no other container can take a fixed address. media, data and outbound get addresses from
+# Docker. No network has IPv6 (see caddy's ports).
 networks:
   edge:
     enable_ipv6: false
@@ -446,6 +472,9 @@ networks:
       config:
         - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.0/25
           ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.64/26
+  media:
+    internal: true
+    enable_ipv6: false
   app:
     internal: true
     enable_ipv6: false
