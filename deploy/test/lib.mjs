@@ -168,6 +168,10 @@ export function removeTemp(file) {
 
 /** `docker run --rm --network none ...` with the minimal environment: { status, stdout, stderr }. */
 export function dockerRun(image, { mounts = [], env = {}, entrypoint, args = [], input } = {}) {
+  // Docker Desktop creates a missing bind source as an empty folder in the working tree: refuse
+  // instead, so a missing file fails with its name and leaves nothing behind.
+  const missing = mounts.filter((m) => !fs.existsSync(m.src)).map((m) => m.src);
+  if (missing.length > 0) throw new Error(`cannot mount what does not exist: ${missing.join(', ')}`);
   const argv = ['run', '--rm', '--network', 'none'];
   if (input !== undefined) argv.push('-i');
   for (const m of mounts) argv.push('--mount', `type=bind,src=${m.src},dst=${m.dst}${m.readonly === false ? '' : ',readonly'}`);
