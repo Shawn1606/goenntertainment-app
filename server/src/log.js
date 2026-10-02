@@ -2,7 +2,7 @@
  * The one place where server code writes to the console (F-38).
  *
  * Every other module logs through these functions; test/logging.test.js checks that no file under
- * src/ (except the operator-run CLIs seed.js and import/) calls console.* or writes to
+ * src/ (except the operator-run CLIs seed.js, import/ and prune.js) calls console.* or writes to
  * process.stdout/stderr itself.
  *
  * What never reaches the log, whatever a caller hands in:

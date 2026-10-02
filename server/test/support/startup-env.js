@@ -18,6 +18,18 @@ export const TEST_ANTHROPIC_API_KEY = 'test-only-fake-key-not-a-secret';
 /** A local port nothing listens on: a started server can never reach the model provider. */
 export const UNREACHABLE_MODEL_URL = 'http://127.0.0.1:9';
 
+/**
+ * Test-only retention settings (required in production, src/config.js): ten years each, so the
+ * prune a started server runs at once deletes no row another test file wrote. Not a retention
+ * decision.
+ */
+export const TEST_RETENTION = Object.freeze({
+  EVIDENCE_RETENTION_DAYS: '3650',
+  MODERATION_REPORT_RETENTION_DAYS: '3650',
+  TOKEN_RETENTION_DAYS: '3650',
+  USAGE_RETENTION_DAYS: '3650',
+});
+
 export function startupEnv(overrides = {}) {
   const env = {
     // Database and PATH from the test process (the harness or CI provide them).
@@ -35,6 +47,7 @@ export function startupEnv(overrides = {}) {
     ANTHROPIC_BASE_URL: UNREACHABLE_MODEL_URL,
     MODERATION_ENABLED: 'true',
     MODERATION_FAIL_OPEN: '',
+    ...TEST_RETENTION,
     ...overrides,
   };
   return env;

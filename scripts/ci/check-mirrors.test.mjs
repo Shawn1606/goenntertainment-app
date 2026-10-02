@@ -61,8 +61,11 @@ const FILES = {
     'export const INTERNAL_SECRET_MIN_LENGTH = 32;',
     'export const DEFAULT_TOKEN_LIFETIME_MINUTES = 43200;',
     'export const TOKEN_LIFETIME_PATTERN = /^[1-9]\\d{0,6}$/;',
+    'export const USAGE_RETENTION_MIN_DAYS = 120;',
     '',
   ].join('\n'),
+  'server/src/streak.js': "import { pool } from './db.js';\nexport const ACTIVE_DAYS_WINDOW = 120;\n",
+  'api/app/Support/Streak.php': '<?php\nfinal class Streak\n{\n    public const ACTIVE_DAYS_WINDOW = 120;\n}\n',
   'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 32;\n}\n',
   'api/docker/entrypoint.sh': 'if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then\n  exit 1\nfi\n',
   'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n# SANCTUM_EXPIRATION=43200\n',
@@ -116,9 +119,9 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 16);
-    assert.equal(r.places, 37);
-    assert.equal(r.occurrences, 38, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 17);
+    assert.equal(r.places, 40);
+    assert.equal(r.occurrences, 41, 'two mysql services in ci.yml count separately');
   });
 });
 
@@ -224,6 +227,23 @@ test('detects an interests-per-event maximum that differs between the app and th
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
     assert.match(r.problems[0], /^Interests per event differs: 5 \(src\/app\/create-activity\.tsx MAX_INTERESTS\), 6 /);
+  });
+});
+
+test('detects a smallest usage retention that is not the streak window of both backends', () => {
+  const config = FILES['server/src/config.js'].replace('USAGE_RETENTION_MIN_DAYS = 120', 'USAGE_RETENTION_MIN_DAYS = 90');
+  withTree({ 'server/src/config.js': config }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(
+      r.problems[0],
+      /^Streak window \(days\) differs: 120 \(server\/src\/streak\.js ACTIVE_DAYS_WINDOW\), 120 \(api\/app\/Support\/Streak\.php ACTIVE_DAYS_WINDOW\), 90 /,
+    );
+  });
+  withTree({ 'api/app/Support/Streak.php': '<?php\nfinal class Streak\n{\n    public const ACTIVE_DAYS_WINDOW = 90;\n}\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Streak window \(days\) differs: /);
   });
 });
 
