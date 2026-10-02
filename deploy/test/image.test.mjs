@@ -201,3 +201,86 @@ test('F-29: Apache in the api image refuses an upload folder mounted under its d
   const grants = directives.filter((d) => d.startsWith('require') && d !== 'require all denied');
   assert.deepEqual(grants, [], `<Directory ${uploads}> grants access`);
 });
+
+// ------------------------------------------------------------------ F-25 and the server image
+
+const DOCKERFILES = ['api/Dockerfile', 'server/Dockerfile'];
+
+/**
+ * The named build contexts the compose hands to the image builds (`additional_contexts`, map or
+ * list form): `COPY --from=<context>` reads a folder, not an image.
+ */
+function namedBuildContexts() {
+  const lines = read('deploy/docker-compose.yml').split('\n');
+  const names = new Set();
+  lines.forEach((line, index) => {
+    const head = /^(\s*)additional_contexts:\s*$/.exec(line);
+    if (!head) return;
+    const indent = head[1].length;
+    for (const next of lines.slice(index + 1)) {
+      const own = /^(\s*)/.exec(next)[1].length;
+      if (next.trim() === '' || next.trim().startsWith('#')) continue;
+      if (own <= indent) break;
+      const entry = /^\s*(?:-\s*)?([\w.-]+)\s*[:=]/.exec(next);
+      if (entry) names.add(entry[1]);
+    }
+  });
+  return names;
+}
+
+/** Every image a Dockerfile pulls: FROM lines that name no earlier stage, and --from= images. */
+function imageReferences(file, contexts) {
+  const stages = stagesOf(read(file));
+  const references = [];
+  stages.forEach((stage, index) => {
+    const earlier = new Set(stages.slice(0, index).map((s) => s.name).filter(Boolean));
+    if (!earlier.has(stage.image.toLowerCase())) {
+      references.push({ image: stage.image, where: `${file}:${stage.line} FROM` });
+    }
+    for (const instruction of stage.instructions) {
+      const froms = [
+        ...instruction.args.matchAll(/(?:^|\s)--from=(\S+)/g),
+        ...instruction.args.matchAll(/--mount=\S*?\bfrom=([^,\s]+)/g),
+      ].map((m) => m[1]);
+      for (const from of froms) {
+        if (earlier.has(from.toLowerCase()) || /^\d+$/.test(from) || contexts.has(from)) continue;
+        references.push({ image: from, where: `${file}:${instruction.line} ${instruction.keyword} --from` });
+      }
+    }
+  });
+  return references;
+}
+
+test('F-25: every image the Dockerfiles build from is pinned by digest, and copies agree', (t) => {
+  const contexts = namedBuildContexts();
+  assert.ok(contexts.size > 0, 'no additional_contexts found in deploy/docker-compose.yml');
+  const references = DOCKERFILES.flatMap((file) => imageReferences(file, contexts));
+  t.diagnostic(`named build contexts (not images): ${[...contexts].join(', ')}`);
+  t.diagnostic(`image references: ${references.length}`);
+  for (const r of references) t.diagnostic(`  ${r.where}: ${r.image}`);
+  assert.ok(references.length > 0, 'no image reference found in the Dockerfiles');
+
+  const pinned = /^[a-z0-9][a-z0-9._/-]*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$/;
+  const unpinned = references.filter((r) => !pinned.test(r.image));
+  assert.deepEqual(
+    unpinned.map((r) => `${r.where}: ${r.image}`),
+    [],
+    'every image must be written as <name>:<tag>@sha256:<index digest>',
+  );
+
+  const digests = new Map();
+  for (const r of references) {
+    const [name, digest] = r.image.split('@');
+    digests.set(name, (digests.get(name) ?? new Set()).add(digest));
+  }
+  const disagree = [...digests].filter(([, set]) => set.size > 1).map(([name, set]) => `${name}: ${[...set].join(' vs ')}`);
+  assert.deepEqual(disagree, [], 'two copies of one image name different digests');
+});
+
+test('F-28: the server image runs as a non-root user in its final stage', (t) => {
+  const { stages, instructions } = finalInstructions('server/Dockerfile');
+  t.diagnostic(`server/Dockerfile: ${stages.length} stage(s), ${instructions.length} instruction(s) in the final chain`);
+  const user = lastUser(instructions);
+  assert.ok(user !== null, 'the final stage of server/Dockerfile sets no USER');
+  assert.ok(!['root', '0'].includes(user), `the final stage of server/Dockerfile runs as ${user}`);
+});
