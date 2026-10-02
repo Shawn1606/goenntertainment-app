@@ -151,7 +151,7 @@ missing one. `deploy/.env.example` carries the same list with longer comments.
 | `BACKUP_DIR` | the host folder the backup service writes to | `______` (the operator: where, who looks after it) | an absolute path outside the clone, owned by root, mode 700 |
 | `BACKUP_RETENTION_DAYS` | days a backup set is kept | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
 | `LOG_MAX_SIZE` | the size of one container log file | `______` (the operator, with whoever answers for data protection) | a whole number with the unit `k`, `m` or `g` |
-| `LOG_MAX_FILES` | how many log files each container keeps | `______` (the operator, with whoever answers for data protection) | a whole number, at least 1 |
+| `LOG_MAX_FILES` | how many log files each container keeps | `______` (the operator, with whoever answers for data protection) | a whole number, at least 2 (Docker's `local` log driver compresses the rotated files and refuses a single file) |
 | `MYSQL_BINLOG_RETENTION_DAYS` | days MySQL keeps its binary log, which records every change, also the rows of deleted accounts; the log is rotated daily, so a change stays at most two days longer ([Logs](#logs)) | `______` (the operator, with whoever answers for data protection) | whole days from 1 to 9999, or `off` (no binary log); 0 is refused |
 
 Generating the secrets: each command prints the value once, in your own terminal, so you can put it
@@ -521,6 +521,7 @@ operator, with whoever answers for data protection).
 | node restarts again and again | `docker compose logs node`: `Required settings missing or invalid` names the settings; `Database setup failed; the server does not start (exit code 1)` means the schema step failed (database password, database not ready) |
 | api stays `unhealthy` | `docker compose logs api`: `ERROR: required settings missing or invalid` names them; otherwise usually a wrong `DB_PASSWORD` |
 | db exits right away | `docker compose logs db`: `MYSQL_BINLOG_RETENTION_DAYS must be ...` means the value is not 1 to 9999 or `off` |
+| no container starts: `failed to initialize logging driver: compression cannot be enabled when max file count is 1` | `LOG_MAX_FILES=1`: set it to 2 or more (`scripts/preflight.sh` refuses 1), then `docker compose up -d` |
 | backup `unhealthy` | `docker compose logs backup`: `BACKUP_DIR` missing or not writable, an invalid `BACKUP_RETENTION_DAYS`, or a failed run (`nothing was deleted`) |
 | caddy logs certificate or challenge errors | the A record does not point to the server yet, or 80/443 are closed |
 | a request gets `413` from caddy | the body is over the edge's limit: 9 MB for uploads (multipart), 128 KiB for everything else |

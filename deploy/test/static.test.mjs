@@ -549,6 +549,28 @@ test('F-45: every service rotates its log with the required limits', () => {
   assert.deepEqual(wrong, []);
 });
 
+test('F-45: LOG_MAX_FILES is at least 2 wherever it is checked or explained (the local log driver refuses one file while it compresses)', () => {
+  const preflight = readText(path.join(DEPLOY_DIR, 'scripts', 'preflight.sh'));
+  const source = /LOG_FILES_PATTERN='([^']+)'/.exec(preflight)?.[1];
+  assert.ok(source, 'cannot find LOG_FILES_PATTERN in deploy/scripts/preflight.sh');
+  const pattern = new RegExp(source);
+  const accepted = Array.from({ length: 1000 }, (_, n) => n).filter((n) => pattern.test(String(n)));
+  console.log(`LOG_MAX_FILES: the preflight accepts ${accepted.length} of the numbers 0 to 999, from ${accepted[0]}`);
+  assert.ok(accepted.length > 0, 'the preflight accepts no number: refusing to report clean');
+  const min = accepted[0];
+  assert.deepEqual(accepted, Array.from({ length: accepted.length }, (_, i) => min + i), 'the accepted numbers have a gap');
+  // Docker's local driver compresses rotated files unless told otherwise, and then refuses
+  // max-file 1 ("compression cannot be enabled when max file count is 1"): no container starts.
+  const options = base().services.db.logging?.options ?? {};
+  if (options.compress !== 'false') assert.ok(min >= 2, `the preflight accepts LOG_MAX_FILES=${min}, which Docker's local log driver refuses while it compresses`);
+  const docs = [
+    ['deploy/scripts/preflight.sh', preflight, /LOG_MAX_FILES "\$LOG_FILES_PATTERN" 'a number of files, at least (\d+)'/],
+    ['deploy/.env.example', readText(ENV_EXAMPLE), /LOG_MAX_FILES: a number, at least (\d+)/],
+    ['deploy/README.md', readText(RUNBOOK), /^\| `LOG_MAX_FILES` \|.*\bat least (\d+)/m],
+  ];
+  assert.deepEqual(docs.filter(([, text, re]) => Number(re.exec(text)?.[1]) !== min).map(([file]) => file), [], `files that give LOG_MAX_FILES another minimum than the preflight's ${min}`);
+});
+
 test('F-45: the MySQL binary log keeps the required retention, never the MySQL default or forever', () => {
   const db = base().services.db;
   assert.deepEqual(db.entrypoint, ['bash', '/opt/deploy/db-entrypoint.sh']);
@@ -713,6 +735,8 @@ test('F-17: the preflight refuses a BACKUP_DIR inside the clone and checks the e
     "envfile /work/backups; sed -i 's/^BACKUP_RETENTION_DAYS=.*/BACKUP_RETENTION_DAYS=0/' /work/prod.env; run retention-zero",
     "envfile /work/backups; sed -i 's/^MYSQL_BINLOG_RETENTION_DAYS=.*/MYSQL_BINLOG_RETENTION_DAYS=0/' /work/prod.env; run binlog-zero",
     "envfile /work/backups; sed -i 's/^LOG_MAX_SIZE=.*/LOG_MAX_SIZE=10/' /work/prod.env; run log-size",
+    "envfile /work/backups; sed -i 's/^LOG_MAX_FILES=.*/LOG_MAX_FILES=1/' /work/prod.env; run log-files-one",
+    "envfile /work/backups; sed -i 's/^LOG_MAX_FILES=.*/LOG_MAX_FILES=2/' /work/prod.env; run log-files-two",
     'envfile /work/backups; DB_PASSWORD=shell-value-not-a-secret run shell-export',
     'envfile /work/backups; FAKE_DOCKER_STATUS=1 run compose-fails',
     'ENV_FILE=/work/none.env run no-env-file',
@@ -740,6 +764,9 @@ test('F-17: the preflight refuses a BACKUP_DIR inside the clone and checks the e
     'retention-zero': [1, 'FAIL  BACKUP_RETENTION_DAYS has a valid form'],
     'binlog-zero': [1, 'FAIL  MYSQL_BINLOG_RETENTION_DAYS has a valid form'],
     'log-size': [1, 'FAIL  LOG_MAX_SIZE has a valid form'],
+    // Docker's local log driver refuses one file while it compresses the rotated ones.
+    'log-files-one': [1, 'FAIL  LOG_MAX_FILES has a valid form: a number of files, at least 2'],
+    'log-files-two': [0, null],
     'shell-export': [1, "FAIL  set in this shell as well, docker compose would use the shell's value (unset them): DB_PASSWORD"],
     'compose-fails': [1, 'FAIL  docker compose renders the production compose'],
     'no-env-file': [1, 'FAIL  the env file exists'],
