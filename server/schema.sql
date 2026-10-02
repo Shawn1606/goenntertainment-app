@@ -328,7 +328,11 @@ CREATE TABLE IF NOT EXISTS ban_evidence (
 --   verdict: 'ok' | 'auffaellig' | 'abgelehnt' | 'refusal' | 'error'
 --   severity: 0 unbedenklich · 1 grenzwertig · 2 nicht jugendfrei · 3 schwer
 --   action: 'none' (durchgelassen) | 'blocked' (abgelehnt) | 'timeout' (+ Sperre)
--- user_id -> SET NULL, damit Berichte eine Konto-Loeschung ueberdauern.
+-- user_id -> SET NULL only as a fallback: deleting an account (server/src/account-deletion.js,
+-- F-16) deletes the person's rows and their images with it. server/src/retention.js deletes every
+-- row older than MODERATION_REPORT_RETENTION_DAYS, which covers rows left without an account by
+-- earlier deletions, and clears images older than EVIDENCE_RETENTION_DAYS. Both settings are
+-- required in production; where they are unset, nothing is pruned.
 CREATE TABLE IF NOT EXISTS moderation_reports (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id     BIGINT UNSIGNED NULL,
