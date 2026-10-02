@@ -1188,3 +1188,14 @@ test('hardening: no new privileges anywhere, and no capabilities for api, node a
   console.log(`hardening: ${services.length} services checked`);
   assert.deepEqual(problems, []);
 });
+
+test('compose project: no top-level name, so a server that ran an earlier compose keeps its volumes', () => {
+  // Without a name, docker compose names the project after the compose file's folder, deploy/,
+  // as every earlier version of this compose did: the volumes stay deploy_db-data and so on.
+  const files = [COMPOSE_FILE, CI_OVERRIDE].filter((f) => fs.existsSync(path.join(DEPLOY_DIR, f)));
+  assert.ok(files.length > 0, 'no compose file found: refusing to report clean');
+  const named = files.filter((f) => /^name\s*:/m.test(readText(path.join(DEPLOY_DIR, f))));
+  console.log(`compose files checked for a top-level name: ${files.length}; without one the project is named after the folder: ${path.basename(DEPLOY_DIR)}`);
+  assert.deepEqual(named, [], 'a top-level name renames every volume and network: a server that ran an earlier compose would start on a new, empty database');
+  assert.deepEqual(parseEnvFile(readText(ENV_EXAMPLE)).filter((s) => s.name === 'COMPOSE_PROJECT_NAME').map((s) => `line ${s.line}`), [], 'deploy/.env.example sets COMPOSE_PROJECT_NAME');
+});

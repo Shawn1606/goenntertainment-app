@@ -58,7 +58,7 @@ the server that reads the volume hand out whatever the link points to. caddy hol
 certificate and account keys (`caddy-data`), so it mounts no volume that another service writes;
 `media` has nothing to hand out but the uploads themselves.
 
-Volumes (named `goenntertainment_<name>` on the server; `docker volume ls`):
+Volumes (named `deploy_<name>` on the server, after the compose file's folder; `docker volume ls`):
 
 | Volume | Holds | Notes |
 |---|---|---|
@@ -104,9 +104,9 @@ The mobile app is not a container: it is built with EAS and carries the server a
   it and how big it is: `______` (the operator). One data point, not a sizing: the idle test stack
   this runbook was walked through on used 0.55 to 0.7 GB of memory in two runs (MySQL about
   0.45 to 0.5 GB of it), and its images about 2.5 GB of disk.
-- **Docker Compose v2.24.4 or newer** (`docker compose version`). The production files use a
-  top-level `name`, `additional_contexts` and a bind mount with `create_host_path: false`; the CI
-  override uses `!reset`, which needs 2.24.4 (`deploy/docker-compose.ci.yml`). The files were
+- **Docker Compose v2.24.4 or newer** (`docker compose version`). The production files use
+  `additional_contexts` and a bind mount with `create_host_path: false`; the CI override uses
+  `!reset`, which needs 2.24.4 (`deploy/docker-compose.ci.yml`). The files were
   tested with Docker Compose v5.5.1; no older version was tried.
 - **The whole clone**: the images are built from `api/`, `server/` and `shared/` (the lists that
   the app, Laravel and Node share: blocked terms, common passwords). Without `shared/` the build
@@ -360,6 +360,21 @@ next long-term-support line before then, together with CI's `NODE_VERSION`
 files. It carries the same pin as `deploy/docker-compose.yml`, and `scripts/ci/check-mirrors.mjs`
 fails until all copies agree, so a Dependabot update of the compose pin needs the workflow lines
 changed by hand in the same pull request.
+
+**From an earlier setup** (once, on a server that ran an earlier `deploy/docker-compose.yml`). The
+project is named after its folder, `deploy`, as before, so the database, the certificates and
+caddy's configuration stay in their volumes (`deploy_db-data`, `deploy_caddy-data`,
+`deploy_caddy-config`). Before `git pull`, stop the old stack with the old files; this also
+removes its network `deploy_default`, whose address range could overlap `APP_NET_PREFIX`. Never
+add `-v`:
+
+```bash
+docker compose down
+```
+
+Then add the new settings ([Settings](#settings)) and run the update steps above. A database
+volume from before has no binary-log rotation yet: create it once ([Logs](#logs)). Uploads that
+the old setup kept in folders of the clone move into volumes as described next.
 
 **Moving from the old upload folders** (once, only if this server ran an earlier setup that kept
 uploads in `deploy/storage/` and `deploy/storage-private/`): with the stack stopped

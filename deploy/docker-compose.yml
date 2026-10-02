@@ -23,9 +23,10 @@
 # before every update: deploy/scripts/preflight.sh. The first start creates the admin account
 # with the one-off `seed` service before caddy may start (the `admin-gate` service); the steps
 # are in deploy/README.md.
-
-# Stable names for the volumes and networks, whatever the clone's folder is called.
-name: goenntertainment
+#
+# No top-level `name`: docker compose names the project after this file's folder, `deploy`, as
+# every earlier version of this file did, so a server that ran one keeps its volumes
+# (deploy_db-data and the others).
 
 # Every container's log is rotated by size (F-45): at most LOG_MAX_FILES files of LOG_MAX_SIZE
 # each. How much log is kept is an operator decision, so both are required. Docker rotates by

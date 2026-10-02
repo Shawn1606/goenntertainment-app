@@ -415,6 +415,15 @@ test('runbook: no stale or guessed facts', () => {
   assert.deepEqual(problems, []);
 });
 
+test('runbook: the volume names it gives are the ones docker compose uses', () => {
+  // A top-level `name:` names the project; without one, docker compose takes the folder's name.
+  const project = /^name:\s*['"]?([^\s'"]+)/m.exec(composeText())?.[1] ?? path.basename(DEPLOY_DIR);
+  const said = [...runbook().matchAll(/named `([a-z0-9_-]+)_<name>`/g)].map((m) => m[1]);
+  console.log(`volume prefix: the compose gives ${project}, the runbook names ${said.join(', ') || 'none'}`);
+  assert.ok(said.length > 0, 'the runbook does not say how the volumes are named');
+  assert.deepEqual([...new Set(said)], [project]);
+});
+
 test('F-45: the runbook creates the binary-log rotation on a database volume older than it, from the file the db service mounts', () => {
   const db = renderConfig({ profiles: ['tools'] }).services.db;
   const rotate = (db.volumes ?? []).find((v) => v.type === 'bind' && /binlog-rotate\.sql$/.test(v.target));
