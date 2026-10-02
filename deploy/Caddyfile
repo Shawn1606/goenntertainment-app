@@ -58,7 +58,7 @@
 	handle {
 		# Alles andere geht an Laravel (Container `api`). Laravel beantwortet, was es kann,
 		# und reicht den Rest an das Node-Backend weiter – genau wie am PC.
-		reverse_proxy api:80 {
+		reverse_proxy api:8080 {
 			# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
 			# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
 			header_up X-Forwarded-Proto {scheme}
@@ -72,11 +72,12 @@
 
 	encode gzip
 
+	# Access log to the container log (docker compose logs caddy), rotated with every other
+	# container log by the compose's logging settings (LOG_MAX_SIZE, LOG_MAX_FILES). It holds the
+	# client address, method and full URI; Caddy leaves out the Authorization and Cookie headers.
 	log {
-		output file /data/access.log {
-			roll_size 10MB
-			roll_keep 5
-		}
+		output stdout
+		format json
 	}
 
 	# Caddy's own error answers (413, a missing upload, ...) get the same headers: error routes do

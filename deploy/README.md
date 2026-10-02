@@ -131,7 +131,11 @@ Without these six settings, too, `docker compose` refuses to start.
 
 Also required, each an operator decision without a default (the comments in `.env.example` say
 who decides and in which form): the mail provider and sender, `MAIL_HOST`, `MAIL_USERNAME`,
-`MAIL_PASSWORD` (both may be empty for a relay without login) and `MAIL_FROM_ADDRESS`.
+`MAIL_PASSWORD` (both may be empty for a relay without login) and `MAIL_FROM_ADDRESS`; the
+backups, `BACKUP_DIR` (an absolute path outside this clone, owned by root, mode 700) and
+`BACKUP_RETENTION_DAYS`; the logs, `LOG_MAX_SIZE` and `LOG_MAX_FILES`; and the MySQL binary log,
+`MYSQL_BINLOG_RETENTION_DAYS` (days, or `off`). `scripts/preflight.sh` checks the file before a
+start.
 
 Passwörter erzeugen:
 

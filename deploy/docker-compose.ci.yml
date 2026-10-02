@@ -6,7 +6,8 @@
 #     the internet (no ACME: DOMAIN=localhost makes Caddy use its internal CA);
 #   - caddy publishes no host port: tests reach it over the edge network;
 #   - Mailpit catches every mail (no code ever lands in a log);
-#   - node's moderation client points at a closed local port.
+#   - node's moderation client points at a closed local port;
+#   - the backups go to a throw-away volume instead of BACKUP_DIR.
 #
 # Start command and settings for a local run: see the header of deploy/ci.env.
 
@@ -33,6 +34,13 @@ services:
       # event still goes through.
       ANTHROPIC_BASE_URL: http://127.0.0.1:9
 
+  backup:
+    volumes:
+      # Replaces the BACKUP_DIR bind of docker-compose.yml (same target).
+      - type: volume
+        source: ci-backups
+        target: /backups
+
   # The development mail catcher (pinned image), reused so the pin lives in one place. Its host
   # ports are dropped: api reaches Mailpit over the app network.
   mailpit:
@@ -41,6 +49,9 @@ services:
       service: mailpit
     ports: !reset []
     networks: [app]
+
+volumes:
+  ci-backups:
 
 networks:
   edge:

@@ -3,7 +3,7 @@
 #   Internet ─► caddy (HTTPS, Port 80/443)       Uploads als einfache Dateien (nur lesend)
 #                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
 #                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
-#                 db  (MySQL)  ◄── beide Backends
+#                 db  (MySQL)  ◄── beide Backends, die nächtliche Sicherung (backup)
 #
 # Genau die Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node dahinter), nur
 # dass niemand außer Caddy von außen erreichbar ist.
@@ -11,18 +11,28 @@
 # Networks (who can reach whom; the bottom of this file has the details):
 #   edge      caddy <-> api. caddy's ports, certificates and api's mail go through here.
 #   app       api <-> node, and both backends -> db. Internal: no way out.
-#   data      db <-> admin-gate, seed. Internal.
+#   data      db <-> backup, admin-gate, seed. Internal.
 #   outbound  node alone: its way out to the moderation provider.
 # caddy reaches neither node nor db, db has no way out, and api and node share exactly one
 # network, so each backend sees the one before it at a fixed address (F-31).
 #
 # Every setting without a default is required: docker compose refuses to start until deploy/.env
-# sets it (deploy/.env.example lists them, with who decides each). The first start creates the
-# admin account with the one-off `seed` service before caddy may start (the `admin-gate`
-# service); the steps are in deploy/README.md.
+# sets it (deploy/.env.example lists them, with who decides each). Before the first start and
+# before every update: deploy/scripts/preflight.sh. The first start creates the admin account
+# with the one-off `seed` service before caddy may start (the `admin-gate` service); the steps
+# are in deploy/README.md.
 
 # Stable names for the volumes and networks, whatever the clone's folder is called.
 name: goenntertainment
+
+# Every container's log is rotated by size (F-45): at most LOG_MAX_FILES files of LOG_MAX_SIZE
+# each. How much log is kept is an operator decision, so both are required. Docker rotates by
+# size, not by time.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: ${LOG_MAX_SIZE:?LOG_MAX_SIZE is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
+    max-file: ${LOG_MAX_FILES:?LOG_MAX_FILES is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
 
 # The Node image: built once for the node service and the one-off seed service.
 x-node-build: &node-build
@@ -34,16 +44,24 @@ services:
   db:
     image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
     restart: unless-stopped
+    # Checks MYSQL_BINLOG_RETENTION_DAYS, then starts the image's own entrypoint with it
+    # (scripts/db-entrypoint.sh).
+    entrypoint: ['bash', '/opt/deploy/db-entrypoint.sh']
+    command: ['mysqld']
     environment:
       MYSQL_DATABASE: goenntertainment
       MYSQL_USER: goenn
       MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      # How many days MySQL keeps its binary log (every change, also of deleted accounts), or
+      # `off`. A retention decision (F-45) without a default; MySQL's own would be 30 days.
+      MYSQL_BINLOG_RETENTION_DAYS: ${MYSQL_BINLOG_RETENTION_DAYS:?MYSQL_BINLOG_RETENTION_DAYS is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
     volumes:
       - db-data:/var/lib/mysql
       # Legt beim ALLERERSTEN Start (leeres Volume) alle Tabellen an. Spätere
       # Ergänzungen macht das Node-Backend beim Start selbst (ensureSchema).
       - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./scripts/db-entrypoint.sh:/opt/deploy/db-entrypoint.sh:ro
     healthcheck:
       # No credentials (F-18): mysqladmin ping exits 0 as soon as the server answers, even when it
       # refuses the login, so no password ever appears on a command line or in the container's
@@ -54,6 +72,9 @@ services:
       retries: 20
       start_period: 30s
     networks: [app, data]
+    # The image's entrypoint changes file owners and drops to the mysql user: default capabilities.
+    security_opt: ['no-new-privileges:true']
+    logging: *logging
 
   # Bereitet die Upload-Volumes vor und beendet sich dann wieder.
   #
@@ -76,6 +97,8 @@ services:
       # Evidence and story images (F-11, server/src/storage.js): node only, never a web server.
       - private-media:/storage-private
     network_mode: none
+    security_opt: ['no-new-privileges:true']
+    logging: *logging
 
   node:
     build: *node-build
@@ -152,13 +175,17 @@ services:
       # Node's checked routes. Never mount this volume into api, caddy or any other web server.
       - private-media:/app/storage-private
     healthcheck:
-      # Node's own health route; /api/health belongs to Laravel.
+      # Node's own health route; /api/health belongs to Laravel. The start period covers the
+      # schema step, which runs before Node listens.
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      start_period: 60s
     networks: [app, outbound]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
   api:
     build:
@@ -253,18 +280,29 @@ services:
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
     # No volumes: uploads are served by caddy, never by Laravel or PHP (F-29).
+    healthcheck:
+      # Checks the way to the database (/api/health asks MySQL), not only that Apache answers.
+      # `php -r`: the image has no curl. Port 8080: Apache runs as www-data and cannot bind 80.
+      test: ['CMD', 'php', '-r', 'exit(str_contains((string) @file_get_contents("http://127.0.0.1:8080/api/health"), "\"ok\":true") ? 0 : 1);']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     networks:
       edge: {}
       app:
         # Fixed: node trusts the client address only from this one (NODE_TRUST_PROXY).
         ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.140
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
   caddy:
     image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       # The public edge starts only once an admin account exists (F-05, scripts/admin-gate.sh).
       admin-gate:
         condition: service_completed_successfully
@@ -289,6 +327,11 @@ services:
       # bei jedem Neustart neue und läuft irgendwann ins Rate-Limit.
       - caddy-data:/data
       - caddy-config:/config
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    # Runs as root in its image and binds 80 and 443.
+    cap_add: [NET_BIND_SERVICE]
+    logging: *logging
 
   # One-shot check before caddy starts: is there an admin account (scripts/admin-gate.sh)?
   admin-gate:
@@ -306,6 +349,52 @@ services:
       - ./scripts/admin-gate.sh:/opt/deploy/admin-gate.sh:ro
     tmpfs: [/tmp]
     networks: [data]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
+
+  # Nightly backup of the database and the uploads, with pruning (F-17, scripts/backup.sh):
+  # every day at 02:30 UTC and once at start, into BACKUP_DIR on the host.
+  backup:
+    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+    restart: unless-stopped
+    init: true
+    entrypoint: ['bash', '/opt/deploy/backup.sh']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      # How many days a backup set is kept. An operator decision without a default.
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:?BACKUP_RETENTION_DAYS is missing in deploy/.env (backup retention, an operator decision; see deploy/.env.example)}
+      TZ: UTC
+    volumes:
+      - ./scripts/backup.sh:/opt/deploy/backup.sh:ro
+      - uploads:/data/uploads:ro
+      - private-media:/data/private-media:ro
+      # Outside the clone (deploy/scripts/preflight.sh checks it), so neither a fresh clone nor
+      # a `git clean` takes the backups with it. Never created implicitly: a missing directory
+      # stops the start instead of filling a new, empty one.
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR is missing in deploy/.env (an absolute path outside this clone, an operator decision; see deploy/.env.example)}
+        target: /backups
+        bind:
+          create_host_path: false
+    tmpfs: [/tmp]
+    healthcheck:
+      # Healthy while the last run succeeded within 26 hours and none failed since.
+      test: ['CMD', 'bash', '/opt/deploy/backup.sh', '--check']
+      interval: 10m
+      timeout: 30s
+      retries: 3
+      start_period: 30m
+    networks: [data]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
   # One-off: creates the admin account (server/src/seed.js, `npm run seed:admin`), before caddy
   # may start. Never started by `docker compose up` (profile tools); run it with
@@ -329,6 +418,9 @@ services:
       ADMIN_EMAIL:
       ADMIN_PASSWORD:
     networks: [data]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
 volumes:
   db-data:
@@ -336,7 +428,7 @@ volumes:
   caddy-config:
   # Public uploads (avatars, banners, posts, user banners): node writes, caddy serves (read-only).
   uploads:
-  # Private media (evidence, stories): node only.
+  # Private media (evidence, stories): node only; the backup reads it.
   private-media:
 
 # APP_NET_PREFIX (the first three parts of a free private /24 on this host, see

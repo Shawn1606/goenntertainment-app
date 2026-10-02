@@ -1,6 +1,6 @@
 // Static checks of the production deploy (deploy/): the compose files as docker compose renders
 // them, the Caddyfile as Caddy adapts it, the env files and the helper scripts. They need Docker
-// (the CLI and the pinned caddy image) but no network and no running stack.
+// (the CLI and the pinned mysql and caddy images) but no network and no running stack.
 //
 //   node --test deploy/test/static.test.mjs        (npm run test:deploy runs every deploy test)
 //
@@ -45,6 +45,11 @@ const REQUIRED = {
   MAIL_USERNAME: 'decision',
   MAIL_PASSWORD: 'decision',
   MAIL_FROM_ADDRESS: 'decision',
+  BACKUP_DIR: 'decision',
+  BACKUP_RETENTION_DAYS: 'decision',
+  LOG_MAX_SIZE: 'decision',
+  LOG_MAX_FILES: 'decision',
+  MYSQL_BINLOG_RETENTION_DAYS: 'decision',
 };
 const REQUIRED_NAMES = Object.keys(REQUIRED).sort();
 /** Required to be present, but empty is allowed (`${NAME?}`): a mail relay without a login. */
@@ -216,7 +221,7 @@ test('ci-only env file is labelled and holds only fake values', () => {
   const services = new Set(Object.keys(ci().services));
   const secretName = /(password|passwd|[_-]pwd|secret|token|[_-]key)$/i;
   const fakeValue = [
-    /^$/, /^\d+$/, /^(true|false)$/, /^localhost$/, /ci-only/, /not-a-secret/,
+    /^$/, /^\d+$/, /^\d+[kmg]$/, /^(true|false)$/, /^localhost$/, /ci-only/, /not-a-secret/,
     /^[^@\s]+@example\.invalid$/, /^(\S+\.)?example\.invalid$/,
     /^http:\/\/(127\.0\.0\.1|\[::1\]|localhost)(:\d+)?\/?$/,
     /^(10|172\.(1[6-9]|2\d|3[01])|192\.168)(\.\d{1,3}){1,2}$/,
@@ -262,6 +267,12 @@ test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> n
     assert.equal(dials.length, 1, 'caddy has exactly one upstream');
     assert.equal(dials[0].split(':')[0], 'api', "caddy's upstream is the Laravel service");
   });
+});
+
+test('F-28: caddy and the api healthcheck use the port of the non-root Apache (8080)', () => {
+  const dials = caddyHandlers(caddyAdapt()).filter((h) => h.handler === 'reverse_proxy').flatMap((h) => h.upstreams.map((u) => u.dial));
+  assert.deepEqual(dials, ['api:8080']);
+  assert.ok(healthTest(base().services.api).join(' ').includes('http://127.0.0.1:8080/api/health'), 'api healthcheck');
 });
 
 // ------------------------------------------------------------------------------ F-05, F-18
@@ -318,8 +329,8 @@ test('F-29: uploads are mounted read-only into caddy, read-write only into node,
   const all = mounts(config);
   const of = (source) => all.filter((m) => m.type === 'volume' && m.source === source)
     .map((m) => `${m.service}:${m.read_only ? 'ro' : 'rw'}`).sort();
-  assert.deepEqual(of('uploads'), ['caddy:ro', 'node:rw', 'storage-init:rw']);
-  assert.deepEqual(of('private-media'), ['node:rw', 'storage-init:rw']);
+  assert.deepEqual(of('uploads'), ['backup:ro', 'caddy:ro', 'node:rw', 'storage-init:rw']);
+  assert.deepEqual(of('private-media'), ['backup:ro', 'node:rw', 'storage-init:rw']);
   assert.deepEqual(all.filter((m) => m.service === 'api'), [], 'api mounts something');
   const binds = all.filter((m) => m.type === 'bind' && /storage/.test(posix(m.source)));
   assert.deepEqual(binds, [], 'an upload folder bound from the clone');
@@ -404,6 +415,173 @@ test('request bodies: 9 MB only for multipart uploads, otherwise the largest bod
   assert.equal(multipart.handle[0].max_size, 9000000);
   assert.ok(multipart.handle[0].max_size > upload && multipart.handle[0].max_size < post, 'between the image limit and post_max_size');
   assert.equal(other.handle[0].max_size, Math.max(...kb) * 1024, 'the largest non-upload limit of Laravel and Node');
+});
+
+// ------------------------------------------------------------------------------ F-45, F-17
+
+test('F-45: every service rotates its log with the required limits', () => {
+  const values = ciValues();
+  const services = servicesOf(base());
+  assert.ok(services.length > 0);
+  const wrong = services.filter(([, s]) => s.logging?.driver !== 'local'
+    || s.logging.options?.['max-size'] !== values.LOG_MAX_SIZE
+    || s.logging.options?.['max-file'] !== values.LOG_MAX_FILES).map(([n]) => n);
+  console.log(`logging: ${services.length} services checked (${services.filter(([, s]) => s.restart).length} long-running)`);
+  assert.deepEqual(wrong, []);
+});
+
+test('F-45: the MySQL binary log keeps the required retention, never the MySQL default or forever', () => {
+  const db = base().services.db;
+  assert.deepEqual(db.entrypoint, ['bash', '/opt/deploy/db-entrypoint.sh']);
+  assert.deepEqual(db.command, ['mysqld']);
+  assert.equal(db.environment.MYSQL_BINLOG_RETENTION_DAYS, ciValues().MYSQL_BINLOG_RETENTION_DAYS);
+  const cases = [
+    ['1', 0, '--binlog-expire-logs-seconds=86400'],
+    ['30', 0, '--binlog-expire-logs-seconds=2592000'],
+    ['9999', 0, '--binlog-expire-logs-seconds=863913600'],
+    ['off', 0, '--disable-log-bin'],
+    ...['', '0', '00', '-1', '1.5', 'abc', '10000', 'OFF', '7d', ' 7'].map((v) => [v, 2, null]),
+  ];
+  const script = cases.map(([v], i) => `MYSQL_BINLOG_RETENTION_DAYS=${JSON.stringify(v)} bash /opt/deploy/db-entrypoint.sh --print-command mysqld > /tmp/out 2>&1; echo "case ${i} exit $?: $(tr '\\n' ' ' < /tmp/out)"`).join('\n');
+  const r = dockerRun(serviceImage('db'), {
+    mounts: [{ src: path.join(DEPLOY_DIR, 'scripts', 'db-entrypoint.sh'), dst: '/opt/deploy/db-entrypoint.sh' }],
+    entrypoint: 'bash',
+    args: ['-c', script],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const lines = r.stdout.trim().split('\n');
+  assert.equal(lines.length, cases.length, r.stdout);
+  console.log(`binary log retention: ${cases.length} values checked`);
+  cases.forEach(([value, code, flag], i) => {
+    const m = new RegExp(`^case ${i} exit (\\d+): (.*)$`).exec(lines[i]);
+    assert.ok(m, lines[i]);
+    assert.equal(Number(m[1]), code, `value ${JSON.stringify(value)}: ${m[2]}`);
+    if (flag) assert.equal(m[2].trim(), `docker-entrypoint.sh mysqld ${flag}`);
+    else assert.match(m[2], /MYSQL_BINLOG_RETENTION_DAYS must be/);
+  });
+});
+
+test('F-17: backups go to the required BACKUP_DIR bind, never created implicitly, and to a volume in CI', () => {
+  const backup = base().services.backup;
+  const bind = backup.volumes.find((v) => v.target === '/backups');
+  assert.equal(bind.type, 'bind');
+  assert.equal(posix(bind.source).replace(/^[A-Za-z]:/, ''), ciValues().BACKUP_DIR);
+  assert.equal(bind.bind?.create_host_path, false);
+  assert.equal(backup.environment.BACKUP_RETENTION_DAYS, ciValues().BACKUP_RETENTION_DAYS);
+  assert.deepEqual(backup.healthcheck.test, ['CMD', 'bash', '/opt/deploy/backup.sh', '--check']);
+  assert.ok(backup.restart, 'the backup service is long-running');
+  const ciBackup = ci().services.backup.volumes.find((v) => v.target === '/backups');
+  assert.deepEqual({ type: ciBackup.type, source: ciBackup.source }, { type: 'volume', source: 'ci-backups' });
+});
+
+test('F-17: the preflight refuses a BACKUP_DIR inside the clone and checks the env file without printing values', () => {
+  const secrets = Object.entries(ciValues()).filter(([k, v]) => /PASSWORD|SECRET|_KEY$/.test(k) && v !== '').map(([, v]) => v);
+  // Runs inside the db image (bash, coreutils): the file modes a check needs exist only on a
+  // Linux file system. A stand-in `docker` records its arguments, so the last check's call is
+  // visible without a Docker daemon in the container.
+  const driver = [
+    'set -u',
+    'mkdir -p /work /clone/backups',
+    'chmod 700 /clone/backups',
+    "cat > /usr/local/bin/docker <<'EOF'",
+    '#!/bin/sh',
+    "printf '%s ' \"$@\" > /work/docker-args",
+    'exit "${FAKE_DOCKER_STATUS:-0}"',
+    'EOF',
+    'chmod 755 /usr/local/bin/docker',
+    'install -d -m 700 /work/backups',
+    'install -d -m 755 /work/open',
+    'ln -s /clone/backups /work/into-clone',
+    'envfile() { sed "s|^BACKUP_DIR=.*|BACKUP_DIR=$1|" /clone/deploy/ci.env > /work/prod.env; chmod 600 /work/prod.env; }',
+    "run() { out=$(bash /clone/deploy/scripts/preflight.sh \"${ENV_FILE:-/work/prod.env}\" 2>&1); code=$?; printf '=== %s exit %s\\n%s\\n' \"$1\" \"$code\" \"$out\"; }",
+    'envfile /work/backups; run ok; echo "docker: $(cat /work/docker-args)"',
+    'envfile relative/backups; run relative',
+    'envfile /clone/backups; run inside-clone',
+    'envfile /work/into-clone; run symlink-into-clone',
+    'envfile /work/missing; run missing-dir',
+    'envfile /work/open; run open-dir',
+    'envfile /work/backups; chmod 644 /work/prod.env; run readable-env',
+    "envfile /work/backups; sed -i 's/^BACKUP_RETENTION_DAYS=.*/BACKUP_RETENTION_DAYS=0/' /work/prod.env; run retention-zero",
+    "envfile /work/backups; sed -i 's/^MYSQL_BINLOG_RETENTION_DAYS=.*/MYSQL_BINLOG_RETENTION_DAYS=0/' /work/prod.env; run binlog-zero",
+    "envfile /work/backups; sed -i 's/^LOG_MAX_SIZE=.*/LOG_MAX_SIZE=10/' /work/prod.env; run log-size",
+    'envfile /work/backups; DB_PASSWORD=shell-value-not-a-secret run shell-export',
+    'envfile /work/backups; FAKE_DOCKER_STATUS=1 run compose-fails',
+    'ENV_FILE=/work/none.env run no-env-file',
+  ].join('\n');
+  const r = dockerRun(serviceImage('db'), {
+    mounts: [{ src: DEPLOY_DIR, dst: '/clone/deploy' }],
+    entrypoint: 'bash',
+    args: ['-c', driver],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  const runs = Object.fromEntries(r.stdout.split(/^=== /m).slice(1).map((chunk) => {
+    const [head, ...rest] = chunk.split('\n');
+    const [, name, code] = /^(\S+) exit (\d+)$/.exec(head);
+    return [name, { code: Number(code), out: rest.join('\n') }];
+  }));
+  const expected = {
+    ok: [0, null],
+    relative: [1, 'FAIL  BACKUP_DIR is an absolute path'],
+    'inside-clone': [1, 'FAIL  BACKUP_DIR lies outside this clone'],
+    'symlink-into-clone': [1, 'FAIL  BACKUP_DIR lies outside this clone'],
+    'missing-dir': [1, 'FAIL  BACKUP_DIR is an existing directory'],
+    'open-dir': [1, 'FAIL  BACKUP_DIR belongs to root with mode 700'],
+    'readable-env': [1, 'FAIL  only the owner can read the env file'],
+    'retention-zero': [1, 'FAIL  BACKUP_RETENTION_DAYS has a valid form'],
+    'binlog-zero': [1, 'FAIL  MYSQL_BINLOG_RETENTION_DAYS has a valid form'],
+    'log-size': [1, 'FAIL  LOG_MAX_SIZE has a valid form'],
+    'shell-export': [1, "FAIL  set in this shell as well, docker compose would use the shell's value (unset them): DB_PASSWORD"],
+    'compose-fails': [1, 'FAIL  docker compose renders the production compose'],
+    'no-env-file': [1, 'FAIL  the env file exists'],
+  };
+  assert.deepEqual(Object.keys(runs).sort(), Object.keys(expected).sort(), r.stdout);
+  console.log(`preflight: ${Object.keys(expected).length} cases`);
+  for (const [name, [code, line]] of Object.entries(expected)) {
+    const { out } = runs[name];
+    assert.equal(runs[name].code, code, `${name}:\n${out}`);
+    if (line) assert.ok(out.includes(line), `${name}: expected "${line}" in:\n${out}`);
+    assert.match(out, /preflight: \d+ checks, \d+ failed/, `${name}: no total`);
+    for (const value of [...secrets, 'shell-value-not-a-secret']) assert.ok(!out.includes(value), `${name} printed a value`);
+  }
+  assert.match(runs.ok.out, /preflight: 1[0-9] checks, 0 failed/);
+  assert.match(r.stdout, /^docker: compose --project-directory \/clone\/deploy --env-file \/work\/prod\.env -f \/clone\/deploy\/docker-compose\.yml config --quiet $/m);
+});
+
+test('F-17: the backup runs nightly at 02:30 UTC and refuses an invalid retention', () => {
+  const times = [
+    ['2026-01-01T01:00:00Z', 5400],
+    ['2026-01-01T02:29:59Z', 1],
+    ['2026-01-01T02:30:00Z', 86400],
+    ['2026-01-01T23:00:00Z', 12600],
+  ];
+  const invalid = ['', '0', '-1', '1.5', 'abc', '100000', '7 '];
+  const script = [
+    ...times.map(([now], i) => `echo "time ${i}: $(BACKUP_NOW=${now} bash /opt/deploy/backup.sh --seconds-until-next)"`),
+    ...invalid.map((v, i) => `BACKUP_RETENTION_DAYS=${JSON.stringify(v)} DB_HOST=db DB_DATABASE=d DB_USERNAME=u DB_PASSWORD=p bash /opt/deploy/backup.sh --once > /tmp/out 2>&1; echo "retention ${i} exit $?: $(tr '\\n' ' ' < /tmp/out)"`),
+  ].join('\n');
+  const r = dockerRun(serviceImage('backup'), {
+    mounts: [{ src: path.join(DEPLOY_DIR, 'scripts', 'backup.sh'), dst: '/opt/deploy/backup.sh' }],
+    entrypoint: 'bash',
+    args: ['-c', script],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  console.log(`backup schedule: ${times.length} clock times, ${invalid.length} invalid retention values`);
+  times.forEach(([now, seconds], i) => assert.match(r.stdout, new RegExp(`^time ${i}: ${seconds}$`, 'm'), now));
+  invalid.forEach((v, i) => assert.match(r.stdout, new RegExp(`^retention ${i} exit 2: backup: ERROR: BACKUP_RETENTION_DAYS must be`, 'm'), JSON.stringify(v)));
+});
+
+test('settings checked in two places use the same patterns (preflight and the services)', () => {
+  const read = (file, name) => new RegExp(`${name}='([^']+)'`).exec(readText(path.join(DEPLOY_DIR, 'scripts', file)))?.[1];
+  const pairs = [
+    ['RETENTION_PATTERN', 'backup.sh', 'RETENTION_PATTERN', 'preflight.sh'],
+    ['BINLOG_RETENTION_PATTERN', 'db-entrypoint.sh', 'BINLOG_RETENTION_PATTERN', 'preflight.sh'],
+  ];
+  for (const [a, fileA, b, fileB] of pairs) {
+    const left = read(fileA, a);
+    const right = read(fileB, b);
+    assert.ok(left && right, `cannot find ${a} in ${fileA} or ${b} in ${fileB}`);
+    assert.equal(left, right, `${fileA} ${a} vs ${fileB} ${b}`);
+  }
 });
 
 test('scripts the containers read from the working tree keep LF line ends', () => {
@@ -519,7 +697,7 @@ test('networks: only caddy publishes ports (IPv4), db and the jobs sit on intern
   assert.deepEqual(services.filter(([n]) => on(n).includes('edge')).map(([n]) => n).sort(), ['api', 'caddy']);
   assert.deepEqual(services.filter(([n]) => on(n).includes('outbound')).map(([n]) => n), ['node']);
   assert.ok(on('db').length > 0 && on('db').every(internal), 'db sits on internal networks only');
-  for (const job of ['admin-gate', 'seed']) assert.deepEqual(on(job), ['data'], job);
+  for (const job of ['backup', 'admin-gate', 'seed']) assert.deepEqual(on(job), ['data'], job);
   assert.equal(config.services['storage-init'].network_mode, 'none');
   assert.deepEqual(shared('caddy', 'node'), []);
   assert.deepEqual(shared('caddy', 'db'), []);
@@ -559,4 +737,18 @@ test('the CI override closes every network, publishes no port and keeps the mode
   assert.equal(config.services.node.environment.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9');
   assert.equal(config.services.api.environment.MAIL_HOST, 'mailpit');
   assert.deepEqual(Object.keys(config.services.mailpit.networks), ['app']);
+});
+
+test('hardening: no new privileges anywhere, and no capabilities for api, node and the jobs', () => {
+  const services = servicesOf(base());
+  const problems = [];
+  for (const [name, s] of services) {
+    if (!(s.security_opt ?? []).includes('no-new-privileges:true')) problems.push(`${name}: no-new-privileges`);
+  }
+  for (const name of ['api', 'node', 'caddy', 'backup', 'admin-gate', 'seed']) {
+    if (!(base().services[name].cap_drop ?? []).includes('ALL')) problems.push(`${name}: cap_drop ALL`);
+  }
+  assert.deepEqual(base().services.caddy.cap_add, ['NET_BIND_SERVICE']);
+  console.log(`hardening: ${services.length} services checked`);
+  assert.deepEqual(problems, []);
 });
