@@ -42,8 +42,8 @@ class ConcurrentCapsTest extends AppFeatureTestCase
     private const FAILURE_CAP = 10;
 
     /**
-     * How long the counter's row is held at most. Shorter than the time a request waits for the
-     * per-account lock before it gives up (5 s), so the waiting requests get their turn.
+     * How long the counter's row is held at most: long enough for every server to have a request
+     * at the count, far shorter than the servers' lock wait (AUTH_LIMIT_LOCK_WAIT below).
      */
     private const HOLD_SECONDS = 3;
 
@@ -97,6 +97,9 @@ class ConcurrentCapsTest extends AppFeatureTestCase
             'MAIL_MAILER' => 'array',
             'LOG_CHANNEL' => 'stderr',
             'AUTH_LIMIT_2FA_FAILURES' => self::FAILURE_CAP.'/900',
+            // Requests queue for the lock while the counter is held; on a slow machine that queue
+            // must not end in 429s. LimiterLockTest covers what happens when the wait runs out.
+            'AUTH_LIMIT_LOCK_WAIT' => '60',
         ], $limits));
 
         foreach ($this->servers->burst(array_fill(0, self::SERVERS, ['method' => 'GET', 'path' => '/api/health'])) as $answer) {

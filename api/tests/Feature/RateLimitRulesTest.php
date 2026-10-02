@@ -29,6 +29,7 @@ class RateLimitRulesTest extends TestCase
         'account-sensitive' => ['user' => '10/60,30/3600'],
         'profile' => ['user' => '30/60,300/3600'],
         'two-factor-failures' => ['account' => '10/900'],
+        'lock-wait' => '5',
     ];
 
     public function test_rules_parse(): void
@@ -92,12 +93,34 @@ class RateLimitRulesTest extends TestCase
     {
         $defaults = require base_path('config/ratelimits.php');
         foreach (array_keys(self::DOCUMENTED) as $limiter) {
+            if ($limiter === 'lock-wait') {
+                continue; // one number, not rules: test_the_lock_wait_is_a_whole_number_of_seconds
+            }
             foreach ($defaults[$limiter] as $scope => $spec) {
                 RateLimitRules::parse($spec);
             }
         }
 
         $this->assertSame(self::DOCUMENTED, $defaults);
+    }
+
+    public function test_the_lock_wait_is_a_whole_number_of_seconds(): void
+    {
+        $this->assertSame(5, RateLimitRules::lockWaitSeconds());
+
+        foreach (['1' => 1, ' 30 ' => 30, '999' => 999] as $spec => $seconds) {
+            config(['ratelimits.lock-wait' => $spec]);
+            $this->assertSame($seconds, RateLimitRules::lockWaitSeconds(), $spec);
+        }
+        foreach (['0', '-1', '1000', '2.5', '5s', '', null] as $bad) {
+            config(['ratelimits.lock-wait' => $bad]);
+            try {
+                RateLimitRules::lockWaitSeconds();
+                $this->fail('accepted '.json_encode($bad));
+            } catch (InvalidArgumentException) {
+                $this->addToAssertionCount(1);
+            }
+        }
     }
 
     public function test_env_example_lists_every_override_with_its_default(): void
@@ -109,7 +132,7 @@ class RateLimitRulesTest extends TestCase
 
         $pairs = static fn (array $sets): array => array_combine(array_column($sets, 1), array_column($sets, 2));
 
-        $this->assertCount(18, $inConfig, 'every scope of config/ratelimits.php has its own variable');
+        $this->assertCount(19, $inConfig, 'every scope of config/ratelimits.php (and the lock wait) has its own variable');
         $this->assertSame($pairs($inConfig), $pairs($inExample));
     }
 

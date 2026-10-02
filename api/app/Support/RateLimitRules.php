@@ -80,6 +80,23 @@ final class RateLimitRules
     }
 
     /**
+     * How many seconds a request waits for the lock around a check and its count
+     * (config ratelimits.lock-wait): a whole number from 1 to 999.
+     */
+    public static function lockWaitSeconds(): int
+    {
+        $spec = config('ratelimits.lock-wait');
+        if (is_int($spec)) {
+            $spec = (string) $spec;
+        }
+        if (! is_string($spec) || preg_match('/^[1-9]\d{0,2}$/', trim($spec)) !== 1) {
+            throw new InvalidArgumentException('The lock wait (AUTH_LIMIT_LOCK_WAIT) is a whole number of seconds from 1 to 999.');
+        }
+
+        return (int) trim($spec);
+    }
+
+    /**
      * The limits of one named limiter for one request.
      *
      * @param  array<string, string>  $keys  one key per scope of config("ratelimits.$limiter")

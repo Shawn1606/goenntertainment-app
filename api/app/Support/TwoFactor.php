@@ -95,9 +95,6 @@ final class TwoFactor
     /** The account's lock ends by itself after this long if its holder dies (seconds). */
     private const ACCOUNT_LOCK_SECONDS = 10;
 
-    /** How long a request waits for the account's lock before it gets a 429 (seconds). */
-    public const ACCOUNT_LOCK_WAIT = 5;
-
     /** Pause between two tries to get the account's lock (milliseconds). */
     private const ACCOUNT_LOCK_RETRY_MS = 50;
 
@@ -277,8 +274,8 @@ final class TwoFactor
      * The lock lives in the cache store next to the counters (the database in the deploy: table
      * cache_locks), so it holds across PHP processes and containers. It is taken outside any
      * database transaction: inside one, its row would reach the other connections only at the
-     * commit. A request that cannot get it within ACCOUNT_LOCK_WAIT seconds gets the limiters'
-     * 429 answer, and nothing was checked or counted.
+     * commit. A request that cannot get it in time (config ratelimits.lock-wait, 5 s by default)
+     * gets the limiters' 429 answer, and nothing was checked or counted.
      *
      * @template T
      *
@@ -290,7 +287,7 @@ final class TwoFactor
         try {
             return Cache::lock("two-factor-account:{$userId}", self::ACCOUNT_LOCK_SECONDS)
                 ->betweenBlockedAttemptsSleepFor(self::ACCOUNT_LOCK_RETRY_MS)
-                ->block(self::ACCOUNT_LOCK_WAIT, $callback);
+                ->block(RateLimitRules::lockWaitSeconds(), $callback);
         } catch (LockTimeoutException) {
             throw new HttpResponseException(
                 response()->json(['message' => AppServiceProvider::MSG_TOO_MANY], 429)->header('Retry-After', '1'),

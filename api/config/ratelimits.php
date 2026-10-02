@@ -97,4 +97,9 @@ return [
     'two-factor-failures' => [
         'account' => RateLimitRules::env('AUTH_LIMIT_2FA_FAILURES', '10/900'),
     ],
+
+    // Not a limit either: how many seconds a request waits for the lock that makes a check and
+    // its count one step (App\Http\Middleware\ThrottleRequestsExactly, App\Support\TwoFactor).
+    // A request that does not get it in time gets the 429 answer, and nothing is counted.
+    'lock-wait' => env('AUTH_LIMIT_LOCK_WAIT', '5'),
 ];
