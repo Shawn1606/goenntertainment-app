@@ -2,10 +2,11 @@
  * "E-Mail-Adresse merken" (F-20): the app remembers the e-mail address for the next sign-in, and
  * nothing else. Earlier versions stored the password too, under LEGACY_CREDENTIALS_KEY; the app
  * moves the address out of that entry and deletes it on the first start after the update
- * (src/lib/credential-store.ts, migrateSavedLogin), whether or not the sign-in screen is shown.
+ * (migrateLegacyEntry below, called through src/lib/credential-store.ts, migrateSavedLogin),
+ * whether or not the sign-in screen is shown.
  *
- * Pure functions only: the storage itself (SecureStore on phones, localStorage on the web) lives
- * in src/lib/credential-store.ts.
+ * No platform code here: the storage itself (SecureStore on phones, localStorage on the web)
+ * lives in src/lib/credential-store.ts and is passed in, so the tests can use a store in memory.
  */
 import { EMAIL_MAX_LENGTH } from './email.ts';
 
@@ -34,5 +35,52 @@ export function emailFromLegacy(raw: string | null | undefined): string | null {
     return normalizeSavedEmail((parsed as { email?: unknown }).email);
   } catch {
     return null;
+  }
+}
+
+/** The device storage as the migration sees it: read, write and delete one text value by key. */
+export type KeyValueStore = {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<void>;
+  remove(key: string): Promise<void>;
+};
+
+/**
+ * Removes what earlier versions stored. The address of the legacy entry is kept, unless a newer
+ * one is already saved; the entry itself is deleted in every case once it was read: malformed,
+ * without an address, or when keeping the address failed. Safe to run on every start.
+ *
+ * Never rejects: the app start awaits it before anything else, so a storage error must not stop
+ * the start. A delete that fails is tried again on the next start, because the entry is still
+ * there to be read.
+ */
+export async function migrateLegacyEntry(store: KeyValueStore): Promise<void> {
+  let legacy: string | null;
+  try {
+    legacy = await store.get(LEGACY_CREDENTIALS_KEY);
+  } catch {
+    return;
+  }
+  if (legacy === null || legacy === undefined) return;
+
+  const email = emailFromLegacy(legacy);
+  if (email) {
+    let saved: string | null = null;
+    try {
+      saved = normalizeSavedEmail(await store.get(SAVED_EMAIL_KEY));
+    } catch {
+      saved = null;
+    }
+    try {
+      if (!saved) await store.set(SAVED_EMAIL_KEY, email);
+    } catch {
+      // Keeping the address is a convenience; the entry is deleted all the same.
+    }
+  }
+
+  try {
+    await store.remove(LEGACY_CREDENTIALS_KEY);
+  } catch {
+    // Still stored: the next start reads it again and retries the delete.
   }
 }

@@ -28,6 +28,22 @@ test('the credential store keeps no password', () => {
   assert.match(store, /export async function migrateSavedLogin\(/);
 });
 
+test('the app start deletes the legacy entry on both platforms', () => {
+  const store = code('lib/credential-store.ts');
+  // The tested logic (saved-login.test.ts) gets the real storage, deleteKey included.
+  const wrapper = store.slice(store.indexOf('export async function migrateSavedLogin('));
+  assert.match(
+    wrapper.slice(0, wrapper.indexOf('\n}')),
+    /await migrateLegacyEntry\(\{ get: readKey, set: writeKey, remove: deleteKey \}\);/,
+    'migrateSavedLogin() does not hand the device storage to migrateLegacyEntry',
+  );
+  // deleteKey removes the entry on the web (localStorage) and on phones (SecureStore).
+  const deleteKey = store.slice(store.indexOf('async function deleteKey('));
+  const body = deleteKey.slice(0, deleteKey.indexOf('\n}'));
+  assert.match(body, /if \(Platform\.OS === 'web'\) \{\s*globalThis\.localStorage\?\.removeItem\(key\);\s*return;\s*\}/);
+  assert.match(body, /await SecureStore\.deleteItemAsync\(key\);/);
+});
+
 test('no screen saves a password on the device', () => {
   for (const file of ['components/login-panel.tsx', 'app/security/password.tsx', 'app/settings.tsx']) {
     const text = code(file);

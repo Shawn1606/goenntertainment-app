@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import {
   LEGACY_CREDENTIALS_KEY,
   SAVED_EMAIL_KEY,
-  emailFromLegacy,
+  migrateLegacyEntry,
   normalizeSavedEmail,
 } from '@/domain/saved-login';
 
@@ -77,24 +77,9 @@ export async function clearSavedEmail(): Promise<void> {
 
 /**
  * Removes what earlier versions stored: keeps the address of the legacy entry (unless a newer one
- * is already saved) and deletes the entry itself. Safe to run on every start.
+ * is already saved) and deletes the entry itself. Safe to run on every start, and never rejects.
+ * The logic and its tests: migrateLegacyEntry in src/domain/saved-login.ts.
  */
 export async function migrateSavedLogin(): Promise<void> {
-  let legacy: string | null = null;
-  try {
-    legacy = await readKey(LEGACY_CREDENTIALS_KEY);
-  } catch {
-    legacy = null;
-  }
-  if (legacy === null) return;
-
-  const email = emailFromLegacy(legacy);
-  if (email && !(await loadSavedEmail())) {
-    await saveEmail(email);
-  }
-  try {
-    await deleteKey(LEGACY_CREDENTIALS_KEY);
-  } catch {
-    // Löschen ging nicht – beim nächsten Start wird es erneut versucht.
-  }
+  await migrateLegacyEntry({ get: readKey, set: writeKey, remove: deleteKey });
 }
