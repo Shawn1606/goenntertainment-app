@@ -10,7 +10,6 @@
 #   images in workflow files. It is pinned to the same tag and digest as
 #   deploy/docker-compose.yml, which Dependabot does update; the mirror check then fails until
 #   the workflow's lines carry the new pin too (scripts/ci/check-mirrors.mjs, "MySQL image digest");
-# - COPY --from=<image> lines in api/Dockerfile: Dependabot reads FROM lines only.
 # No reviewers or assignees here: that needs real accounts (CODEOWNERS, once decided).
 version: 2
 updates:
