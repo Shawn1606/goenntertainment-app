@@ -172,8 +172,8 @@ commit.
 
 Optional settings, with their defaults in the compose or the code (`deploy/.env.example` lists
 them): the moderation tuning (`MODERATION_MODEL`, `MODERATION_BLOCK_SEVERITY`,
-`MODERATION_TIMEOUT_SEVERITY`, `MODERATION_TIMEOUT_DAYS`; the defaults are the maintainer's
-values, to be confirmed by the maintainer: `______`), `MODERATION_FAIL_OPEN` (default `false`:
+`MODERATION_TIMEOUT_SEVERITY`, `MODERATION_TIMEOUT_DAYS`; the defaults are the values in the
+code, to be confirmed by whoever is accountable for the app: `______`), `MODERATION_FAIL_OPEN` (default `false`:
 content the model cannot check is refused; `true` is an emergency switch during a provider
 outage, set on purpose), `SANCTUM_EXPIRATION` (access-token lifetime in minutes, default 30
 days), `MAIL_PORT`, `MAIL_SCHEME`, `LOG_LEVEL`, the hidden features `FEATURE_IMPORTED_EVENTS` and
@@ -256,8 +256,8 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
 
 7. Load the start data: the category list the app shows, and three permanent venue entries with
    their host accounts (`server/src/seed.js`, `PERMANENT`). It can run again at any time without
-   creating duplicates. Whether the venue entries belong on the production server: `______` (the
-   maintainer).
+   creating duplicates. Whether the venue entries belong on the production server: `______` (whoever
+   is accountable for the app, to be named before go-live).
 
    ```bash
    docker compose run --rm seed npm run seed
@@ -593,7 +593,7 @@ row are required: the stack does not start without them.
 | the backend domain (`DOMAIN`), and HSTS `includeSubDomains`/`preload` for the whole business domain | the operator, with the domain owner | `______` |
 | the hosting provider and the server size | the operator | `______` |
 | the mail provider and the sender mailbox (`MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`) | the operator | `______` |
-| whose moderation provider account and key (`ANTHROPIC_API_KEY`), the moderation policy, and the moderation tuning defaults | the operator, with the maintainer | `______` |
+| whose moderation provider account and key (`ANTHROPIC_API_KEY`), the moderation policy, and the moderation tuning defaults | the operator, with whoever is accountable for the app | `______` |
 | retention of evidence, moderation reports, expired tokens and usage data (`EVIDENCE_RETENTION_DAYS`, `MODERATION_REPORT_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS`, `USAGE_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | where the backups live, who looks after them, the offsite copy, encryption at rest, and how long sets are kept (`BACKUP_DIR`, `BACKUP_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | how much container log is kept, whether a time limit is required (`LOG_MAX_SIZE`, `LOG_MAX_FILES`) | the operator, with whoever answers for data protection | `______` |
@@ -601,7 +601,7 @@ row are required: the stack does not start without them.
 | whether the access log masks client addresses or query strings; who may read production logs | the operator, with whoever answers for data protection | `______` |
 | the backup time (02:30 UTC is a technical constant) | the operator | `______` |
 | who the admin is (the address typed in at the first start), how many admin accounts there are, and who approves an admin grant | whoever is accountable for the app, to be named before go-live | `______` |
-| whether the data seed's venue entries belong on the production server | the maintainer | `______` |
+| whether the data seed's venue entries belong on the production server | whoever is accountable for the app, to be named before go-live | `______` |
 | the access-token lifetime (default 30 days, `SANCTUM_EXPIRATION`) | the operator | `______` |
 | IPv6 (an AAAA record) once it is set up end to end | the operator | `______` |
 | who approves updates and the go-live; who reviews and merges Dependabot's pull requests | whoever is accountable for the app, to be named before go-live | `______` |
