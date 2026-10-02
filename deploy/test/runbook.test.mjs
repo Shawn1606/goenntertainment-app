@@ -173,10 +173,11 @@ test('runbook: deploy/README.md is a runbook with every section an operator need
 
 test('runbook: every pointer to a runbook section names one that exists', () => {
   const titles = new Set([...sections(runbook()).keys(), ...sections(runbook(), 3).keys()].map((t) => t.toLowerCase()));
+  const scripts = path.join(REPO_ROOT, 'deploy', 'scripts');
   const files = [
     'deploy/docker-compose.yml', 'deploy/.env.example', 'deploy/Caddyfile', 'api/docker/entrypoint.sh',
-    ...fs.readdirSync(path.join(REPO_ROOT, 'deploy', 'scripts')).map((f) => `deploy/scripts/${f}`),
-  ];
+    ...(fs.existsSync(scripts) ? fs.readdirSync(scripts).map((f) => `deploy/scripts/${f}`) : []),
+  ].filter((f) => fs.existsSync(path.join(REPO_ROOT, f)));
   const pointers = [];
   for (const file of files) {
     for (const m of repoText(file).matchAll(/deploy\/README\.md,\s*([A-Za-z][A-Za-z ]*?)\s*[).;]/g)) pointers.push({ file, name: m[1] });
@@ -223,6 +224,11 @@ test('runbook: every decision row is a visible blank with who decides', () => {
 });
 
 test('F-05: the first start keeps the public edge down until the admin account exists', () => {
+  // Anywhere in the runbook: the admin's address and password never go into a file or the
+  // environment of a long-running container.
+  const all = commands(runbook());
+  assert.deepEqual(all.filter((c) => /\bexport\s+ADMIN_|ADMIN_(EMAIL|PASSWORD)=[^"]|>>?\s*\.env|exec\s+node\s+npm\s+run\s+seed/.test(c)), [], 'ADMIN_* exported, written to a file, or the seed run inside the long-running node container');
+  assert.ok(all.filter((c) => /read\b.*ADMIN_PASSWORD/.test(c)).every((c) => /\s-[a-z]*s/.test(c)), 'the admin password is read without -s (it would echo)');
   const cmds = commands(section('First start'));
   console.log(`first start: ${cmds.length} commands`);
   assert.ok(cmds.length > 0, 'no commands in "First start": refusing to report clean');
@@ -249,9 +255,6 @@ test('F-05: the first start keeps the public edge down until the admin account e
   assert.deepEqual(sorted, Object.keys(order), 'the first-start steps are out of order');
   // Before the seed, nothing may start caddy: every earlier up names its services, without caddy.
   for (const u of ups.filter((x) => x.i < seed)) assert.ok(u.call.services.length > 0 && !u.call.services.includes('caddy'), `starts caddy before the admin exists: ${cmds[u.i]}`);
-  const all = commands(runbook());
-  assert.deepEqual(all.filter((c) => /\bexport\s+ADMIN_|ADMIN_(EMAIL|PASSWORD)=[^"]|>>?\s*\.env|exec\s+node\s+npm\s+run\s+seed/.test(c)), [], 'ADMIN_* exported, written to a file, or the seed run inside the long-running node container');
-  assert.ok(all.filter((c) => /read\b.*ADMIN_PASSWORD/.test(c)).every((c) => /\s-[a-z]*s/.test(c)), 'the admin password is read without -s (it would echo)');
 });
 
 test('F-18: no runbook command puts a password on a command line or prints a secret', () => {
@@ -276,10 +279,10 @@ test('F-18: no runbook command puts a password on a command line or prints a sec
 });
 
 test('F-17: backups go outside the clone, and the restore is spelled out step by step', () => {
-  const backups = section('Backups');
-  const restore = sections(backups, 3).get(RESTORE) ?? '';
   const all = commands(runbook());
   assert.deepEqual(all.filter((c) => /\bmysqldump\b|\s>>?\s*\S*(backup|\.sql)/.test(c)), [], 'a command writes a dump itself (the backup service does that, outside the clone)');
+  const backups = section('Backups');
+  const restore = sections(backups, 3).get(RESTORE) ?? '';
   assert.ok(backups.includes('`BACKUP_DIR`'), 'the Backups section does not name BACKUP_DIR');
   const cmds = commands(restore);
   console.log(`restore: ${cmds.length} commands`);
@@ -299,6 +302,7 @@ test('F-17: backups go outside the clone, and the restore is spelled out step by
 });
 
 test('F-25: updating rebuilds from fresh base images and says how to refresh a pin', () => {
+  assert.ok(!/up -d --build|git pull &&/.test(runbook()), 'the old update command (no --pull) is still there');
   const updating = section('Updating');
   const cmds = commands(updating);
   console.log(`updating: ${cmds.length} commands`);
@@ -311,7 +315,6 @@ test('F-25: updating rebuilds from fresh base images and says how to refresh a p
   }
   assert.ok(cmds.some((c) => /build --pull --no-cache/.test(c)), 'no rebuild without cache');
   assert.ok(cmds.some((c) => /^docker buildx imagetools inspect \S+:\S+/.test(c)), 'no command that resolves a new digest');
-  assert.ok(!/up -d --build|git pull &&/.test(updating), 'the old update command (no --pull) is still there');
 });
 
 test('runbook: every service a command names exists in the production compose', () => {
@@ -349,24 +352,25 @@ test('runbook: every repository path it names exists', () => {
 
 test('runbook: values it shares with the code agree', () => {
   const text = runbook();
-  const one = (re, source, what) => {
-    const m = re.exec(source);
-    assert.ok(m, `cannot find ${what}`);
-    return m[1];
-  };
+  const APP_KEY_COMMAND = /(echo "base64:\$\(openssl rand -base64 \d+\)")/;
+  // [what, the file that holds the value, its pattern there, its pattern in the runbook]
   const mirrors = [
-    ['backup time (deploy/scripts/backup.sh RUN_AT_UTC)', one(/RUN_AT_UTC='(\d\d:\d\d)'/, repoText('deploy/scripts/backup.sh'), 'RUN_AT_UTC'), [...text.matchAll(/(\d\d:\d\d) UTC/g)].map((m) => m[1])],
-    ['Node 22 end of security support (server/Dockerfile)', one(/until (\d{4}-\d\d-\d\d)/, repoText('server/Dockerfile'), 'the date in server/Dockerfile'), [...text.matchAll(/Node 22 gets security fixes until (\d{4}-\d\d-\d\d)/g)].map((m) => m[1])],
-    ['APP_KEY command (deploy/.env.example)', one(/^#\s+(echo "base64:\$\(openssl rand -base64 \d+\)")$/m, readText(ENV_EXAMPLE).replace(/\r\n/g, '\n'), 'the APP_KEY command in deploy/.env.example'), [...text.matchAll(/`(echo "base64:\$\(openssl rand -base64 \d+\)")`/g)].map((m) => m[1])],
-    ['APP_KEY command (api/docker/entrypoint.sh)', one(/echo '\s*(echo "base64:\$\(openssl rand -base64 \d+\)")'/, repoText('api/docker/entrypoint.sh'), 'the APP_KEY command in api/docker/entrypoint.sh'), [...text.matchAll(/`(echo "base64:\$\(openssl rand -base64 \d+\)")`/g)].map((m) => m[1])],
-    ['Compose version for !reset (deploy/docker-compose.ci.yml)', one(/!reset needs Compose >= (\d+\.\d+\.\d+)/, readText(path.join(DEPLOY_DIR, 'docker-compose.ci.yml')), 'the Compose version in docker-compose.ci.yml'), [...text.matchAll(/Docker Compose v(\d+\.\d+\.\d+) or newer/g)].map((m) => m[1])],
-    ['multipart body limit (deploy/Caddyfile)', one(/@multipart \{\s*max_size (\d+)MB/, readText(path.join(DEPLOY_DIR, 'Caddyfile')), 'the multipart limit'), [...text.matchAll(/(\d+) MB for uploads/g)].map((m) => m[1])],
-    ['other body limit (deploy/Caddyfile)', one(/@not_multipart \{\s*max_size (\d+)KiB/, readText(path.join(DEPLOY_DIR, 'Caddyfile')), 'the non-multipart limit'), [...text.matchAll(/(\d+) KiB for everything else/g)].map((m) => m[1])],
+    ['backup time (RUN_AT_UTC)', path.join(REPO_ROOT, 'deploy', 'scripts', 'backup.sh'), /RUN_AT_UTC='(\d\d:\d\d)'/, /(\d\d:\d\d) UTC/g],
+    ['Node 22 end of security support', path.join(REPO_ROOT, 'server', 'Dockerfile'), /until (\d{4}-\d\d-\d\d)/, /Node 22 gets security fixes until (\d{4}-\d\d-\d\d)/g],
+    ['APP_KEY command', ENV_EXAMPLE, new RegExp(String.raw`^#\s+${APP_KEY_COMMAND.source}$`, 'm'), new RegExp(`\`${APP_KEY_COMMAND.source}\``, 'g')],
+    ['APP_KEY command', path.join(REPO_ROOT, 'api', 'docker', 'entrypoint.sh'), new RegExp(String.raw`echo '\s*${APP_KEY_COMMAND.source}'`), new RegExp(`\`${APP_KEY_COMMAND.source}\``, 'g')],
+    ['Compose version for !reset', path.join(DEPLOY_DIR, 'docker-compose.ci.yml'), /!reset needs Compose >= (\d+\.\d+\.\d+)/, /Docker Compose v(\d+\.\d+\.\d+) or newer/g],
+    ['multipart body limit', path.join(DEPLOY_DIR, 'Caddyfile'), /@multipart \{\s*max_size (\d+)MB/, /(\d+) MB for uploads/g],
+    ['other body limit', path.join(DEPLOY_DIR, 'Caddyfile'), /@not_multipart \{\s*max_size (\d+)KiB/, /(\d+) KiB for everything else/g],
   ];
   const problems = [];
-  for (const [what, code, inRunbook] of mirrors) {
-    if (inRunbook.length === 0) problems.push(`${what}: not in deploy/README.md`);
-    for (const v of inRunbook) if (v !== code) problems.push(`${what}: deploy/README.md says ${v}, the code ${code}`);
+  for (const [what, file, inCode, inRunbook] of mirrors) {
+    const where = path.relative(REPO_ROOT, file).split(path.sep).join('/');
+    const code = fs.existsSync(file) ? inCode.exec(readText(file).replace(/\r\n/g, '\n'))?.[1] : undefined;
+    const said = [...text.matchAll(inRunbook)].map((m) => m[1]);
+    if (code === undefined) problems.push(`${what}: no value in ${where}`);
+    if (said.length === 0) problems.push(`${what}: not in deploy/README.md`);
+    for (const v of said) if (code !== undefined && v !== code) problems.push(`${what}: deploy/README.md says ${v}, ${where} says ${code}`);
   }
   console.log(`shared values: ${mirrors.length}`);
   assert.deepEqual(problems, []);
@@ -386,7 +390,7 @@ test('runbook: no stale or guessed facts', () => {
   ];
   const problems = rules.filter(([re]) => re.test(text)).map(([re, why]) => `${why}: ${re}`);
   // The old upload folders appear only where the runbook moves them into the volumes.
-  const updating = section('Updating');
+  const updating = sections(text).get('Updating') ?? '';
   const move = updating.indexOf('**Moving from the old upload folders**');
   const outside = text.replace(move >= 0 ? updating.slice(move) : '', '');
   if (/deploy\/storage/.test(outside)) problems.push('deploy/storage outside "Moving from the old upload folders"');
