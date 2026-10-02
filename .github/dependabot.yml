@@ -7,8 +7,9 @@
 # Not covered, on purpose or by limitation:
 # - api/package.json (Laravel's frontend skeleton): no lock file, not built or deployed;
 # - the mysql service image in .github/workflows/ci.yml: Dependabot does not read service
-#   images in workflow files; it follows the 8.4 tag of deploy/docker-compose.yml, which
-#   Dependabot does update (the mirror check compares the two);
+#   images in workflow files. It is pinned to the same tag and digest as
+#   deploy/docker-compose.yml, which Dependabot does update; the mirror check then fails until
+#   the workflow's lines carry the new pin too (scripts/ci/check-mirrors.mjs, "MySQL image digest");
 # - COPY --from=<image> lines in api/Dockerfile: Dependabot reads FROM lines only.
 # No reviewers or assignees here: that needs real accounts (CODEOWNERS, once decided).
 version: 2

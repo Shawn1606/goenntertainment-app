@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { REPO_ROOT, checkMirrors } from './check-mirrors.mjs';
 
 // A fixture tree with every mirrored file; each test changes one of them.
+const MYSQL_DIGEST = `sha256:${'a'.repeat(64)}`;
 const FILES = {
   '.github/workflows/ci.yml': [
     'env:',
@@ -16,11 +17,11 @@ const FILES = {
     '  server:',
     '    services:',
     '      mysql:',
-    '        image: mysql:8.4',
+    `        image: mysql:8.4@${MYSQL_DIGEST}`,
     '  schema-drift:',
     '    services:',
     '      mysql:',
-    '        image: mysql:8.4',
+    `        image: mysql:8.4@${MYSQL_DIGEST}`,
     '',
   ].join('\n'),
   'server/Dockerfile': 'FROM node:22-alpine\nWORKDIR /app\n',
@@ -29,7 +30,7 @@ const FILES = {
   'deploy/docker-compose.yml': [
     'services:',
     '  db:',
-    '    image: mysql:8.4',
+    `    image: mysql:8.4@${MYSQL_DIGEST}`,
     '  node:',
     '    environment:',
     '      # The same setting as api.',
@@ -124,9 +125,9 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 19);
-    assert.equal(r.places, 46);
-    assert.equal(r.occurrences, 47, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 20);
+    assert.equal(r.places, 48);
+    assert.equal(r.occurrences, 50, 'two mysql services in ci.yml count separately, for the tag and for the digest');
   });
 });
 
@@ -334,7 +335,7 @@ test('reads both "^8.4" and "^8.4.1" in composer.json as PHP 8.4', () => {
 });
 
 test('detects a MySQL tag that differs between a ci.yml service and deploy/docker-compose.yml', () => {
-  const ci = FILES['.github/workflows/ci.yml'].replace(/image: mysql:8\.4\n$/, 'image: mysql:9.1\n');
+  const ci = FILES['.github/workflows/ci.yml'].replace(/image: mysql:8\.4(@sha256:a{64})\n$/, 'image: mysql:9.1$1\n');
   withTree({ '.github/workflows/ci.yml': ci }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
@@ -342,11 +343,39 @@ test('detects a MySQL tag that differs between a ci.yml service and deploy/docke
   });
 });
 
+test('detects a MySQL digest that differs between a ci.yml service and deploy/docker-compose.yml', () => {
+  const ci = FILES['.github/workflows/ci.yml'].replace(/@sha256:a{64}\n$/, `@sha256:${'b'.repeat(64)}\n`);
+  withTree({ '.github/workflows/ci.yml': ci }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+    assert.match(
+      r.problems[0],
+      /^MySQL image digest differs: sha256:a{64} \(\.github\/workflows\/ci\.yml .*\), sha256:b{64} \(\.github\/workflows\/ci\.yml .*\), sha256:a{64} \(deploy\/docker-compose\.yml /,
+    );
+  });
+});
+
+test('refuses a MySQL image without a digest in CI or in the deploy (never a silent pass)', () => {
+  const compose = FILES['deploy/docker-compose.yml'].replace(`image: mysql:8.4@${MYSQL_DIGEST}`, 'image: mysql:8.4');
+  withTree({ 'deploy/docker-compose.yml': compose }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      'MySQL image digest: cannot find a digest on every image: mysql: line in deploy/docker-compose.yml',
+    ]);
+  });
+  const ci = FILES['.github/workflows/ci.yml'].replace(`image: mysql:8.4@${MYSQL_DIGEST}\n  schema-drift:`, 'image: mysql:8.4\n  schema-drift:');
+  withTree({ '.github/workflows/ci.yml': ci }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, [
+      'MySQL image digest: cannot find a digest on every image: mysql: line in .github/workflows/ci.yml',
+    ]);
+  });
+});
+
 test('accepts digest-pinned images', () => {
   const digest = `@sha256:${'d'.repeat(64)}`;
   withTree({
     'server/Dockerfile': `FROM node:22-alpine${digest}\n`,
-    'deploy/docker-compose.yml': FILES['deploy/docker-compose.yml'].replace('image: mysql:8.4', `image: mysql:8.4${digest}`),
+    'deploy/docker-compose.yml': FILES['deploy/docker-compose.yml'].replaceAll(`@${MYSQL_DIGEST}`, digest),
+    '.github/workflows/ci.yml': FILES['.github/workflows/ci.yml'].replaceAll(`@${MYSQL_DIGEST}`, digest),
   }, (root) => {
     assert.deepEqual(checkMirrors(root).problems, []);
   });

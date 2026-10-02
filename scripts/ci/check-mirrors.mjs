@@ -5,6 +5,8 @@
 //                  constraint in api/composer.json ("^8.4" and "^8.4.1" both read as 8.4);
 //   - MySQL minor: every `image: mysql:` in ci.yml (service containers) and in
 //                  deploy/docker-compose.yml;
+//   - MySQL image digest: the same lines carry one `@sha256:` digest, so CI tests the MySQL build
+//                  the server runs (Dependabot updates the compose, never a workflow's services);
 //   - the access-token lifetime (one token-validity rule on both backends): its default in
 //                  api/app/Support/Sessions.php, server/src/config.js and the three .env examples,
 //                  its accepted format in both backends, and the SANCTUM_EXPIRATION that the
@@ -66,6 +68,16 @@ function composeServiceEnv(service, name) {
   };
 }
 
+/**
+ * The digests of every `image: mysql:` line, or none at all when one of those lines has no
+ * `@sha256:` digest: an unpinned copy is reported as a value that cannot be found, never as a pass.
+ */
+function mysqlDigests(text) {
+  const refs = [...text.matchAll(/^\s*image:\s*['"]?mysql:([^\s'"#]+)/gm)].map((m) => m[1]);
+  const digests = refs.map((ref) => /@(sha256:[0-9a-f]{64})$/.exec(ref)?.[1]);
+  return digests.length > 0 && digests.every(Boolean) ? digests : [];
+}
+
 /** The `require.php` constraint of composer.json, reduced to major.minor ("^8.4" and "^8.4.1" → 8.4). */
 function composerPhp(text) {
   const php = JSON.parse(text)?.require?.php;
@@ -94,6 +106,14 @@ export const MIRRORS = [
     sources: [
       { file: '.github/workflows/ci.yml', what: 'image: mysql:', extract: all(/^\s*image:\s*['"]?mysql:(\d+\.\d+)/gm) },
       { file: 'deploy/docker-compose.yml', what: 'image: mysql:', extract: all(/^\s*image:\s*['"]?mysql:(\d+\.\d+)/gm) },
+    ],
+  },
+  {
+    // CI's service containers and the deploy's db, backup and admin-gate run one MySQL build.
+    name: 'MySQL image digest',
+    sources: [
+      { file: '.github/workflows/ci.yml', what: 'a digest on every image: mysql: line', extract: mysqlDigests },
+      { file: 'deploy/docker-compose.yml', what: 'a digest on every image: mysql: line', extract: mysqlDigests },
     ],
   },
   {
