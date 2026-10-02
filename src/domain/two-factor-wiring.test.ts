@@ -28,3 +28,32 @@ test('switching off and new recovery codes send the password and a code', () => 
   assert.match(screen, /api\.twoFactorEmailStart\(token, password\)/);
   assert.match(screen, /api\.twoFactorTotpStart\(token, password\)/);
 });
+
+/** The props of the one `<TextField label="Aktueller Code" ... />` in a screen. */
+function currentCodeField(file: string): string {
+  const screen = read(file);
+  const label = screen.indexOf('label="Aktueller Code"');
+  assert.ok(label >= 0, `${file} has no "Aktueller Code" field`);
+  assert.equal(screen.indexOf('label="Aktueller Code"', label + 1), -1, `${file} has more than one "Aktueller Code" field`);
+  const start = screen.lastIndexOf('<TextField', label);
+  // The field ends at its own closing `/>` on a line of its own (`leftIcon={<LockIcon />}` is inside).
+  const end = screen.slice(label).search(/\n\s*\/>/);
+  assert.ok(start >= 0 && end > 0, `${file}: the "Aktueller Code" field cannot be read`);
+  return screen.slice(start, label + end);
+}
+
+test('the step-up code fields accept a recovery code as typed', () => {
+  // The server takes a recovery code (xxxx-xxxx, letters and digits) wherever it takes a current
+  // code (api/app/Support/TwoFactor.php, assertCode). A number pad cannot type one, and
+  // autocorrect or capitalisation would change it.
+  const screens = ['app/security/email.tsx', 'app/security/two-factor.tsx'];
+  for (const file of screens) {
+    const field = currentCodeField(file);
+    assert.doesNotMatch(field, /keyboardType=/, `${file}: the code field limits the keyboard`);
+    assert.match(field, /autoCapitalize="none"/, `${file}: the code field capitalises`);
+    assert.match(field, /autoCorrect=\{false\}/, `${file}: the code field autocorrects`);
+    assert.match(field, /spellCheck=\{false\}/, `${file}: the code field spell-checks`);
+    assert.match(field, /maxLength=\{9\}/, `${file}: the code field cannot hold xxxx-xxxx`);
+  }
+  assert.equal(screens.length, 2);
+});

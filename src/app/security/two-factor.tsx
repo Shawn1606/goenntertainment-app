@@ -277,6 +277,9 @@ export default function TwoFactorScreen() {
           label="Aktueller Code"
           value={proofCode}
           onChangeText={setProofCode}
+          autoCapitalize="none"
+          autoCorrect={false}
+          spellCheck={false}
           autoComplete="one-time-code"
           textContentType="oneTimeCode"
           maxLength={9}

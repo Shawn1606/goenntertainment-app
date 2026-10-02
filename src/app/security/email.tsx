@@ -106,11 +106,14 @@ export default function ChangeEmailScreen() {
             label="Aktueller Code"
             value={code}
             onChangeText={setCode}
-            keyboardType="number-pad"
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
             autoComplete="one-time-code"
             textContentType="oneTimeCode"
             maxLength={9}
             leftIcon={<LockIcon />}
+            hint="Kein Zugriff? Einer deiner Wiederherstellungscodes (xxxx-xxxx) funktioniert auch."
             error={errors.code?.[0]}
           />
           {method === 'email' ? (
