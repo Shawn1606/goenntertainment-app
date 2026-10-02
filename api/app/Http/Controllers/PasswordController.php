@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Responses\LengthDelimitedJsonResponse;
 use App\Models\User;
 use App\Rules\ValidEmail;
 use App\Support\PasswordPolicy;
@@ -49,6 +50,10 @@ class PasswordController extends Controller
      * Adressen durchprobiert, lernt nichts. The same answer within a minute of the last
      * code mail, when no new mail goes out. How many requests an account gets is the route
      * throttle's (password-forgot).
+     *
+     * Nor does the timing tell (F-21): up to the answer a known address costs what an unknown
+     * one costs, the lookup below; the code is made and mailed after the answer, which the
+     * client has completely before that (PasswordReset::issue, LengthDelimitedJsonResponse).
      */
     public function forgot(Request $request): JsonResponse
     {
@@ -64,7 +69,7 @@ class PasswordController extends Controller
             PasswordReset::issue($user);
         }
 
-        return response()->json([
+        return new LengthDelimitedJsonResponse([
             'status' => 'sent',
             'message' => self::MSG_SENT,
         ]);

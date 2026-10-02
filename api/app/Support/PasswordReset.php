@@ -72,14 +72,21 @@ final class PasswordReset
     /**
      * A new code for $user, mailed to the address stored for the account (never the spelling the
      * request used: under the column's collation a case or accent variant finds the same account,
-     * but it could be someone else's mailbox). Returns silently, without a mail, within a minute
-     * of the previous one.
+     * but it could be someone else's mailbox). No mail within a minute of the previous one.
      *
-     * The mail goes out after the response (defer), so the answer to /forgot-password does not
-     * wait for the mail server; where the server flushes the response first, its timing says
-     * nothing about the address either. If the mail fails, the challenge is deleted (a code
-     * nobody received is useless, and the next request may send at once) and the failure is
-     * logged with the user id and the exception class.
+     * ## After the answer (F-21: the timing says nothing about the address)
+     *
+     * Everything happens after the response (defer): making the code, a transaction on the
+     * account, and mailing it. Up to the answer, /forgot-password therefore costs the same with
+     * and without an account: the controller's one lookup by the address, then the answer. That
+     * answer states its length and closes the connection (LengthDelimitedJsonResponse), so the
+     * client has all of it before the deferred work starts, also under the shipped
+     * php:8.4-apache image (mod_php), where the request itself ends only after that work.
+     *
+     * If the mail fails, the challenge is deleted (a code nobody received is useless, and the
+     * next request may send at once) and the failure is logged with the user id and the
+     * exception class; so is a failure to make the code. The client cannot be told either way:
+     * it has its answer already, the same as for an unknown address.
      *
      * The account's row is read again under its lock: if its address changed after the request
      * looked it up (an e-mail change drops open reset codes in the same lock), the address asked
@@ -87,11 +94,57 @@ final class PasswordReset
      */
     public static function issue(User $user): void
     {
+        defer(static function () use ($user): void {
+            self::issueNow($user);
+        });
+    }
+
+    /** issue()'s work, run after the answer. */
+    private static function issueNow(User $user): void
+    {
+        try {
+            $issued = self::makeCode($user);
+        } catch (Throwable $e) {
+            // The exception class only (F-38): a database message can carry the address.
+            Log::error('[password-reset] code not made', [
+                'user_id' => $user->getKey(),
+                'exception' => $e::class,
+            ]);
+
+            return;
+        }
+
+        if ($issued === null) {
+            return;
+        }
+
+        [$challengeId, $code, $address] = $issued;
+
+        try {
+            CodeMail::send($address, new PasswordResetCode($code, intdiv(self::CODE_TTL, 60)));
+        } catch (Throwable $e) {
+            TwoFactorChallenge::whereKey($challengeId)->delete();
+            // The exception class only (F-38): a transport message can name the recipient.
+            Log::error('[password-reset] code mail not sent', [
+                'user_id' => $user->getKey(),
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
+    /**
+     * A new open code for $user: [challenge id, code, stored address], or null when the account
+     * no longer has the address or the previous mail is less than a minute old.
+     *
+     * @return array{0: int, 1: string, 2: string}|null
+     */
+    private static function makeCode(User $user): ?array
+    {
         // Expired challenges of every account go first, on their own: inside the transaction
         // below their row locks would be held until its end.
         TwoFactor::pruneExpired();
 
-        $issued = DB::transaction(function () use ($user): ?array {
+        return DB::transaction(function () use ($user): ?array {
             // One issue at a time per account: two requests at the same moment get one mail.
             $locked = self::lockAccount($user);
             if ($locked === null) {
@@ -111,27 +164,7 @@ final class PasswordReset
                 'last_sent_at' => now(),
             ])->save();
 
-            return [$challenge->getKey(), $code, (string) $locked->email];
-        });
-
-        if ($issued === null) {
-            return;
-        }
-
-        [$challengeId, $code, $address] = $issued;
-        $userId = $user->getKey();
-
-        defer(static function () use ($challengeId, $code, $userId, $address): void {
-            try {
-                CodeMail::send($address, new PasswordResetCode($code, intdiv(self::CODE_TTL, 60)));
-            } catch (Throwable $e) {
-                TwoFactorChallenge::whereKey($challengeId)->delete();
-                // The exception class only (F-38): a transport message can name the recipient.
-                Log::error('[password-reset] code mail not sent', [
-                    'user_id' => $userId,
-                    'exception' => $e::class,
-                ]);
-            }
+            return [(int) $challenge->getKey(), $code, (string) $locked->email];
         });
     }
 
