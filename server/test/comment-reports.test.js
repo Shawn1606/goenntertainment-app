@@ -179,3 +179,33 @@ test('server and app know the same notification types', () => {
   assert.deepEqual([...app].sort(), [...NOTIFICATION_TYPES].sort());
   for (const type of NOTIFICATION_TYPES) assert.ok(type.length <= 20, `${type} does not fit notifications.type`);
 });
+
+test('a blocked commenter disappears from the post comment count and from the notifications (F-08)', async () => {
+  const author = await createUser('crepauthor', { accountType: 'creator' });
+  const pest = await createUser('creppest');
+  const friend = await createUser('crepfriend');
+  const postId = await postOf(author.user.id);
+  // Through the route, so the comments leave their notifications as they do in the app.
+  for (const [who, body] of [[pest, 'stoerend'], [friend, 'nett']]) {
+    assert.equal((await call('POST', `/api/posts/${postId}/comments`, who.token, { body })).status, 201);
+  }
+  const count = async (viewer) =>
+    (await call('GET', `/api/users/${author.user.username}`, viewer.token)).body.posts.find((p) => p.id === postId).comments_count;
+  assert.equal(await count(author), 2, 'control: both comments count before the block');
+
+  assert.equal((await call('POST', '/api/blocks', author.token, { user_id: pest.user.id })).status, 201);
+
+  assert.equal(await count(author), 1, "the blocked person's comment still counts for the author");
+  assert.equal(await count(friend), 2, 'control: for others both still count');
+  // Every other answer with this post (here: a like) counts the same way.
+  const liked = await call('POST', `/api/posts/${postId}/like`, author.token);
+  assert.equal(liked.body.data.comments_count, 1);
+  // The list matches the number.
+  const listed = await call('GET', `/api/posts/${postId}/comments`, author.token);
+  assert.deepEqual(listed.body.data.map((c) => c.body), ['nett']);
+
+  const notes = await call('GET', '/api/notifications', author.token);
+  const comments = notes.body.data.filter((n) => n.type === 'comment' && n.ref_id === postId);
+  assert.deepEqual(comments.map((n) => n.actor?.id), [friend.user.id], "the blocked person's comment notification is still shown");
+  assert.ok(!JSON.stringify(notes.body).includes('stoerend'), "the blocked person's comment text is still in the notifications");
+});

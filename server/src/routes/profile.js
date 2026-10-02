@@ -82,13 +82,25 @@ function transformPost(req, row) {
 const POST_SELECT = `
   p.id, p.body, p.image_path, p.created_at, p.updated_at,
   (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id)      AS likes_count,
-  (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id)   AS comments_count,
+  (SELECT COUNT(*) FROM post_comments pc
+    WHERE pc.post_id = p.id
+      AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = pc.user_id AND b.blocked_id = ?)
+                          OR (b.blocker_id = ? AND b.blocked_id = pc.user_id))) AS comments_count,
   EXISTS(SELECT 1 FROM post_likes pl2 WHERE pl2.post_id = p.id AND pl2.user_id = ?) AS liked_by_me
 `;
 
+/**
+ * The bound values POST_SELECT takes, in its order: the viewer twice for `comments_count`, which
+ * leaves out comments of anyone in a block relation with the viewer - the same rule as the
+ * comment list (GET /posts/:id/comments), so the number under a post matches what it lists (F-08,
+ * F-13) - then the viewer for `liked_by_me`.
+ */
+const postSelectParams = (viewerId) => [viewerId, viewerId, viewerId];
+
 /** Einen Beitrag frisch laden – mit den Zahlen aus Sicht von `viewerId`. */
 function loadPost(postId, viewerId) {
-  return first(`SELECT ${POST_SELECT} FROM posts p WHERE p.id = ?`, [viewerId, postId]);
+  return first(`SELECT ${POST_SELECT} FROM posts p WHERE p.id = ?`, [...postSelectParams(viewerId), postId]);
 }
 
 /**
@@ -255,7 +267,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
       ? await pool.query(
           `SELECT ${POST_SELECT} FROM posts p
             WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT ${POST_LIMIT}`,
-          [req.user.id, user.id],
+          [...postSelectParams(req.user.id), user.id],
         )
       : [[]];
 
