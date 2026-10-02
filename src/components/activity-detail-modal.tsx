@@ -39,7 +39,7 @@ import type { UiIconName } from '@/domain/ui-icon';
 import { urgencyFor } from '@/domain/urgency';
 import { useSignals, useTheme } from '@/hooks/use-theme';
 import { useKeyboardInset } from '@/hooks/use-keyboard-inset';
-import { type Activity, type ActivityComment, api, ApiError } from '@/lib/api';
+import { type Activity, type ActivityComment, api, ApiError, type ReportTarget } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
@@ -154,7 +154,8 @@ export function ActivityDetailModal({
   const [views, setViews] = useState<number | null>(null);
   const [celebrating, setCelebrating] = useState(false);
   const [sharing, setSharing] = useState<Activity | null>(null);
-  const [reporting, setReporting] = useState(false);
+  /** What the report sheet is open for: the event or one of its comments (F-08); null = closed. */
+  const [reportTarget, setReportTarget] = useState<{ type: ReportTarget; id: number; label: string } | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   /** Kommentare samt dem Event, zu dem sie gehören – so zeigt ein neu geöffnetes Event nie die alten. */
@@ -185,7 +186,7 @@ export function ActivityDetailModal({
     setViews(activity?.views_count ?? null);
     setCelebrating(false);
     setSharing(null);
-    setReporting(false);
+    setReportTarget(null);
     setMenuOpen(false);
     setComposing(false);
     setDraft('');
@@ -485,7 +486,7 @@ export function ActivityDetailModal({
         router.push({ pathname: '/legal', params: { doc: 'liability' } });
       },
     },
-    ...(!isOwn ? [{ key: 'report', label: 'Melden', icon: 'flag' as UiIconName, destructive: true, onPress: () => setReporting(true) }] : []),
+    ...(!isOwn ? [{ key: 'report', label: 'Melden', icon: 'flag' as UiIconName, destructive: true, onPress: () => setReportTarget({ type: 'activity', id: data.id, label: data.title }) }] : []),
     ...(canDelete
       ? [
           {
@@ -752,6 +753,11 @@ export function ActivityDetailModal({
                         isHost={comment.user.id === data.host?.id}
                         now={now}
                         onDelete={comment.can_delete ? () => removeComment(comment) : undefined}
+                        onReport={
+                          comment.user.id !== user?.id
+                            ? () => setReportTarget({ type: 'activity_comment', id: comment.id, label: comment.body })
+                            : undefined
+                        }
                       />
                     ))
                   )}
@@ -926,10 +932,7 @@ export function ActivityDetailModal({
           daneben würde auf Android hinter dem ersten landen. */}
       <OptionsSheet visible={menuOpen} title={data.title} options={menu} onClose={() => setMenuOpen(false)} />
       <ShareSheet activity={sharing} onClose={() => setSharing(null)} />
-      <ReportSheet
-        target={reporting ? { type: 'activity', id: data.id, label: data.title } : null}
-        onClose={() => setReporting(false)}
-      />
+      <ReportSheet target={reportTarget} onClose={() => setReportTarget(null)} />
     </Modal>
   );
 }
@@ -1005,11 +1008,14 @@ function CommentRow({
   isHost,
   now,
   onDelete,
+  onReport,
 }: {
   comment: ActivityComment;
   isHost: boolean;
   now: Date;
   onDelete?: () => void;
+  /** Report this comment (F-08); not offered for one's own. */
+  onReport?: () => void;
 }) {
   const colors = useTheme();
   return (
@@ -1031,6 +1037,11 @@ function CommentRow({
         </View>
         <Text style={[styles.commentBody, { color: colors.text }]}>{comment.body}</Text>
       </View>
+      {onReport ? (
+        <Pressable onPress={onReport} hitSlop={10} accessibilityRole="button" accessibilityLabel="Kommentar melden" style={({ pressed }) => pressed && styles.pressed}>
+          <Icon name="flag" size={16} color={colors.textSecondary} />
+        </Pressable>
+      ) : null}
       {onDelete ? (
         <Pressable onPress={onDelete} hitSlop={10} accessibilityRole="button" accessibilityLabel="Kommentar löschen" style={({ pressed }) => pressed && styles.pressed}>
           <Icon name="trash" size={16} color={colors.textSecondary} />

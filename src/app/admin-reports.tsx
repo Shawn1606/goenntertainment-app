@@ -17,6 +17,11 @@
  *
  * Der Stand lässt sich zurücksetzen („wieder offen"): Wer zu früh abgehakt hat,
  * soll das rückgängig machen können, ohne dass die Person erneut melden muss.
+ *
+ * One exception: a reported comment (F-08) can be removed right here. There is no admin list of
+ * comments to go to instead, and the chip calls the same delete route as the trash icon on the
+ * comment row (admins may delete any comment there), so it is not a second way with its own
+ * rules.
  */
 import { useFocusEffect } from 'expo-router';
 import { Image } from 'expo-image';
@@ -33,26 +38,29 @@ import { Icon } from '@/components/ui/icon';
 import { Segmented } from '@/components/ui/segmented';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { formatDateTimeCompact } from '@/domain/date-format';
-import { reportReasonLabel, isUrgent } from '@/domain/report-reason';
+import { REPORT_TARGET_LABELS, isCommentTarget, reportReasonLabel, isUrgent } from '@/domain/report-reason';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useBrandSurface, useSignals } from '@/hooks/use-theme';
-import { ApiError, api, type AdminReport, type ReportTarget } from '@/lib/api';
+import { ApiError, api, type AdminReport } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { apiImageSource } from '@/lib/auth-image';
+import { confirmAction } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
 import { goBack } from '@/lib/go-back';
 
 /** Welcher Stand gerade gezeigt wird. */
 type Tab = 'open' | 'done';
 
-/** Symbol und Wort je Art des gemeldeten Gegenstands. */
-const TARGETS: Record<ReportTarget, { icon: UiIconName; label: string }> = {
-  activity: { icon: 'ticket', label: 'Event' },
-  message: { icon: 'chat', label: 'Nachricht' },
-  user: { icon: 'user', label: 'Konto' },
-  post: { icon: 'edit', label: 'Beitrag' },
-  story: { icon: 'camera', label: 'Story' },
-};
+/**
+ * Symbol und Wort je Art des gemeldeten Gegenstands (src/domain/report-reason.ts). A kind this
+ * app version does not know yet (a newer server) shows its key instead of breaking the list.
+ */
+function targetLabel(type: string): { icon: UiIconName; label: string } {
+  return (REPORT_TARGET_LABELS as Record<string, { icon: UiIconName; label: string } | undefined>)[type] ?? {
+    icon: 'flag',
+    label: type,
+  };
+}
 
 export default function AdminReportsScreen() {
   const insets = useSafeAreaInsets();
@@ -105,6 +113,34 @@ export default function AdminReportsScreen() {
     setError(null);
     try {
       await api.adminUpdateReport(token, report.id, status);
+      feedback.selected();
+      await load();
+    } catch (err) {
+      feedback.failed();
+      setError(err instanceof ApiError ? err.firstError() : 'Das hat nicht geklappt.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Removes a reported comment through the route the comment row uses, then marks the report as
+   * handled. Only for comments whose event or post is known (`context_id`).
+   */
+  async function removeComment(report: AdminReport) {
+    const contextId = report.target?.context_id ?? null;
+    if (!token || busy !== null || !isCommentTarget(report.target_type) || contextId === null) return;
+    const ok = await confirmAction('Kommentar löschen', 'Der Kommentar verschwindet für alle.', 'Löschen', true);
+    if (!ok) return;
+    setBusy(report.id);
+    setError(null);
+    try {
+      if (report.target_type === 'activity_comment') {
+        await api.deleteActivityComment(token, contextId, report.target_id);
+      } else {
+        await api.deleteComment(token, report.target_id);
+      }
+      await api.adminUpdateReport(token, report.id, 'reviewed');
       feedback.selected();
       await load();
     } catch (err) {
@@ -206,7 +242,7 @@ export default function AdminReportsScreen() {
         ) : null}
 
         {sorted.map((report, index) => {
-          const target = TARGETS[report.target_type];
+          const target = targetLabel(report.target_type);
           const urgent = isUrgent(report.reason);
 
           return (
@@ -297,6 +333,9 @@ export default function AdminReportsScreen() {
                       onPress={() => setStatus(report, 'reviewed')}
                     />
                     <GlassChip label="Verworfen" onPress={() => setStatus(report, 'dismissed')} />
+                    {isCommentTarget(report.target_type) && report.target?.context_id != null ? (
+                      <GlassChip label="Kommentar löschen" onPress={() => removeComment(report)} />
+                    ) : null}
                   </View>
                 ) : (
                   <View style={styles.actions}>

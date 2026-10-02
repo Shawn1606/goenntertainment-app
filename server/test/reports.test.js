@@ -34,6 +34,35 @@ function appReasonKeys() {
   return [...source.matchAll(/\bkey: '([^']+)'/g)].map((match) => match[1]);
 }
 
+/**
+ * The report targets the app knows: REPORT_TARGETS in src/domain/report-reason.ts (the app's one
+ * list, read by the report sheet, the API types and the admin screen), read from the source like
+ * the reasons above. [] when the app has no such list.
+ */
+function appTargetKeys() {
+  const file = path.join(import.meta.dirname, '..', '..', 'src', 'domain', 'report-reason.ts');
+  const block = fs.readFileSync(file, 'utf8').match(/export const REPORT_TARGETS = \[([^\]]*)\]/);
+  return block ? [...block[1].matchAll(/'([^']+)'/g)].map((match) => match[1]) : [];
+}
+
+test('app and server know the same report targets', () => {
+  // A target the app offers but the server does not know ends in a 422 on sending; one the server
+  // knows but the app does not shows up in the admin list without a label.
+  const app = appTargetKeys();
+  assert.ok(app.length > 0, 'the app has no list of report targets (REPORT_TARGETS in src/domain/report-reason.ts)');
+  assert.deepEqual([...app].sort(), [...REPORT_TARGETS].sort());
+});
+
+test('comments under posts and events can be reported (F-08)', () => {
+  for (const targetType of ['post_comment', 'activity_comment']) {
+    const result = parseReportInput({ target_type: targetType, target_id: 5, reason: 'harassment' });
+    assert.equal(result.error, null, `${targetType} is not a report target`);
+    assert.equal(result.targetType, targetType);
+    // The key must fit content_reports.target_type (VARCHAR(20) in schema.sql).
+    assert.ok(targetType.length <= 20);
+  }
+});
+
 test('App und Server kennen dieselben Gruende', () => {
   // Der Grund fuer diesen Test: Die Texte stehen in der App, die erlaubten Werte
   // im Server. Kommt in der App ein Grund dazu, ohne dass er hier steht, laeuft

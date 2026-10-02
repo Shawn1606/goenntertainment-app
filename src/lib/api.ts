@@ -1,6 +1,7 @@
 import { API_URL } from '@/constants/config';
 import type { AccountType } from '@/domain/account';
 import type { BillingPeriod } from '@/domain/billing-period';
+import type { ReportTarget } from '@/domain/report-reason';
 import { createSessionWatch } from '@/domain/session';
 
 /**
@@ -609,8 +610,8 @@ export type ChatOverviewEntry = {
 /** Ein blockiertes Konto (GET /api/blocks). */
 export type BlockedPerson = PersonCard & { since?: string | null };
 
-/** Was gemeldet werden kann – Schlüssel wie in server/src/reports.js. */
-export type ReportTarget = 'activity' | 'message' | 'user' | 'post' | 'story';
+/** Was gemeldet werden kann – Schlüssel wie in server/src/reports.js (the one list: src/domain/report-reason.ts). */
+export type { ReportTarget };
 
 /** Eine Meldung in der Admin-Liste (GET /api/admin/reports). */
 export type AdminReport = {
@@ -632,6 +633,8 @@ export type AdminReport = {
     author: string | null;
     detail: string | null;
     image_url: string | null;
+    /** For a comment: the event or post it stands under; null for everything else. */
+    context_id: number | null;
   } | null;
 };
 

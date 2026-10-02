@@ -23,8 +23,13 @@
  *
  * `message` ist eine Chat-Nachricht: Seit es Gruppen- und Event-Chats gibt, ist
  * das der Ort, an dem am ehesten etwas gemeldet werden muss.
+ *
+ * `post_comment` and `activity_comment` are comments under a post and under an event (F-08):
+ * every kind of user content has a report path. Keys fit content_reports.target_type
+ * (VARCHAR(20)). Named mirror: REPORT_TARGETS in src/domain/report-reason.ts, which the app and its
+ * admin screen use; test/reports.test.js keeps both lists equal.
  */
-export const REPORT_TARGETS = ['activity', 'message', 'user', 'post', 'story'];
+export const REPORT_TARGETS = ['activity', 'message', 'user', 'post', 'story', 'post_comment', 'activity_comment'];
 
 /**
  * Die Gruende. `other` ist Absicht: Ohne einen Sammelgrund muesste man den

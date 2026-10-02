@@ -679,7 +679,7 @@ CREATE TABLE IF NOT EXISTS user_blocks (
 CREATE TABLE IF NOT EXISTS content_reports (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   reporter_id BIGINT UNSIGNED NULL,                 -- SET NULL: Meldung ueberdauert das Konto
-  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story
+  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story|post_comment|activity_comment
   target_id   BIGINT UNSIGNED NOT NULL,
   reason      VARCHAR(30)     NOT NULL,             -- Schluessel aus src/reports.js
   note        VARCHAR(500)    NULL,                 -- freie Schilderung (freiwillig)

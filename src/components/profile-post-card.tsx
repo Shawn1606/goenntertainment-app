@@ -25,6 +25,7 @@
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, View } from 'react-native';
 
+import { ReportSheet } from '@/components/report-sheet';
 import { ThemedText } from '@/components/themed-text';
 import { BrandButton } from '@/components/ui/brand-button';
 import { GlassCard } from '@/components/ui/glass';
@@ -55,7 +56,7 @@ export type ProfilePostCardProps = {
 
 export function ProfilePostCard({ post, isMine, onChanged, onDelete }: ProfilePostCardProps) {
   const surface = useBrandSurface();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
 
   /** Herz-Zustand vorweggenommen, damit der Tipp sofort wirkt (siehe Kopf). */
   const [liking, setLiking] = useState(false);
@@ -69,6 +70,8 @@ export function ProfilePostCard({ post, isMine, onChanged, onDelete }: ProfilePo
   const [editing, setEditing] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The comment the report sheet is open for (F-08); null = closed. */
+  const [reporting, setReporting] = useState<PostComment | null>(null);
 
   const liked = Boolean(post.liked_by_me);
   const likes = post.likes_count ?? 0;
@@ -306,6 +309,15 @@ export function ProfilePostCard({ post, isMine, onChanged, onDelete }: ProfilePo
                   <ThemedText type="small" style={{ color: surface.textMuted }}>
                     {formatRelativeShort(comment.created_at, new Date())}
                   </ThemedText>
+                  {comment.user.id !== user?.id ? (
+                    <Pressable
+                      onPress={() => setReporting(comment)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Kommentar melden"
+                      hitSlop={8}>
+                      <Icon name="flag" size={14} color={surface.textMuted} />
+                    </Pressable>
+                  ) : null}
                   {comment.can_delete ? (
                     <Pressable
                       onPress={() => onDeleteComment(comment)}
@@ -360,6 +372,12 @@ export function ProfilePostCard({ post, isMine, onChanged, onDelete }: ProfilePo
           </View>
         </View>
       ) : null}
+
+      {/* The card lives on a route screen, not inside a modal, so the sheet can sit here. */}
+      <ReportSheet
+        target={reporting ? { type: 'post_comment', id: reporting.id, label: reporting.body } : null}
+        onClose={() => setReporting(null)}
+      />
     </GlassCard>
   );
 }

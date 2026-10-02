@@ -102,17 +102,21 @@ function loadPost(postId, viewerId) {
 const COMMENT_USER_COLUMNS =
   'u.id AS user_id, u.name, u.username, u.avatar, u.account_type';
 
-/** Ein Kommentar in die API-Form. */
-function transformComment(req, row, viewerId, postAuthorId) {
+/** Ein Kommentar in die API-Form. `viewer` ist das aufrufende Konto (req.user). */
+function transformComment(req, row, viewer, postAuthorId) {
   return {
     id: row.id,
     body: row.body,
     created_at: toIso(row.created_at),
     // Loeschen darf: wer ihn geschrieben hat, und wem der Beitrag gehoert. Das
     // Zweite ist wichtig – sonst braeuchte man fuer jeden unerwuenschten
-    // Kommentar unter dem eigenen Beitrag einen Admin.
+    // Kommentar unter dem eigenen Beitrag einen Admin. And an admin, as the delete route
+    // (DELETE /comments/:id) already allows: a reported comment can then be removed in place
+    // (F-08), like an event comment.
     can_delete:
-      Number(row.user_id) === Number(viewerId) || Number(postAuthorId) === Number(viewerId),
+      Boolean(viewer.is_admin) ||
+      Number(row.user_id) === Number(viewer.id) ||
+      Number(postAuthorId) === Number(viewer.id),
     user: transformUser(req, {
       id: row.user_id,
       name: row.name,
@@ -869,7 +873,7 @@ router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
     );
 
     res.json({
-      data: rows.map((row) => transformComment(req, row, req.user.id, post.user_id)),
+      data: rows.map((row) => transformComment(req, row, req.user, post.user_id)),
     });
   } catch (err) {
     next(err);
@@ -945,7 +949,7 @@ router.post('/posts/:id/comments', requireAuth, rateLimit('comment'), async (req
     );
 
     res.status(201).json({
-      data: transformComment(req, row, req.user.id, post.user_id),
+      data: transformComment(req, row, req.user, post.user_id),
       post: transformPost(req, await loadPost(post.id, req.user.id)),
     });
   } catch (err) {
