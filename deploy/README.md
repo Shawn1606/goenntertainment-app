@@ -384,7 +384,10 @@ whenever the service starts:
 - **Where**: `<BACKUP_DIR>` on the host (`BACKUP_DIR`), outside the clone, owned by root, mode
   700. The files are mode 600: they hold personal data and need the same care as the database.
 - **Checks**: a set is assembled in a `.partial-<stamp>` folder, checked (`gzip -t`, the dump's
-  completion line, `tar -t`, the checksums) and only then moved into place.
+  completion line, `tar -t`, the checksums) and only then moved into place. Node keeps writing
+  while the uploads are archived: when files were added or removed meanwhile, the log says so and
+  the set is kept (the archive holds the files as they were found); any other archive error fails
+  the run.
 - **Retention**: after each successful run, sets older than `BACKUP_RETENTION_DAYS` are deleted. A
   failed run deletes nothing.
 - **Time**: 02:30 UTC is a technical constant (`RUN_AT_UTC` in `deploy/scripts/backup.sh`); another

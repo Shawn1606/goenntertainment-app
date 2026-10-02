@@ -807,6 +807,104 @@ test('F-17: the backup runs nightly at 02:30 UTC and refuses an invalid retentio
   invalid.forEach((v, i) => assert.match(r.stdout, new RegExp(`^retention ${i} exit 2: backup: ERROR: BACKUP_RETENTION_DAYS must be`, 'm'), JSON.stringify(v)));
 });
 
+/**
+ * `backup.sh --once` in the pinned backup image without a database and without network: stand-ins
+ * for mysqladmin and mysqldump answer like a server that takes connections once DB_UP_AFTER
+ * seconds have passed on a clock that only the stand-in `sleep` moves (it counts instead of
+ * waiting). tar is GNU tar itself; TAR_MODE=change creates a file in an archived folder while tar
+ * runs (at its first checkpoint, inside uploads/), TAR_MODE=broken adds a path that does not exist.
+ * `once <name>` runs one case on an empty /backups and prints what happened.
+ */
+const BACKUP_STAND_INS = String.raw`set -u
+mkdir -p /backups /data/uploads/posts /data/private-media/evidence /work
+for i in $(seq 1 64); do head -c 16384 /dev/urandom > /data/uploads/posts/file-$i.png; done
+head -c 100 /dev/urandom > /data/private-media/evidence/kept.png
+cat > /usr/local/bin/sleep <<'EOF'
+#!/bin/sh
+echo "$1" >> /work/sleeps
+echo $(( $(cat /work/clock) + $1 )) > /work/clock
+EOF
+cat > /usr/local/bin/mysqladmin <<'EOF'
+#!/bin/sh
+{ printf '%s ' "$@"; [ -e /tmp/backup-client.cnf ] && printf 'CLIENT-FILE '; [ -n "$MYSQL_PWD" ] && printf 'MYSQL_PWD '; echo; } >> /work/pings
+[ "$(cat /work/clock)" -ge "$DB_UP_AFTER" ] && exit 0
+echo "mysqladmin: connect to server at 'db' failed" >&2
+exit 1
+EOF
+cat > /usr/local/bin/mysqldump <<'EOF'
+#!/bin/sh
+echo dump >> /work/dumps
+if [ "$(cat /work/clock)" -lt "$DB_UP_AFTER" ]; then echo "mysqldump: Got error: 2003: Can't connect to MySQL server on 'db:3306' (111)" >&2; exit 2; fi
+printf -- '-- stand-in dump\nCREATE TABLE t (id INT);\n-- Dump completed on 2026-01-01  0:00:00\n'
+EOF
+cat > /usr/local/bin/tar <<'EOF'
+#!/bin/sh
+case " $* " in
+  *" -czf "*)
+    case "$TAR_MODE" in
+      change) exec /usr/bin/tar --checkpoint=1 --checkpoint-action=exec='touch /data/uploads/added-while-archiving' "$@" ;;
+      broken) exec /usr/bin/tar "$@" no-such-folder ;;
+    esac ;;
+esac
+exec /usr/bin/tar "$@"
+EOF
+chmod 755 /usr/local/bin/sleep /usr/local/bin/mysqladmin /usr/local/bin/mysqldump /usr/local/bin/tar
+export BACKUP_RETENTION_DAYS=7 DB_HOST=db DB_DATABASE=d DB_USERNAME=u DB_PASSWORD=stand-in-not-a-secret TAR_MODE= DB_UP_AFTER=0
+once() {
+  rm -rf /backups/* /backups/.[!.]* /work/sleeps /work/pings /work/dumps /data/uploads/added-while-archiving
+  echo 0 > /work/clock
+  out=$(bash /opt/deploy/backup.sh --once 2>&1); code=$?
+  printf '=== %s exit %s\n%s\n' "$1" "$code" "$out"
+  echo "check: $(bash /opt/deploy/backup.sh --check 2>&1)"
+  echo "sleeps: $(cat /work/sleeps 2>/dev/null | wc -l) of $(sort -u /work/sleeps 2>/dev/null | tr '\n' ' ')s"
+  echo "pings: $(cat /work/pings 2>/dev/null | wc -l)"
+  echo "ping arguments: $(sort -u /work/pings 2>/dev/null | tr '\n' '|')"
+  echo "dumps: $(cat /work/dumps 2>/dev/null | wc -l)"
+  latest=$(ls /backups | grep '^uploads-' | tail -n 1)
+  echo "sets: $(ls /backups | grep -c '^uploads-')"
+  echo "archived files: $(if [ -n "$latest" ]; then /usr/bin/tar -tzf "/backups/$latest" | grep -c -v '/$'; else echo none; fi)"
+}
+`;
+
+/** The cases of BACKUP_STAND_INS: { name: { code, out, check, pings, ... } }. */
+function backupCases(cases) {
+  const r = dockerRun(serviceImage('backup'), {
+    mounts: [{ src: path.join(DEPLOY_DIR, 'scripts', 'backup.sh'), dst: '/opt/deploy/backup.sh' }],
+    entrypoint: 'bash',
+    args: ['-c', `${BACKUP_STAND_INS}\n${cases.join('\n')}`],
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!`${r.stdout}${r.stderr}`.includes('stand-in-not-a-secret'), 'a run printed the database password');
+  return Object.fromEntries(r.stdout.split(/^=== /m).slice(1).map((chunk) => {
+    const [head, ...rest] = chunk.split('\n');
+    const [, name, code] = /^(\S+) exit (\d+)$/.exec(head);
+    const body = rest.join('\n');
+    return [name, { code: Number(code), out: body, ...reported(body.split('\n').filter((l) => !l.startsWith('backup: ')).join('\n')) }];
+  }));
+}
+
+test('F-17: the backup keeps the uploads archive when files change while tar reads them, and fails on a real tar error', () => {
+  const runs = backupCases(['once plain', 'export TAR_MODE=change; once change', 'export TAR_MODE=broken; once broken']);
+  console.log(`tar cases: ${Object.keys(runs).length} (${Object.entries(runs).map(([n, r]) => `${n}: exit ${r.code}, ${r.sets} set(s), ${r['archived files']} archived`).join('; ')})`);
+  assert.deepEqual(Object.keys(runs), ['plain', 'change', 'broken']);
+  const changed = 'files were added or removed while the uploads were archived (tar exit 1); the archive is kept';
+  for (const name of ['plain', 'change']) {
+    const r = runs[name];
+    assert.equal(r.code, 0, `${name}: the run failed:\n${r.out}`);
+    assert.match(r.out, /^backup: run \S+ written: /m, `${name}: no set written`);
+    assert.equal(r.sets, '1', name);
+    assert.equal(r['archived files'], '65', `${name}: the archive does not hold the 65 files`);
+    assert.equal(r.check, 'backup: the last run succeeded', name);
+  }
+  assert.ok(!runs.plain.out.includes(changed), 'plain: warned about changed files');
+  assert.ok(runs.change.out.includes(`backup: ${changed}`), `change: no warning about the changed files:\n${runs.change.out}`);
+  const broken = runs.broken;
+  assert.notEqual(broken.code, 0, 'broken: a tar error passed');
+  assert.ok(broken.out.includes('backup: ERROR: archiving the uploads failed (tar exit 2)'), `broken:\n${broken.out}`);
+  assert.equal(broken.sets, '0', 'broken: a set was written');
+  assert.equal(broken.check, 'backup: no successful run yet');
+});
+
 test('settings checked in two places use the same patterns (preflight and the services)', () => {
   const read = (file, name) => {
     const full = path.join(DEPLOY_DIR, 'scripts', file);

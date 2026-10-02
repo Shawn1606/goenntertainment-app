@@ -162,7 +162,7 @@ finish() {
 }
 
 run_once() {
-  local dir dump archive sums files
+  local dir dump archive sums files tar_status=0
   if [[ ! -d "$BACKUP_ROOT" || ! -w "$BACKUP_ROOT" ]]; then
     fail "$BACKUP_ROOT is not a writable directory (BACKUP_DIR, see deploy/.env.example)"
     return 1
@@ -183,7 +183,8 @@ run_once() {
   log "run $STAMP started"
   mkdir "$PARTIAL"
 
-  # The database first: then the archive holds every file the dump refers to.
+  # The database first: then the archive holds every file the dump refers to, except files node
+  # deleted in between (a replaced avatar, an expired story).
   write_client_cnf
   mysqldump --defaults-extra-file="$CLIENT_CNF" --single-transaction --no-tablespaces \
     --triggers --hex-blob --set-gtid-purged=OFF "$DB_DATABASE" | gzip -9 > "$PARTIAL/$dump"
@@ -194,7 +195,20 @@ run_once() {
     return 1
   fi
 
-  tar -C "$DATA_ROOT" -czf "$PARTIAL/$archive" "${UPLOAD_DIRS[@]}"
+  # The upload volumes are live: node adds and deletes files while tar reads them (uploads,
+  # replaced images, expired stories, account deletions). GNU tar then exits 1 ("file changed as
+  # we read it", "File removed before we read it"): the archive holds the files as tar found them
+  # and is kept. 2 or more is a real error. Each --warning keyword is an option of its own: GNU
+  # tar 1.34 refuses the comma form, and the keywords silence the messages, not the status.
+  tar --warning=no-file-removed --warning=no-file-changed \
+    -C "$DATA_ROOT" -czf "$PARTIAL/$archive" "${UPLOAD_DIRS[@]}" || tar_status=$?
+  if (( tar_status > 1 )); then
+    fail "archiving the uploads failed (tar exit $tar_status)"
+    return 1
+  fi
+  if (( tar_status == 1 )); then
+    log 'files were added or removed while the uploads were archived (tar exit 1); the archive is kept'
+  fi
   tar -tzf "$PARTIAL/$archive" > "$LIST_FILE"
   files=$(grep -c -v '/$' "$LIST_FILE" || true)
   rm -f "$LIST_FILE"
