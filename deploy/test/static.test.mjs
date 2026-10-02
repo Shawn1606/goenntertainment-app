@@ -1,6 +1,6 @@
 // Static checks of the production deploy (deploy/): the compose files as docker compose renders
-// them, the Caddyfile as Caddy adapts it and the env files. They need Docker (the CLI and the
-// pinned caddy image) but no network and no running stack.
+// them, the Caddyfile as Caddy adapts it, the env files and the helper scripts. They need Docker
+// (the CLI and the pinned caddy image) but no network and no running stack.
 //
 //   node --test deploy/test/static.test.mjs        (npm run test:deploy runs every deploy test)
 //
@@ -72,8 +72,6 @@ const ALLOWED_DEFAULTS = {
   SANCTUM_EXPIRATION: { value: '', why: 'empty = the security default in code (30 days), listed for confirmation' },
   FEATURE_IMPORTED_EVENTS: { value: '', why: 'empty = the hidden feature stays off' },
   FEATURE_ACCOUNT_TIERS: { value: '', why: 'empty = the hidden feature stays off' },
-  ADMIN_EMAIL: { value: '', why: 'empty = the seed creates no admin account (server/src/seed.js)' },
-  ADMIN_PASSWORD: { value: '', why: 'empty = the seed creates no admin account (server/src/seed.js)' },
   LOG_LEVEL: { why: 'technical: how much Laravel logs' },
   MAIL_PORT: { why: 'technical: the mail submission port, overridden for providers that differ' },
   MAIL_SCHEME: { value: '', why: 'technical: empty = derived from the port' },
@@ -82,6 +80,10 @@ const ALLOWED_DEFAULTS = {
 };
 
 const servicesOf = (config) => Object.entries(config.services ?? {});
+const healthTest = (s) => {
+  const t = s.healthcheck?.test;
+  return Array.isArray(t) ? t : t ? [t] : [];
+};
 
 // ------------------------------------------------------------------------------ settings
 
@@ -146,10 +148,11 @@ test('required settings: dropping any single required setting blocks rendering',
 
 test('required settings: only allow-listed settings have defaults, and fail-open defaults to false', () => {
   const text = composeText();
-  const { defaulted } = interpolations(text);
+  const { defaulted, bare } = interpolations(text);
   assert.ok(defaulted.size > 0, 'no defaulted setting found: refusing to report clean');
   console.log(`defaults: ${defaulted.size} settings with a default, ${Object.keys(ALLOWED_DEFAULTS).length} allowed`);
   assert.deepEqual([...defaulted.keys()].filter((n) => !ALLOWED_DEFAULTS[n]), [], 'defaults that are not allow-listed');
+  assert.deepEqual([...bare], [], 'interpolations without a default and without :? fill in an empty value silently');
   for (const [name, values] of defaulted) {
     assert.equal(values.size, 1, `${name} has different defaults: ${[...values].join(', ')}`);
     const expected = ALLOWED_DEFAULTS[name].value;
@@ -200,6 +203,7 @@ test('settings are documented in .env.example (blank, with who decides), deploy/
   }
   console.log(`documentation: ${REQUIRED_NAMES.length} required settings checked in 3 files`);
   assert.deepEqual(problems, []);
+  assert.deepEqual(example.filter((s) => s.name.startsWith('ADMIN_')).map((s) => s.name), [], '.env.example assigns ADMIN_*');
 });
 
 test('ci-only env file is labelled and holds only fake values', () => {
@@ -258,6 +262,53 @@ test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> n
     assert.equal(dials.length, 1, 'caddy has exactly one upstream');
     assert.equal(dials[0].split(':')[0], 'api', "caddy's upstream is the Laravel service");
   });
+});
+
+// ------------------------------------------------------------------------------ F-05, F-18
+
+test('F-05/F-18: ADMIN_EMAIL and ADMIN_PASSWORD reach only the one-off seed service', () => {
+  const config = base();
+  const withAdmin = servicesOf(config)
+    .filter(([, s]) => Object.keys(s.environment ?? {}).some((k) => k.startsWith('ADMIN_')))
+    .map(([name]) => name);
+  console.log(`services: ${servicesOf(config).length}; with ADMIN_*: ${withAdmin.join(', ') || 'none'}`);
+  assert.deepEqual(withAdmin, ['seed']);
+  const seed = config.services.seed;
+  assert.deepEqual(seed.profiles, ['tools'], 'seed must never start with `docker compose up`');
+  assert.ok(!seed.restart || seed.restart === 'no', 'seed must not restart');
+  // No value in the compose: they come from the operator's shell for one run.
+  assert.equal(seed.environment.ADMIN_EMAIL, null);
+  assert.equal(seed.environment.ADMIN_PASSWORD, null);
+  assert.deepEqual(seed.command, ['npm', 'run', 'seed:admin']);
+  // The seed runs the Node image: the same build as node.
+  assert.deepEqual(seed.build, config.services.node.build);
+});
+
+test('F-05: caddy starts only after the admin gate found an admin account', () => {
+  const config = base();
+  assert.deepEqual(config.services.caddy.depends_on['admin-gate']?.condition, 'service_completed_successfully');
+  const gate = config.services['admin-gate'];
+  assert.ok(!gate.restart || gate.restart === 'no', 'the gate is a one-shot');
+  assert.deepEqual(gate.entrypoint, ['bash', '/opt/deploy/admin-gate.sh']);
+  assert.equal(gate.image, config.services.db.image, 'the gate uses the db image');
+  const script = readText(path.join(DEPLOY_DIR, 'scripts', 'admin-gate.sh'));
+  assert.match(script, /SELECT COUNT\(\*\) FROM users WHERE is_admin = 1/);
+  assert.match(readText(path.join(REPO_ROOT, 'server', 'schema.sql')), /^\s+is_admin\s+TINYINT\(1\)/m, 'users.is_admin, which the gate counts');
+});
+
+test('F-18: no healthcheck carries a password', () => {
+  const values = ciValues();
+  const secrets = Object.entries(values).filter(([k, v]) => /PASSWORD|SECRET|_KEY$/.test(k) && v !== '').map(([, v]) => v);
+  const checks = servicesOf(base()).filter(([, s]) => healthTest(s).length > 0);
+  assert.ok(checks.length > 0, 'no healthcheck found: refusing to report clean');
+  console.log(`healthchecks: ${checks.length} (${checks.map(([n]) => n).join(', ')})`);
+  const problems = [];
+  for (const [name, s] of checks) {
+    const words = healthTest(s).join(' ');
+    if (secrets.some((v) => words.includes(v))) problems.push(`${name}: contains a ci-only secret value`);
+    if (/(^|\s)(-p\S|--password|-u\s*root)/.test(words) || /MYSQL_(ROOT_)?PASSWORD|MYSQL_PWD/.test(words)) problems.push(`${name}: names a password option`);
+  }
+  assert.deepEqual(problems, []);
 });
 
 // ------------------------------------------------------------------------------ F-29
@@ -355,6 +406,21 @@ test('request bodies: 9 MB only for multipart uploads, otherwise the largest bod
   assert.equal(other.handle[0].max_size, Math.max(...kb) * 1024, 'the largest non-upload limit of Laravel and Node');
 });
 
+test('scripts the containers read from the working tree keep LF line ends', () => {
+  const files = [
+    ...fs.readdirSync(path.join(DEPLOY_DIR, 'scripts')).map((f) => path.join(DEPLOY_DIR, 'scripts', f)),
+    path.join(DEPLOY_DIR, 'Caddyfile'),
+  ];
+  assert.ok(files.length > 1);
+  assert.deepEqual(files.filter((f) => readText(f).includes('\r')).map(posix), []);
+  const rel = files.map((f) => posix(path.relative(REPO_ROOT, f)));
+  const r = spawnSync('git', ['-C', REPO_ROOT, 'check-attr', 'eol', '--', ...rel], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const notLf = r.stdout.trim().split('\n').filter((l) => !/: eol: lf$/.test(l));
+  console.log(`line ends: ${files.length} files checked`);
+  assert.deepEqual(notLf, [], '.gitattributes must pin eol=lf');
+});
+
 // ------------------------------------------------------------------------------ F-25
 
 /** A reference is pinned when it ends in @sha256 and 64 hex digits. */
@@ -436,7 +502,7 @@ test('F-25: Dependabot watches the Dockerfiles and the compose files of deploy/'
 
 // ------------------------------------------------------------------------------ networks
 
-test('networks: only caddy publishes ports (IPv4), db sits on internal networks, caddy reaches neither node nor db', () => {
+test('networks: only caddy publishes ports (IPv4), db and the jobs sit on internal networks, caddy reaches neither node nor db', () => {
   const config = base();
   const services = servicesOf(config);
   const published = services.filter(([, s]) => (s.ports ?? []).length > 0).map(([n]) => n);
@@ -453,6 +519,7 @@ test('networks: only caddy publishes ports (IPv4), db sits on internal networks,
   assert.deepEqual(services.filter(([n]) => on(n).includes('edge')).map(([n]) => n).sort(), ['api', 'caddy']);
   assert.deepEqual(services.filter(([n]) => on(n).includes('outbound')).map(([n]) => n), ['node']);
   assert.ok(on('db').length > 0 && on('db').every(internal), 'db sits on internal networks only');
+  for (const job of ['admin-gate', 'seed']) assert.deepEqual(on(job), ['data'], job);
   assert.equal(config.services['storage-init'].network_mode, 'none');
   assert.deepEqual(shared('caddy', 'node'), []);
   assert.deepEqual(shared('caddy', 'db'), []);

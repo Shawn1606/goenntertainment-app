@@ -11,21 +11,24 @@
 # Networks (who can reach whom; the bottom of this file has the details):
 #   edge      caddy <-> api. caddy's ports, certificates and api's mail go through here.
 #   app       api <-> node, and both backends -> db. Internal: no way out.
+#   data      db <-> admin-gate, seed. Internal.
 #   outbound  node alone: its way out to the moderation provider.
 # caddy reaches neither node nor db, db has no way out, and api and node share exactly one
 # network, so each backend sees the one before it at a fixed address (F-31).
 #
 # Every setting without a default is required: docker compose refuses to start until deploy/.env
-# sets it (deploy/.env.example lists them, with who decides each).
-#
-# Starten (im Ordner deploy/, nach dem Ausfüllen von .env):
-#
-#   docker compose up -d --build
-#
-# Anleitung Schritt für Schritt: deploy/README.md
+# sets it (deploy/.env.example lists them, with who decides each). The first start creates the
+# admin account with the one-off `seed` service before caddy may start (the `admin-gate`
+# service); the steps are in deploy/README.md.
 
 # Stable names for the volumes and networks, whatever the clone's folder is called.
 name: goenntertainment
+
+# The Node image: built once for the node service and the one-off seed service.
+x-node-build: &node-build
+  context: ../server
+  additional_contexts:
+    shared: ../shared
 
 services:
   db:
@@ -42,12 +45,15 @@ services:
       # Ergänzungen macht das Node-Backend beim Start selbst (ensureSchema).
       - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
-      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-p${DB_ROOT_PASSWORD}']
+      # No credentials (F-18): mysqladmin ping exits 0 as soon as the server answers, even when it
+      # refuses the login, so no password ever appears on a command line or in the container's
+      # configuration. -h 127.0.0.1: the image's first-start setup listens on its socket only.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '--silent']
       interval: 5s
       timeout: 5s
       retries: 20
       start_period: 30s
-    networks: [app]
+    networks: [app, data]
 
   # Bereitet die Upload-Volumes vor und beendet sich dann wieder.
   #
@@ -72,10 +78,7 @@ services:
     network_mode: none
 
   node:
-    build:
-      context: ../server
-      additional_contexts:
-        shared: ../shared
+    build: *node-build
     restart: unless-stopped
     depends_on:
       db:
@@ -125,8 +128,6 @@ services:
       # no default, and node does not start without it. Beyond it every moderated write is refused
       # until the next UTC day, whatever MODERATION_FAIL_OPEN says.
       MODERATION_DAILY_CALL_LIMIT: ${MODERATION_DAILY_CALL_LIMIT:?MODERATION_DAILY_CALL_LIMIT is missing in deploy/.env (the most AI moderation calls per UTC day, a whole number of at least 1; an operator decision, no default)}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
       FEATURE_IMPORTED_EVENTS: ${FEATURE_IMPORTED_EVENTS:-}
       FEATURE_ACCOUNT_TIERS: ${FEATURE_ACCOUNT_TIERS:-}
@@ -262,7 +263,11 @@ services:
     image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_started
+      # The public edge starts only once an admin account exists (F-05, scripts/admin-gate.sh).
+      admin-gate:
+        condition: service_completed_successfully
     ports:
       # IPv4 only. The networks have no IPv6, so Docker would relay an IPv6 client with the
       # network's gateway as its address: every IPv6 client would share one address in the
@@ -285,6 +290,46 @@ services:
       - caddy-data:/data
       - caddy-config:/config
 
+  # One-shot check before caddy starts: is there an admin account (scripts/admin-gate.sh)?
+  admin-gate:
+    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+    entrypoint: ['bash', '/opt/deploy/admin-gate.sh']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+    volumes:
+      - ./scripts/admin-gate.sh:/opt/deploy/admin-gate.sh:ro
+    tmpfs: [/tmp]
+    networks: [data]
+
+  # One-off: creates the admin account (server/src/seed.js, `npm run seed:admin`), before caddy
+  # may start. Never started by `docker compose up` (profile tools); run it with
+  # `docker compose run --rm seed` as deploy/README.md shows. ADMIN_EMAIL and ADMIN_PASSWORD come
+  # from the operator's shell for that one run: they are not in deploy/.env and never in a
+  # long-running container (F-05, F-18). Exits 1 when either is missing or the account exists.
+  seed:
+    profiles: [tools]
+    build: *node-build
+    command: ['npm', 'run', 'seed:admin']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+      ADMIN_EMAIL:
+      ADMIN_PASSWORD:
+    networks: [data]
+
 volumes:
   db-data:
   caddy-data:
@@ -300,7 +345,7 @@ volumes:
 #                          (TRUSTED_PROXIES). Other containers get .64-.127.
 #   app   <prefix>.128/25  api at .140; Node trusts forwarding headers from it only
 #                          (NODE_TRUST_PROXY). Other containers get .192-.255.
-# So no other container can take a fixed address. outbound gets its addresses from Docker.
+# So no other container can take a fixed address. data and outbound get addresses from Docker.
 # No network has IPv6 (see caddy's ports).
 networks:
   edge:
@@ -316,5 +361,8 @@ networks:
       config:
         - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.128/25
           ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.192/26
+  data:
+    internal: true
+    enable_ipv6: false
   outbound:
     enable_ipv6: false
