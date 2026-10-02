@@ -6,9 +6,11 @@ behind it, the Node backend (`server/`) behind Laravel, and MySQL, all as contai
 
 The runbook is written for the operator: whoever runs the server. Every decision it does not make
 is a visible blank, `______`, with who decides it; the last section lists them all. Commands run
-on the server, in the `deploy/` folder of the clone, as root or as a user allowed to run `docker`
-(that is root-equivalent anyway). `<DOMAIN>`, `<BACKUP_DIR>` and similar are placeholders for the
-values in `deploy/.env`.
+on the server, in the `deploy/` folder of the clone, as root (for example after `sudo -i`):
+`<BACKUP_DIR>` and the backup files belong to root with modes 700 and 600, and the steps that
+create, list, check or read them need root. A member of the `docker` group (root-equivalent
+anyway) can run only the `docker compose` commands. `<DOMAIN>`, `<BACKUP_DIR>` and similar are
+placeholders for the values in `deploy/.env`.
 
 Contents: [What runs](#what-runs) · [Prerequisites](#prerequisites) · [Settings](#settings) ·
 [First start](#first-start) · [The app build](#the-app-build) · [Updating](#updating) ·
@@ -429,12 +431,18 @@ of its own, not into the new `<BACKUP_DIR>`: the backup service deletes sets the
    ```
 
 3. Load the database dump. The root password is read inside the db container from its own
-   environment: it appears on no command line.
+   environment: it appears on no command line. `pipefail` makes a failing `gunzip` fail the whole
+   command; without it mysql would read an empty input and report success.
 
    ```bash
+   set -o pipefail
    gunzip -c "<SET_DIR>/db-$stamp.sql.gz" \
-     | docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot goenntertainment'
+     | docker compose exec -T db sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot goenntertainment' \
+     && echo 'database loaded'
    ```
+
+   Expected: `database loaded` and no error above it. Otherwise stop here: the uploads (step 4)
+   must not be restored without the database.
 
 4. Replace the uploads (this deletes the files in both volumes first):
 

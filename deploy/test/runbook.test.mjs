@@ -292,6 +292,8 @@ test('F-17: backups go outside the clone, and the restore is spelled out step by
   const steps = [
     [/sha256sum -c/, 'checks the set'],
     [/^docker compose stop\b(?=.*\bapi\b)(?=.*\bnode\b)(?=.*\bbackup\b)/, 'stops api, node and backup'],
+    // Without pipefail a gunzip that fails hands mysql an empty input, and the load reports success.
+    [/^set -o pipefail$/, 'makes a failing gunzip fail the load (pipefail)'],
     [/^gunzip -c "<SET_DIR>\/db-\$stamp\.sql\.gz" \| docker compose exec -T db /, 'loads the dump into db'],
     [/^docker compose run --rm --no-deps -v "<SET_DIR>:\/backups:ro" storage-init sh -c .*tar -xzf .*uploads.*private-media.*chown -R 1000:1000/, 'unpacks both upload volumes and gives them back to uid 1000'],
     [/^docker compose up -d$/, 'starts everything again'],
@@ -302,6 +304,18 @@ test('F-17: backups go outside the clone, and the restore is spelled out step by
     assert.ok(i > last, `the restore has no step that ${what} (after the previous step)`);
     last = i;
   }
+});
+
+test('F-17: the steps on the root-owned backup files run as root; a docker-group user is offered only the docker compose commands', () => {
+  // <BACKUP_DIR> is root's with mode 700 and the sets are mode 600 (deploy/scripts/preflight.sh,
+  // backup.sh): install, ls, sha256sum and gunzip on them need root.
+  const host = commands(runbook()).filter((c) => /<(BACKUP_DIR|SET_DIR)>/.test(c) && !/^docker\b/.test(c));
+  console.log(`host commands on <BACKUP_DIR> or <SET_DIR>: ${host.length}`);
+  assert.ok(host.length > 0, 'no host command on the backups found: refusing to report clean');
+  const intro = runbook().split('\n## ')[0].replace(/\n/g, ' ');
+  assert.match(intro, /Commands run [^.]*\bas root\b/, 'the runbook does not say that its commands run as root');
+  const offers = intro.split(/(?<=\.)\s+/).filter((s) => /`docker`/.test(s) && /\b(user|group|member)\b/.test(s));
+  assert.deepEqual(offers.filter((s) => !/\bonly the `docker compose` commands\b/.test(s)), [], 'a user of the docker group is offered steps that need root');
 });
 
 test('F-25: updating rebuilds from fresh base images and says how to refresh a pin', () => {
