@@ -214,7 +214,7 @@ class RateLimitRulesTest extends TestCase
     public function test_an_empty_override_means_the_default(): void
     {
         $overrides = self::overrides();
-        $this->assertCount(18, $overrides);
+        $this->assertCount(19, $overrides);
 
         $config = self::configWith(array_fill_keys(array_keys($overrides), ''));
 
@@ -266,6 +266,21 @@ class RateLimitRulesTest extends TestCase
             }
             $this->refreshApplication();
         }
+    }
+
+    /** The lock wait is checked while booting too: a malformed value stops the application. */
+    public function test_a_malformed_lock_wait_stops_the_application_from_booting(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('AUTH_LIMIT_LOCK_WAIT');
+
+        RateLimitRules::assertValid(array_replace(self::DOCUMENTED, ['lock-wait' => '0']));
+    }
+
+    public function test_the_documented_defaults_pass_the_boot_check(): void
+    {
+        RateLimitRules::assertValid(self::DOCUMENTED);
+        $this->assertSame(5, RateLimitRules::parseLockWait(self::DOCUMENTED['lock-wait']));
     }
 
     /** The api service of the production compose passes every override, without a default of its own. */

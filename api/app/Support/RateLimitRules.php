@@ -46,6 +46,11 @@ final class RateLimitRules
         }
 
         foreach ($config as $limiter => $scopes) {
+            if ($limiter === 'lock-wait') {
+                // A setting, not a limiter: checked here too, so a malformed value also stops the boot.
+                self::parseLockWait($scopes);
+                continue;
+            }
             if (! is_array($scopes) || $scopes === []) {
                 throw new LogicException("config/ratelimits.php has no scopes for '{$limiter}'.");
             }
@@ -85,7 +90,12 @@ final class RateLimitRules
      */
     public static function lockWaitSeconds(): int
     {
-        $spec = config('ratelimits.lock-wait');
+        return self::parseLockWait(config('ratelimits.lock-wait'));
+    }
+
+    /** The lock wait as a whole number of seconds from 1 to 999, or an exception naming the variable. */
+    public static function parseLockWait(mixed $spec): int
+    {
         if (is_int($spec)) {
             $spec = (string) $spec;
         }
