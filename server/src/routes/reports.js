@@ -94,8 +94,8 @@ router.post('/reports', requireAuth, rateLimit('report'), async (req, res, next)
 /**
  * Laedt zu jeder Meldung eine kurze Beschreibung des Gegenstands.
  *
- * Gruppiert nach Art, damit daraus eine Abfrage je Art wird und nicht eine je
- * Meldung. Fehlt der Gegenstand (geloescht), bleibt der Platz leer – die Meldung
+ * Grouped by kind, so that this takes one query per kind and not one per report.
+ * Fehlt der Gegenstand (geloescht), bleibt der Platz leer – die Meldung
  * bleibt trotzdem sichtbar, denn genau der geloeschte Inhalt ist manchmal der,
  * um den es hinterher geht.
  */

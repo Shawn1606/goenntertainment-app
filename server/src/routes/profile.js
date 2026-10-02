@@ -114,7 +114,7 @@ function loadPost(postId, viewerId) {
 const COMMENT_USER_COLUMNS =
   'u.id AS user_id, u.name, u.username, u.avatar, u.account_type';
 
-/** Ein Kommentar in die API-Form. `viewer` ist das aufrufende Konto (req.user). */
+/** Ein Kommentar in die API-Form. `viewer` is the calling account (req.user). */
 function transformComment(req, row, viewer, postAuthorId) {
   return {
     id: row.id,

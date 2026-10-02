@@ -122,11 +122,10 @@ export async function removeUnreferencedFiles(paths) {
 /**
  * Datei unter storage/ entfernen – best effort. Returns the outcome of storage.js removeStored.
  *
- * Der Pfad kommt zwar aus der eigenen DB, trotzdem wird geprueft, dass er
- * innerhalb seines Ordners bleibt: Ein `../` in einer Zeile waere sonst ein
- * Loeschbefehl fuer beliebige Dateien des Servers. storage.js resolves the value against its
- * root: the public tree for avatars, banners and post images, the private one for story images
- * and evidence (F-11), so those go with the account too.
+ * The path comes from our own database, yet it is checked to stay inside its folder: a `../` in
+ * a row would otherwise be a command to delete any file on the server. storage.js resolves the
+ * value against its root: the public tree for avatars, banners and post images, the private one
+ * for story images and evidence (F-11), so those go with the account too.
  */
 async function removeStoredFile(filePath) {
   return removeStored(filePath);

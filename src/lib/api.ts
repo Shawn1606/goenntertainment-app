@@ -1164,7 +1164,7 @@ export const api = {
     }),
 
   /**
-   * Fordert eine „Passwort vergessen"-Mail an: Sie bringt einen 6-stelligen Code (F-09; no link).
+   * Fordert eine „Passwort vergessen"-Mail an. It carries a 6-digit code, no link (F-09).
    * Antwortet immer neutral (die API verrät nicht, ob die Adresse registriert ist) – ein 422
    * kommt nur bei einer ungültigen E-Mail-Eingabe. Also the way to get a new code; the server
    * sends at most one mail a minute per account.

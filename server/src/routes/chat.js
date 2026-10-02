@@ -230,8 +230,9 @@ async function loadMessages(req, roomId, userId, { after, before, limit }) {
         AND ${notBlockedWith('m.user_id')}
       ORDER BY m.id ${descending ? 'DESC' : 'ASC'}
       LIMIT ?`,
-    // Reihenfolge der Platzhalter: die des WHERE, dann der Blockier-Vergleich
-    // (zweimal die eigene ID), dann das Limit.
+    // Reihenfolge der Platzhalter: die des WHERE, dann der Blockier-Vergleich,
+    // dann das Limit.
+    // (The block comparison binds my own ID twice.)
     [...filters, userId, userId, limit],
   );
 
@@ -334,7 +335,8 @@ router.get('/chats', requireAuth, async (req, res, next) => {
       });
 
       // Ungelesen = alles nach meinem Lesestand, ohne meine eigenen Nachrichten
-      // und ohne die von Konten, mit denen eine Blockierung besteht (beide Richtungen, F-13).
+      // und ohne die blockierter Konten.
+      // Both directions (F-13): neither side of a block counts the other's messages.
       const [unreadRows] = await pool.query(
         `SELECT m.room_id, COUNT(*) AS c
            FROM chat_messages m

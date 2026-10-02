@@ -110,7 +110,7 @@ class AccountController extends Controller
 
         Sessions::revokeOthers($user);
 
-        // Ein offener „Passwort vergessen"-Code soll das neue nicht gleich wieder ersetzen koennen.
+        // An open reset code must not be able to replace the new password right away.
         PasswordReset::forget($user);
 
         return response()->json(['message' => 'Passwort geändert.']);

@@ -22,9 +22,9 @@ use Illuminate\Validation\ValidationException;
  * ## Warum nicht Laravels Password-Broker
  *
  * Laravel bringt das fertig mit - aber mit eigenen Meldungen, eigenen Status-Namen
- * ('passwords.sent') und einem Link-Token. Die App liest `status` und zeigt `message` woertlich
- * an, and the reset is a code in the app, not a link. Also dieselbe Form der Antworten wie
- * zuvor.
+ * ('passwords.sent'). Its broker also resets by a link token, while here the reset is a code
+ * typed into the app. Die App liest `status` und zeigt `message` woertlich an, so the answers
+ * keep the form they had before.
  *
  * password_reset_tokens (the former link tokens) is no longer read or written; the table stays
  * in the schema until its removal (backlog).
@@ -78,9 +78,8 @@ class PasswordController extends Controller
     /**
      * POST /api/reset-password {email, code, password, password_confirmation?}
      *
-     * Setzt mit dem richtigen Code ein neues Passwort; der Code gilt danach nicht mehr
-     * (Einmal-Nutzung), and every session of the account ends. A request with the former
-     * link `token` and no `code` fails on `code`.
+     * Sets a new password with the right code and uses the code up (single use); every session of
+     * the account ends. A request with the former link `token` and no `code` fails on `code`.
      */
     public function reset(Request $request): JsonResponse
     {
@@ -102,8 +101,8 @@ class PasswordController extends Controller
             : PasswordReset::reset($user, $code, (string) $request->input('password'));
 
         /**
-         * Benutzername im Passwort? Erst JETZT, mit gueltigem Code (PasswordReset::reset checks it
-         * after the code matched, and the code stays valid).
+         * The username in the password is checked only NOW, with a valid code
+         * (PasswordReset::reset checks it after the code matched, and the code stays valid).
          *
          * In der Validierung oben waere die Meldung ein Orakel: Wer zu einer
          * fremden Adresse Passwoerter durchprobiert, erfuehre aus „darf deinen
@@ -134,8 +133,8 @@ class PasswordController extends Controller
 
     /**
      * Dieselbe Regel wie bei der Registrierung (App\Support\PasswordPolicy) -
-     * hier zunaechst nur mit dem E-Mail-Teil; der Benutzername kommt erst nach
-     * der Code-Pruefung dazu (Begruendung in reset()).
+     * hier zunaechst nur mit dem E-Mail-Teil; the username is added only after the code check
+     * (reason in reset()).
      */
     private function passwordRule(Request $request): Closure
     {
