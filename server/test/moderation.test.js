@@ -608,7 +608,7 @@ test('a 400 about the request does not switch the fallback beta off for the proc
   await withEnv({ MODERATION_FALLBACKS: 'true' }, async () => {
     mock.respond({ status: 400, errorType: 'invalid_request_error' });
     const refused = await postAndCount(author.token, 'Anfrage abgelehnt');
-    assert.ok(usedFallbackBeta(mock.messageCalls().at(-1)), 'the check asked with the fallback beta');
+    assert.ok(usedFallbackBeta(mock.messageCalls().at(-refused.calls)), 'the check asked with the fallback beta');
     assert.equal(refused.calls, 1, 'not asked again without the beta: the error is about the request');
 
     mock.respond({ verdict: verdict({ severity: 0 }) });
