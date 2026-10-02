@@ -164,7 +164,8 @@ async function start() {
   S.services = services;
   console.log(`services: ${services.join(', ')}`);
 
-  const build = step('build', () => stack.compose(['build'], { profiles: ['tools'], timeout: 30 * 60_000 }));
+  // The probe (profile test) is built from server/Dockerfile like node and seed.
+  const build = step('build', () => stack.compose(['build'], { profiles: ['tools', 'test'], timeout: 30 * 60_000 }));
   if (build.status !== 0) throw new Error(`docker compose build failed (exit ${build.status}):\n${tail(build.stderr, 4000)}`);
 
   // The runbook's first start: backends and jobs first, without the edge.

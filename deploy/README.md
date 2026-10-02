@@ -308,9 +308,11 @@ Who approves an update before it goes live: `______` (the maintainer).
 **Base images.** Every image is pinned by digest (`<name>:<tag>@sha256:<digest>`) in
 `api/Dockerfile`, `server/Dockerfile`, `deploy/docker-compose.yml` (mysql, caddy, busybox),
 `dev/docker-compose.yml` (Mailpit) and `.github/actionlint/Dockerfile`, so every build starts from
-the same bytes. Dependabot (`.github/dependabot.yml`) proposes new digests every week as pull
-requests that run the full CI; after merging one, deploy it with the steps above. Who reviews and
-merges them: `______` (the maintainer).
+the same bytes. The stack test's probe in `deploy/docker-compose.ci.yml` is built from
+`server/Dockerfile` and pins no image of its own, so the Node pin has one copy. Dependabot
+(`.github/dependabot.yml`) proposes new digests every week as pull requests that run the full CI;
+after merging one, deploy it with the steps above. Who reviews and merges them: `______` (the
+maintainer).
 
 **Urgent refresh** (a security fix in a base image before Dependabot's pull request), in a
 development clone:

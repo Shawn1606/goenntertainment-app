@@ -796,6 +796,23 @@ test("the stack test's probe is a visitor on the edge network only, and only wit
   assert.equal(probe.environment.DOMAIN, ciValues().DOMAIN);
 });
 
+test("the stack test's probe runs the image built from server/Dockerfile, so the Node pin has one copy", () => {
+  // A second `image: node:...@sha256:...` line would be a copy of server/Dockerfile's pin that
+  // Dependabot updates in another pull request (docker-compose /deploy, not docker /server).
+  const config = ci();
+  const probe = config.services.probe;
+  assert.ok(probe, 'no probe service in the CI override');
+  assert.equal(probe.image, undefined, `the probe pins an image of its own: ${probe.image}`);
+  assert.ok(probe.build, 'the probe is not built');
+  assert.deepEqual(probe.build, config.services.node.build, 'the probe is not built like the node service');
+  assert.match(posix(probe.build.context), /\/server$/);
+  const pins = readText(path.join(REPO_ROOT, 'server', 'Dockerfile')).match(/^FROM\s+node:\S+@sha256:[0-9a-f]{64}/gm) ?? [];
+  assert.equal(pins.length, 1, 'server/Dockerfile holds the one Node pin');
+  const copies = servicesOf(config).filter(([, s]) => /^node:/.test(s.image ?? '')).map(([n, s]) => `${n}: ${s.image}`);
+  console.log(`probe: built from ${posix(probe.build.context).split('/').slice(-1)[0]}/; Node images pinned in the compose files: ${copies.length}`);
+  assert.deepEqual(copies, [], 'a service pins a Node image of its own');
+});
+
 test('hardening: no new privileges anywhere, and no capabilities for api, node and the jobs', () => {
   const services = servicesOf(base());
   const problems = [];
