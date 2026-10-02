@@ -376,10 +376,11 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Non-blocking while the advisories that exist at the base are worked off. The last pull
-    # request of this series removes this line; from then on every advisory is fixed or
-    # listed with its reason in .github/audit-allowlist.json.
-    continue-on-error: true
+    # Blocking: every advisory is fixed with a compatible update or listed with its reason in
+    # .github/audit-allowlist.json; scripts/ci/audit.mjs fails on any other advisory and on an
+    # entry that no longer matches one. The advisory databases change without a commit, so a
+    # new advisory can turn this job red on unchanged code: fix it, or list it with a reason.
+    # scripts/ci/audit-job.test.mjs keeps this job blocking and covering every lock file.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
