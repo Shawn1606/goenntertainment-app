@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Testing\TestResponse;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
@@ -68,11 +69,96 @@ class TrustedProxiesTest extends TestCase
 
     public function test_without_a_configured_proxy_nobody_is_trusted(): void
     {
-        config(['trustedproxy.proxies' => null]);
+        config(['trustedproxy.proxies' => self::configuredProxies('')]);
 
         $this->fromPeer('127.0.0.1', ['X-Forwarded-For' => self::CLIENT])->assertOk();
 
         $this->assertSame('127.0.0.1', $this->sentHeader('X-Forwarded-For'));
+    }
+
+    /**
+     * The value config/trustedproxy.php gives for this TRUSTED_PROXIES (null = not set at all),
+     * read from the file itself rather than written into the test.
+     */
+    private static function configuredProxies(?string $setting): mixed
+    {
+        $saved = [getenv('TRUSTED_PROXIES'), $_ENV['TRUSTED_PROXIES'] ?? null, $_SERVER['TRUSTED_PROXIES'] ?? null];
+        if ($setting === null) {
+            putenv('TRUSTED_PROXIES');
+            unset($_ENV['TRUSTED_PROXIES'], $_SERVER['TRUSTED_PROXIES']);
+        } else {
+            putenv('TRUSTED_PROXIES='.$setting);
+            $_ENV['TRUSTED_PROXIES'] = $_SERVER['TRUSTED_PROXIES'] = $setting;
+        }
+
+        try {
+            return (require config_path('trustedproxy.php'))['proxies'];
+        } finally {
+            $saved[0] === false ? putenv('TRUSTED_PROXIES') : putenv('TRUSTED_PROXIES='.$saved[0]);
+            if ($saved[1] === null) {
+                unset($_ENV['TRUSTED_PROXIES']);
+            } else {
+                $_ENV['TRUSTED_PROXIES'] = $saved[1];
+            }
+            if ($saved[2] === null) {
+                unset($_SERVER['TRUSTED_PROXIES']);
+            } else {
+                $_SERVER['TRUSTED_PROXIES'] = $saved[2];
+            }
+        }
+    }
+
+    /** Empty and unset TRUSTED_PROXIES, each with the hosts and the switch for which Laravel trusts every proxy when the list is null. */
+    public static function untrustedSetups(): array
+    {
+        $rows = [];
+        foreach (['empty' => '', 'unset' => null] as $label => $setting) {
+            foreach (['localhost', 'x.on-forge.com', 'x.on-vapor.com'] as $host) {
+                $rows["{$label}, host {$host}"] = [$setting, $host, false];
+            }
+            $rows["{$label}, cloud switch on"] = [$setting, 'localhost', true];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * "Empty = trust nobody" has to hold whatever Host the client sends: given a null proxy list,
+     * Laravel's TrustProxies trusts every peer when the Host ends in .on-forge.com or .on-vapor.com
+     * or LARAVEL_CLOUD=1 is set, so a client could choose its own address again (F-31).
+     */
+    #[DataProvider('untrustedSetups')]
+    public function test_an_empty_or_unset_proxy_setting_trusts_nobody_whatever_the_host(?string $setting, string $host, bool $cloud): void
+    {
+        config(['trustedproxy.proxies' => self::configuredProxies($setting)]);
+
+        $savedCloud = $_SERVER['LARAVEL_CLOUD'] ?? null;
+        if ($cloud) {
+            $_SERVER['LARAVEL_CLOUD'] = '1';
+        }
+
+        try {
+            $this->withServerVariables(['REMOTE_ADDR' => self::OTHER_PEER])
+                ->withHeaders(['X-Forwarded-For' => self::CLIENT])
+                ->getJson("http://{$host}/api/activities")
+                ->assertOk();
+        } finally {
+            if ($savedCloud === null) {
+                unset($_SERVER['LARAVEL_CLOUD']);
+            } else {
+                $_SERVER['LARAVEL_CLOUD'] = $savedCloud;
+            }
+        }
+
+        $this->assertSame(self::OTHER_PEER, $this->sentHeader('X-Forwarded-For'));
+    }
+
+    /** The guard behind the test above: no later edit of the config file brings the null back. */
+    public function test_the_proxy_setting_is_an_empty_list_when_nothing_is_configured(): void
+    {
+        $this->assertSame([], self::configuredProxies(''));
+        $this->assertSame([], self::configuredProxies(null));
+        $this->assertSame(self::PROXY, self::configuredProxies(self::PROXY));
     }
 
     public function test_host_and_scheme_come_only_from_the_proxy(): void

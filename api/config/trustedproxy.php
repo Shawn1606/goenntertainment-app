@@ -14,8 +14,13 @@
 | then every client could choose the address the rate limits count and that Node receives.
 | bootstrap/app.php names the headers; this file only the addresses, read at request time.
 |
+| Empty or unset gives an empty list, never null: Laravel's TrustProxies reads null as "trust
+| every proxy" when the request's Host ends in .on-forge.com or .on-vapor.com, or when
+| LARAVEL_CLOUD=1 is set, and the client chooses its Host header (tests/Feature/
+| TrustedProxiesTest.php).
+|
 */
 
 return [
-    'proxies' => env('TRUSTED_PROXIES') ?: null,
+    'proxies' => env('TRUSTED_PROXIES') ?: [],
 ];
