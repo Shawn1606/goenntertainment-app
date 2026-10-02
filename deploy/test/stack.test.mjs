@@ -524,6 +524,19 @@ check("F-28: Apache's own redirects through the edge keep the public https addre
   for (const r of res) assert.doesNotMatch(header(r, 'location') ?? '', /:8080|^http:/, 'a redirect names port 8080 or plain http');
 });
 
+check("F-30: Apache's own error pages through the edge name no server version", () => {
+  // Answers Apache writes itself, not Laravel: a denied file, an encoded slash, a denied folder.
+  const paths = ['/.htaccess', '/api/a%2Fb', '/icons/', '/server-status'];
+  const res = stack.probe(paths.map((p) => apiRequest('GET', p))).results;
+  console.log(`Apache error pages: ${paths.length} requests through the edge, answers ${JSON.stringify(res.map((r) => r.status ?? r.error))}`);
+  const notApache = paths.filter((p, i) => !/<title>\d{3} [^<]+<\/title>/.test(res[i].body ?? ''));
+  assert.deepEqual(notApache, [], "answers that are not Apache's own error pages: the check would prove nothing");
+  const leaks = paths.map((p, i) => ({ p, r: res[i] }))
+    .filter(({ r }) => /Apache\/|\(Debian\)|Server at /.test(r.body ?? '') || header(r, 'server') !== undefined)
+    .map(({ p, r }) => `${p}: ${r.status} ${/<address>[^<]*<\/address>/.exec(r.body ?? '')?.[0] ?? ''} server header: ${header(r, 'server') ?? 'none'}`);
+  assert.deepEqual(leaks, [], 'Apache names its version or operating system');
+});
+
 // --------------------------------------------------------------------------- one owner per path
 
 check('F-10: every API route Laravel owns is answered by Laravel through the edge, and other /api paths reach Node', () => {

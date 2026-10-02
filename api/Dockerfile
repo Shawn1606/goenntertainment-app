@@ -80,8 +80,13 @@ RUN sed -ri 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-avail
     && grep -qx '<VirtualHost \*:8080>' /etc/apache2/sites-available/000-default.conf \
     && grep -A1 -x '<VirtualHost \*:8080>' /etc/apache2/sites-available/000-default.conf | grep -qx '[[:space:]]*ServerName ${APP_URL}' \
     && a2enmod rewrite headers
-COPY docker/apache.conf /etc/apache2/conf-available/goenn.conf
-RUN a2enconf goenn
+# The project's settings load after Debian's own (conf-enabled/*.conf, in name order): the name
+# zz-goenn sorts after security.conf, whose ServerTokens OS and ServerSignature On would otherwise
+# win over this file's ServerTokens Prod and ServerSignature Off, and Apache's error pages would
+# name its version. The test stops the build if another file sorts after it.
+COPY docker/apache.conf /etc/apache2/conf-available/zz-goenn.conf
+RUN a2enconf zz-goenn \
+    && test "$(ls /etc/apache2/conf-enabled | tail -n 1)" = zz-goenn.conf
 
 # ---------------------------------------------------------------- Code
 # Liegt unter /var/www/api, shared/ direkt daneben unter /var/www/shared:

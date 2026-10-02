@@ -152,6 +152,16 @@ function directoryBlocks(conf) {
   }));
 }
 
+/** Where the api image installs api/docker/apache.conf: { name } of conf-available/<name>.conf. */
+function installedApacheConf(instructions) {
+  const copies = instructions
+    .filter((i) => i.keyword === 'COPY')
+    .map((i) => /docker\/apache\.conf\s+\S*\/conf-available\/([\w.-]+)\.conf$/.exec(i.args)?.[1])
+    .filter(Boolean);
+  assert.equal(copies.length, 1, `api/docker/apache.conf is installed ${copies.length} times into conf-available/`);
+  return { name: copies[0] };
+}
+
 /** The Apache docroot the api image sets (APACHE_DOCUMENT_ROOT) and its uploads path below it. */
 function apiDocroot(instructions) {
   const docroot = instructions
@@ -184,13 +194,10 @@ test('F-29: Apache in the api image refuses an upload folder mounted under its d
   const { docroot, uploads } = apiDocroot(instructions);
 
   // The image installs and enables the file that holds the rule.
+  const { name } = installedApacheConf(instructions);
   assert.ok(
-    instructions.some((i) => i.keyword === 'COPY' && /docker\/apache\.conf\s+\S*conf-available\/goenn\.conf$/.test(i.args)),
-    'api/docker/apache.conf is not installed as conf-available/goenn.conf',
-  );
-  assert.ok(
-    instructions.some((i) => i.keyword === 'RUN' && /\ba2enconf goenn\b/.test(i.args)),
-    'the goenn Apache configuration is not enabled',
+    instructions.some((i) => i.keyword === 'RUN' && new RegExp(`\\ba2enconf ${name}(\\s|$)`).test(i.args)),
+    `the ${name} Apache configuration is not enabled`,
   );
 
   // Should a folder be mounted or linked there later: no access, no PHP, no .htaccess.
@@ -206,6 +213,30 @@ test('F-29: Apache in the api image refuses an upload folder mounted under its d
 });
 
 // ------------------------------------------------------------------ Apache's own answers
+
+/**
+ * The files the pinned base image (php:8.4-apache) enables in /etc/apache2/conf-enabled. Apache
+ * reads them in name order, and a later file wins: security.conf sets ServerTokens OS and
+ * ServerSignature On. The build's own check (a RUN in api/Dockerfile) compares with the real
+ * folder; this list only lets the test fail early.
+ */
+const BASE_CONF_ENABLED = ['charset.conf', 'docker-php.conf', 'localized-error-pages.conf', 'other-vhosts-access-log.conf', 'security.conf', 'serve-cgi-bin.conf'];
+
+test("F-30: the project's Apache settings load after Debian's security.conf, so Apache's own pages name no version", (t) => {
+  const { instructions } = finalInstructions('api/Dockerfile');
+  const { name } = installedApacheConf(instructions);
+  const file = `${name}.conf`;
+  t.diagnostic(`installed as conf-available/${file}; base image files it must sort after: ${BASE_CONF_ENABLED.length}`);
+  // Apache sorts the names byte by byte, as JavaScript compares strings of ASCII letters.
+  assert.deepEqual(BASE_CONF_ENABLED.filter((f) => !(f < file)), [], `conf-enabled/${file} loads before these, which then win`);
+  assert.ok(
+    instructions.some((i) => i.keyword === 'RUN' && i.args.includes(`test "$(ls /etc/apache2/conf-enabled | tail -n 1)" = ${file}`)),
+    `the build does not check that ${file} is the last file in conf-enabled/`,
+  );
+  const conf = read('api/docker/apache.conf').split('\n').filter((line) => !/^\s*#/.test(line)).map((line) => line.trim());
+  assert.ok(conf.includes('ServerTokens Prod'), 'api/docker/apache.conf does not set ServerTokens Prod');
+  assert.ok(conf.includes('ServerSignature Off'), 'api/docker/apache.conf does not set ServerSignature Off');
+});
 
 test("F-28: the api site names the public https origin, so Apache's own redirects never point at port 8080", (t) => {
   const { instructions } = finalInstructions('api/Dockerfile');
