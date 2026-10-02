@@ -12,6 +12,7 @@ import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
+import { PNG_1X1 } from './support/images.js';
 
 // Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
 // ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
@@ -544,14 +545,7 @@ test('PUT /api/me/links: eine abgelehnte Liste laesst die alten Links stehen', a
 
 /* ------------------------------------- Profilbild und Karten-Hintergrund */
 
-/**
- * Ein winziges, gueltiges PNG (1x1). Reicht als Bild fuer einen Upload und
- * haelt den Test unabhaengig von einer Datei auf der Platte.
- */
-const PNG_1X1 = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
-  'base64',
-);
+// PNG_1X1: a valid 1x1 PNG from test/support/images.js (the one written here before was malformed).
 
 /** Setzt Profilbild ('avatar') oder Karten-Hintergrund ('banner') – multipart, wie die App. */
 const putProfileImage = (token, kind, { mime = 'image/png', name = 'bild.png', withFile = true } = {}) => {

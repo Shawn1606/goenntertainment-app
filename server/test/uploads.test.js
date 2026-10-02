@@ -21,16 +21,14 @@ import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { cleanup, createUser } from './support/fixtures.js';
+// A valid 1x1 PNG (the one written here before was malformed; see test/support/images.js).
+import { PNG_1X1 } from './support/images.js';
 
 const MSG_TOO_LARGE = 'Die Anfrage ist zu groß.';
 const MSG_UNREADABLE = 'Die Anfrage konnte nicht gelesen werden.';
 const MSG_IMAGE = 'Das Bild darf hoechstens 5 MB gross sein.';
 const MSG_BANNER = 'Das Banner-Bild darf hoechstens 5 MB gross sein.';
 
-const PNG_1X1 = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
-  'base64',
-);
 /** One byte over the 5 MB limit. */
 const OVERSIZED = Buffer.alloc(5 * 1024 * 1024 + 1, 0x61);
 

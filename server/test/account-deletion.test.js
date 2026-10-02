@@ -26,17 +26,13 @@ import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
+// A valid 1x1 PNG (the one written here before was malformed; see test/support/images.js).
+import { PNG_1X1 } from './support/images.js';
 
 let base;
 let server;
 const createdUserIds = [];
 const createdFiles = [];
-
-/** 1x1-PNG, reicht fuer jeden Upload. */
-const PNG_1X1 = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
-  'base64',
-);
 
 /** Throw-away account with a token, written straight to the database (test/support/fixtures.js). */
 const registerUser = (prefix, accountType = 'creator') =>
