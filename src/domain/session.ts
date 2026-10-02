@@ -70,6 +70,26 @@ export async function signOutLocally(steps: LocalSignOutSteps, rejected: boolean
   if (failure) throw failure.error;
 }
 
+/*
+ * The signed-in account's id, stored on the device beside the token (src/lib/token-store.ts).
+ * A session can end while the app is closed: the account deleted (or deleted on another device)
+ * before the sign-out ran, or the token revoked. The next app start then gets a 401, and without
+ * the id it could not tell whose search history to remove on phones, whose storage cannot list
+ * its keys (F-44, src/domain/search-history.ts forgetSearchHistory).
+ */
+
+/** The stored form of an account id, or null for anything that is not one (then nothing is stored). */
+export function serializeSessionUserId(userId: number): string | null {
+  return Number.isSafeInteger(userId) && userId > 0 ? String(userId) : null;
+}
+
+/** The account id a stored value holds, or null for a missing or malformed value. */
+export function parseSessionUserId(raw: string | null | undefined): number | null {
+  if (typeof raw !== 'string' || !/^[1-9][0-9]*$/.test(raw)) return null;
+  const id = Number(raw);
+  return Number.isSafeInteger(id) ? id : null;
+}
+
 export type SessionListener = (rejectedToken: string) => void;
 
 export type SessionWatch = {

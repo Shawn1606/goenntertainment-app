@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { createSessionWatch, endsSession, signOutLocally } from './session.ts';
+// Newer functions through the namespace: this file still loads where they are missing, and their
+// tests then fail on an assertion.
+import * as session from './session.ts';
 
 const CURRENT = 'fixture-token-current-not-a-secret';
 const OLDER = 'fixture-token-older-not-a-secret';
@@ -145,4 +148,28 @@ test('a failing history removal never fails or stops a sign-out (F-44)', async (
   // A token storage error is still passed on, not hidden by the history step.
   const both = signOutSteps('fails', 'fails');
   await assert.rejects(signOutLocally(both.steps, false), (err) => err instanceof Error && err.message === 'storage unavailable');
+});
+
+/*
+ * The account id stored beside the token (F-44): when the stored session is rejected at app start
+ * (the account was deleted, or the token revoked, while the app was closed), it says whose search
+ * history to remove - also on phones, whose storage cannot list its keys.
+ */
+
+test('the account id stored beside the token reads back only as a valid account id (F-44)', () => {
+  assert.equal(typeof session.parseSessionUserId, 'function', 'no way to read back the stored account id');
+  assert.equal(session.parseSessionUserId('7'), 7);
+  assert.equal(session.parseSessionUserId('123456'), 123456);
+  for (const raw of [null, undefined, '', '0', '-3', '7.5', '07', '7a', ' 7', 'abc', '9007199254740993']) {
+    assert.equal(session.parseSessionUserId(raw), null, `${JSON.stringify(raw)} is no account id`);
+  }
+});
+
+test('the stored account id is written as it is read back (F-44)', () => {
+  assert.equal(typeof session.serializeSessionUserId, 'function', 'no way to store the account id');
+  assert.equal(session.serializeSessionUserId(7), '7');
+  assert.equal(session.parseSessionUserId(session.serializeSessionUserId(42)), 42);
+  for (const id of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 2]) {
+    assert.equal(session.serializeSessionUserId(id), null, `${id} is no account id and is not stored`);
+  }
 });

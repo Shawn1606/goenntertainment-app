@@ -14,7 +14,7 @@ import {
 import { notifyUser } from '@/lib/confirm';
 import { migrateSavedLogin } from '@/lib/credential-store';
 import { clearSearchHistory } from '@/lib/search-history-store';
-import { clearToken, loadToken, saveToken } from '@/lib/token-store';
+import { clearToken, loadSessionUserId, loadToken, saveSessionUserId, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
   /** true, solange beim App-Start der gespeicherte Token geprüft wird. */
@@ -128,8 +128,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const stored = await loadToken();
       if (stored) {
+        // Whose session this is, read before the server is asked (clearToken removes it).
+        const storedUserId = await loadSessionUserId();
         try {
           const { user: me } = await api.me(stored);
+          // Kept beside the token, also for a session from before this version (F-44).
+          await saveSessionUserId(me.id);
           if (active) {
             setToken(stored);
             setUser(me);
@@ -138,9 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Token ungültig (401) → verwerfen. Bei reinem Netzfehler behalten.
           if (error instanceof ApiError && error.status === 401) {
             await clearToken();
-            // The session ended while the app was closed: whose it was is unknown here, so
-            // only the histories a listable storage (web) still holds can go (F-44).
-            await clearSearchHistory(null);
+            // The session ended while the app was closed (the account deleted, the token
+            // revoked): the stored account id says whose search history goes, on phones too;
+            // a listable storage (web) also gives up every other history left (F-44).
+            await clearSearchHistory(storedUserId);
           } else if (active && stored) {
             setToken(stored);
           }
@@ -156,6 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function applyAuth(result: { token: string; user: User }) {
     await saveToken(result.token);
+    await saveSessionUserId(result.user.id);
     setToken(result.token);
     setUser(result.user);
   }
