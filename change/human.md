@@ -1525,8 +1525,9 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
     der Sicherungen und wie lange Sicherungen, Logs und das Binärlog von MySQL aufbewahrt werden,
     sind Entscheidungen: Sie trifft, wer den Server betreibt, zusammen mit der Person, die für den
     Datenschutz zuständig ist. Vorgaben gibt es absichtlich keine. Die offenen Punkte stehen im
-    Runbook unter „Decisions this runbook does not make". Vor jedem Start prüft
-    `deploy/scripts/preflight.sh` die Datei.
+    Runbook unter „Decisions this runbook does not make". Vor dem ersten Start und vor jedem
+    Update `deploy/scripts/preflight.sh` ausführen (Runbook, „Settings"): Es prüft die Datei und
+    `BACKUP_DIR`.
   - `ADMIN_EMAIL` und `ADMIN_PASSWORD` gehören nicht mehr in `deploy/.env`. Beim ersten Start legt
     ein Einmal-Container das Admin-Konto an, bevor die Domain erreichbar ist; Caddy startet erst,
     wenn es ein Admin-Konto gibt. Die Schritte stehen im Runbook unter „First start".
