@@ -691,6 +691,17 @@ test('F-45: on a real MySQL the rotation removes a deleted row from the binary l
   }
 });
 
+test("F-45: deploy/ci.env's binary-log retention differs from MySQL's default, so the stack test shows the setting took effect", () => {
+  const days = ciValues().MYSQL_BINLOG_RETENTION_DAYS;
+  assert.match(days, /^[1-9][0-9]*$/, 'deploy/ci.env must keep the binary log a number of days: with off the stack test cannot show that the retention took effect');
+  const r = dockerRun(serviceImage('db'), { entrypoint: 'mysqld', args: ['--no-defaults', '--verbose', '--help'] });
+  assert.equal(r.status, 0, r.stderr);
+  const fallback = Number(/^binlog-expire-logs-seconds\s+(\d+)\s*$/m.exec(r.stdout)?.[1]);
+  assert.ok(fallback > 0, "cannot read MySQL's default binlog-expire-logs-seconds from mysqld --verbose --help");
+  console.log(`binary log: deploy/ci.env keeps it ${days} day(s) = ${Number(days) * 86400} s; MySQL's own default is ${fallback} s`);
+  assert.notEqual(Number(days) * 86400, fallback, "deploy/ci.env uses MySQL's own default: the stack test could not tell the setting from the default");
+});
+
 test('F-17: backups go to the required BACKUP_DIR bind, never created implicitly, and to a volume in CI', () => {
   const backup = base().services.backup;
   assert.ok(backup, 'no backup service');
