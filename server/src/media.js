@@ -40,10 +40,24 @@ export function publicBase(req) {
 }
 
 /**
+ * Where the private folders are served (F-11, storage.js): never under /storage, only through
+ * routes that check who asks. Evidence for admins, story images for signed-in viewers while the
+ * story runs. Both answer only with the viewer's bearer token (the app sends it, see
+ * src/domain/auth-image.ts).
+ */
+const PRIVATE_ROUTES = new Map([
+  ['evidence', '/api/admin/evidence-files/'],
+  ['stories', '/api/media/stories/'],
+]);
+
+/**
  * Volle Adresse fuer einen gespeicherten Pfad.
  *
  * Fremde URLs (Google-Avatare) bleiben unangetastet, `null` bleibt `null` –
  * so kann der Aufrufer den Wert bedenkenlos durchschleifen.
+ *
+ * The one place that builds these addresses: every response that carries a stored image goes
+ * through here, so a private folder can never come out as a public /storage address.
  */
 export function mediaUrl(req, value) {
   if (!value) {
@@ -52,5 +66,11 @@ export function mediaUrl(req, value) {
   if (/^https?:\/\//i.test(String(value))) {
     return value;
   }
-  return `${publicBase(req)}/storage/${value}`;
+  const text = String(value);
+  const slash = text.indexOf('/');
+  const route = slash > 0 ? PRIVATE_ROUTES.get(text.slice(0, slash)) : undefined;
+  if (route) {
+    return `${publicBase(req)}${route}${encodeURIComponent(text.slice(slash + 1))}`;
+  }
+  return `${publicBase(req)}/storage/${text}`;
 }

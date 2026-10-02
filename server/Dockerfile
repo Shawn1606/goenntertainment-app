@@ -27,12 +27,14 @@ COPY --from=shared . /shared/
 # storage/ liegt im Compose als Bind-Mount darueber. Das Anlegen hier ist fuer den
 # Fall, dass jemand das Abbild ohne Mount startet – sonst wirft express.static
 # beim ersten Bild-Aufruf.
-RUN mkdir -p storage/avatars storage/banners storage/evidence \
-             storage/posts storage/stories storage/user-banners
+# storage-private/ holds evidence and story images (F-11, src/storage.js): never served as static
+# files, never mounted into a web server.
+RUN mkdir -p storage/avatars storage/banners storage/posts storage/user-banners \
+             storage-private/evidence storage-private/stories
 
 # Nicht als root laufen. Das Abbild bringt den Benutzer `node` schon mit; er
 # braucht Schreibrecht auf storage/, weil dort die Uploads landen.
-RUN chown -R node:node /app/storage
+RUN chown -R node:node /app/storage /app/storage-private
 
 # Production build: the server checks its required settings before it starts and refuses to
 # run without them (src/config.js). The compose sets the same value.

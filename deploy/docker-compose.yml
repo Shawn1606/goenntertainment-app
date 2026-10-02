@@ -51,9 +51,11 @@ services:
     command:
       - sh
       - -c
-      - mkdir -p /storage/avatars /storage/banners /storage/evidence /storage/posts /storage/stories /storage/user-banners && chown -R 1000:1000 /storage
+      - mkdir -p /storage/avatars /storage/banners /storage/posts /storage/user-banners /storage-private/evidence /storage-private/stories && chown -R 1000:1000 /storage /storage-private
     volumes:
       - ./storage:/storage
+      # Evidence and story images (F-11, server/src/storage.js): node only, never a web server.
+      - ./storage-private:/storage-private
 
   node:
     build:
@@ -119,6 +121,9 @@ services:
       WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
       - ./storage:/app/storage
+      # Private uploads (ban evidence, AI moderation evidence, story images): served only by
+      # Node's checked routes. Never mount this folder into api or any other web server.
+      - ./storage-private:/app/storage-private
     healthcheck:
       # Node's own health route; /api/health belongs to Laravel.
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']

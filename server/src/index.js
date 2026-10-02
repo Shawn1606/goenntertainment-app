@@ -5,6 +5,8 @@ import { startupProblems } from './config.js';
 import { moderationStatus } from './moderation.js';
 import { backfillActiveDays } from './streak.js';
 import { pruneHistory } from './routes/activities.js';
+import { migrateLegacyPrivateFiles } from './storage.js';
+import { sweepExpiredStories } from './stories.js';
 import { logError, logInfo } from './log.js';
 
 // The one startup gate (config.js): names of missing or invalid settings, never their values.
@@ -18,7 +20,17 @@ if (problems.length > 0) {
   start();
 }
 
-function start() {
+async function start() {
+  // Evidence and story images an older version wrote into the public tree move to private
+  // storage before anything is served (F-11, storage.js). A failure is logged, not fatal: the
+  // public /storage route refuses those folders by path in any case.
+  try {
+    const moved = await migrateLegacyPrivateFiles();
+    if (moved > 0) logInfo(`Private Dateien aus storage/ verschoben: ${moved}`);
+  } catch (err) {
+    logError('Verschieben privater Dateien fehlgeschlagen', err);
+  }
+
   const app = createApp();
 
   const port = Number(process.env.PORT ?? 8000);
@@ -34,6 +46,7 @@ function start() {
     try {
       await ensureSchema();
       await pruneHistory();
+      await sweepExpiredStories();
       // Konten, die es vor der Serie schon gab, bekommen ihre aktiven Tage
       // einmalig aus den vorhandenen Spuren nachgetragen – sonst startet jede:r
       // bei 0, obwohl die App seit Wochen benutzt wird.
@@ -44,6 +57,8 @@ function start() {
     }
     setInterval(() => {
       pruneHistory().catch((err) => logError('Verlauf-Aufraeumen fehlgeschlagen', err));
+      // Expired stories and their files (stories.js; never throws).
+      sweepExpiredStories();
     }, 60 * 60 * 1000).unref();
   });
 }

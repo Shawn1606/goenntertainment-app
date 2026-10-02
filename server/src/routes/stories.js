@@ -12,10 +12,12 @@
  *
  * `expires_at` wird beim Anlegen gesetzt. Damit ist die Frist ein Datum und keine
  * Rechnung ueber `created_at` – aendert sich die Laufzeit spaeter, laufen alte
- * Storys nach ihrer alten Frist ab statt ploetzlich rueckwirkend anders. Geloescht
- * wird beim Lesen (unten): Ein Cron-Job waere die saubere Loesung, aber dieser
- * Server hat keinen, und eine Story, die noch in der Tabelle steht aber nicht mehr
- * ausgeliefert wird, tut niemandem weh.
+ * Storys nach ihrer alten Frist ab statt ploetzlich rueckwirkend anders.
+ *
+ * Expired stories end exactly at expires_at: the image lies in private storage and is served
+ * only through GET /api/media/stories/:file, which checks the expiry (and blocks) on every request
+ * (F-11). Rows and files are removed hourly and on every read of the bar (sweepExpiredStories in
+ * ../stories.js); that only frees the space.
  *
  * ## Vorschlagsreihenfolge
  *
@@ -24,8 +26,6 @@
  * nicht wieder bei derselben Story anfaengt.
  */
 import { createRouter } from '../router.js';
-import path from 'node:path';
-import fs from 'node:fs';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
@@ -37,7 +37,7 @@ import { notifyFollowers } from '../notifications.js';
 import { loadUser } from '../people.js';
 import { singleUpload } from '../uploads.js';
 import { ALLOWED_MIME, processImageOr422 } from '../images.js';
-import { storeImage } from '../storage.js';
+import { removeStored, sendPrivateFile, STORED_NAME, storeImage } from '../storage.js';
 // Spalten, Umwandlung und Filter wohnen in `../stories.js`: Profilseite und
 // Personenlisten fragen dasselbe, und vier Abschriften derselben Abfrage sind
 // vier Wahrheiten darueber, was „laufende Story" heisst (siehe dort).
@@ -47,6 +47,8 @@ import {
   STORY_LIVE,
   STORY_QUERY,
   storiesOf,
+  storyImageVisible,
+  sweepExpiredStories,
   transformStory,
 } from '../stories.js';
 
@@ -68,38 +70,11 @@ function requirePublisher(req, res, next) {
   return next();
 }
 
-/**
- * Abgelaufene Storys samt Bild wegraeumen.
- *
- * Laeuft bei jedem Lesen und darf still scheitern: Der Filter im SELECT sorgt
- * ohnehin dafuer, dass nichts Abgelaufenes ausgeliefert wird – das Aufraeumen
- * spart nur Platz.
- */
-async function sweepExpired() {
-  const [rows] = await pool.query(
-    'SELECT id, image_path FROM stories WHERE expires_at <= NOW() LIMIT 200',
-  );
-  if (rows.length === 0) return;
-
-  await pool.query(
-    `DELETE FROM stories WHERE id IN (${rows.map(() => '?').join(', ')})`,
-    rows.map((row) => row.id),
-  );
-
-  for (const row of rows) {
-    if (!row.image_path) continue;
-    try {
-      fs.unlinkSync(path.join(process.cwd(), 'storage', row.image_path));
-    } catch {
-      /* Datei evtl. schon weg – das darf das Aufraeumen nicht kippen. */
-    }
-  }
-}
-
 // GET /api/stories  (geschuetzt) – laufende Storys, ungesehene zuerst.
 router.get('/stories', requireAuth, async (req, res, next) => {
   try {
-    await sweepExpired().catch(() => {});
+    // Frees the space of expired stories; never throws (see ../stories.js).
+    await sweepExpiredStories();
 
     const [rows] = await pool.query(
       `${STORY_QUERY}
@@ -231,6 +206,26 @@ router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, u
   }
 });
 
+/**
+ * GET /api/media/stories/:file  (geschuetzt) – the image of a running story (F-11, F-13).
+ *
+ * Story images are private (storage.js) and leave the server only here: for a signed-in viewer,
+ * while the story runs, and not across a block (storyImageVisible in ../stories.js). Everything
+ * else, an expired story included, is the same 404. The app sends its bearer token with the
+ * image request (src/domain/auth-image.ts).
+ */
+router.get('/media/stories/:file', requireAuth, async (req, res, next) => {
+  try {
+    const file = String(req.params.file);
+    if (!STORED_NAME.test(file) || !(await storyImageVisible(`stories/${file}`, req.user))) {
+      return res.status(404).json({ message: 'Diese Story gibt es nicht mehr.' });
+    }
+    return sendPrivateFile(res, next, 'stories', file);
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // POST /api/stories/:id/view  (geschuetzt) – als gesehen merken (idempotent).
 router.post('/stories/:id/view', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
@@ -262,13 +257,8 @@ router.delete('/stories/:id', requireAuth, rateLimit('content'), async (req, res
     }
 
     await pool.query('DELETE FROM stories WHERE id = ?', [story.id]);
-    if (story.image_path) {
-      try {
-        fs.unlinkSync(path.join(process.cwd(), 'storage', story.image_path));
-      } catch {
-        /* siehe sweepExpired */
-      }
-    }
+    // Best effort, never throws (storage.js): the story is gone either way.
+    if (story.image_path) await removeStored(story.image_path);
     res.json({ message: 'Story geloescht.' });
   } catch (err) {
     next(err);

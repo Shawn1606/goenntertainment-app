@@ -12,8 +12,6 @@
  * Gelesen wird von allen Angemeldeten – geschrieben nur am eigenen Profil.
  */
 import { createRouter } from '../router.js';
-import path from 'node:path';
-import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
@@ -22,14 +20,14 @@ import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
 import { parseLinkList } from '../social.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
-import { mediaUrl, publicBase } from '../media.js';
+import { mediaUrl } from '../media.js';
 import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
 import { notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
 import { singleUpload } from '../uploads.js';
 import { ALLOWED_MIME, processImageOr422 } from '../images.js';
-import { storeImage } from '../storage.js';
+import { removeStored, storeImage } from '../storage.js';
 
 const router = createRouter();
 
@@ -65,7 +63,7 @@ function transformPost(req, row) {
   return {
     id: row.id,
     body: row.body,
-    image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+    image_url: mediaUrl(req, row.image_path),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at ?? null),
     edited: Boolean(row.updated_at && row.created_at && row.updated_at !== row.created_at),
@@ -513,15 +511,9 @@ const IMAGE_KINDS = {
  * fehlgeschlagenes Loeschen darf den Aufruf nicht kippen – das Bild ist
  * ersetzt, das ist die Hauptsache.
  */
-function removeStoredImage(value) {
-  if (!value || /^https?:\/\//i.test(String(value))) {
-    return;
-  }
-  try {
-    fs.unlinkSync(path.join(process.cwd(), 'storage', value));
-  } catch {
-    /* Datei evtl. schon weg. */
-  }
+async function removeStoredImage(value) {
+  // Foreign addresses and unknown folders are left alone by storage.js; never throws.
+  await removeStored(value);
 }
 
 /** Konto neu laden und als API-User ausliefern (mit fertigen Bild-Adressen). */
@@ -588,7 +580,7 @@ function setProfileImage(kind) {
         `UPDATE users SET ${spec.column} = ?, updated_at = NOW() WHERE id = ?`,
         [stored, req.user.id],
       );
-      removeStoredImage(previous);
+      await removeStoredImage(previous);
 
       await respondWithUser(req, res);
     } catch (err) {
@@ -607,7 +599,7 @@ function clearProfileImage(kind) {
         `UPDATE users SET ${spec.column} = NULL, updated_at = NOW() WHERE id = ?`,
         [req.user.id],
       );
-      removeStoredImage(previous);
+      await removeStoredImage(previous);
       await respondWithUser(req, res);
     } catch (err) {
       next(err);
@@ -974,13 +966,8 @@ router.delete('/posts/:id', requireAuth, rateLimit('content'), async (req, res, 
 
     // Bild mitnehmen – anders als bei Event-Bannern haengt an einem Beitrag
     // kein Verlaufs-Eintrag, das Bild wird also von niemandem mehr gebraucht.
-    if (post.image_path) {
-      try {
-        fs.unlinkSync(path.join(process.cwd(), 'storage', post.image_path));
-      } catch {
-        /* Datei evtl. schon weg – das darf das Loeschen nicht kippen. */
-      }
-    }
+    // Best effort, never throws (storage.js): the post is gone either way.
+    if (post.image_path) await removeStored(post.image_path);
 
     res.json({ message: 'Beitrag geloescht.' });
   } catch (err) {

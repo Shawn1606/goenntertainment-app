@@ -1,6 +1,4 @@
 import { createRouter } from '../router.js';
-import path from 'node:path';
-import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { Validator, HttpError, missingIds } from '../validate.js';
@@ -16,7 +14,7 @@ import { logError } from '../log.js';
 import { singleUpload } from '../uploads.js';
 import { rateLimit } from '../rate-limit.js';
 import { ALLOWED_MIME, processImageOr422 } from '../images.js';
-import { storeImage } from '../storage.js';
+import { removeStored, storeImage } from '../storage.js';
 
 const router = createRouter();
 
@@ -334,13 +332,8 @@ export async function pruneHistory() {
     if (!banner_path) continue;
     const inActivities = await first('SELECT 1 AS ok FROM activities WHERE banner_path = ? LIMIT 1', [banner_path]);
     const inHistory = await first('SELECT 1 AS ok FROM activity_history WHERE banner_path = ? LIMIT 1', [banner_path]);
-    if (!inActivities && !inHistory) {
-      try {
-        fs.unlinkSync(path.join(process.cwd(), 'storage', banner_path));
-      } catch {
-        /* Datei evtl. schon weg – ignorieren. */
-      }
-    }
+    // Best effort, never throws; foreign addresses are left alone (storage.js).
+    if (!inActivities && !inHistory) await removeStored(banner_path);
   }
 }
 
@@ -627,13 +620,7 @@ router.delete('/:id', requireAuth, rateLimit('content'), async (req, res, next) 
         'SELECT 1 AS ok FROM activity_history WHERE banner_path = ? LIMIT 1',
         [activity.banner_path],
       );
-      if (!inHistory) {
-        try {
-          fs.unlinkSync(path.join(process.cwd(), 'storage', activity.banner_path));
-        } catch {
-          /* Datei evtl. schon weg – ignorieren. */
-        }
-      }
+      if (!inHistory) await removeStored(activity.banner_path);
     }
 
     res.json({ message: 'Aktivitaet geloescht.' });

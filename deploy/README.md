@@ -205,7 +205,7 @@ git pull && docker compose up -d --build
 
 Docker baut nur neu, was sich geändert hat, und tauscht die Container aus. Die
 Datenbank und die Uploads bleiben dabei erhalten (sie liegen in `db-data` bzw.
-`deploy/storage/`).
+`deploy/storage/` und `deploy/storage-private/`).
 
 **Logs mitlesen:**
 
@@ -221,6 +221,12 @@ docker compose exec db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" goennter
 
 Die Nutzer-Uploads liegen in `deploy/storage/` und gehören ins selbe Backup. Am
 besten als täglicher Cronjob plus Hetzner-Snapshot (~1 €/Monat).
+
+Ban evidence, the AI moderation's evidence and story images lie in `deploy/storage-private/`
+(F-11): only the node service mounts it, and Node serves those files only to who may see them.
+It belongs in the backup too, and it must never be mounted into a web server. Files an older
+version left in `deploy/storage/evidence` or `deploy/storage/stories` are moved there when node
+starts.
 
 **Firewall:** Nur 22 (SSH), 80 und 443 müssen offen sein. MySQL, Laravel und
 Node haben absichtlich **keine** Ports nach außen – erreichbar ist nur Caddy.

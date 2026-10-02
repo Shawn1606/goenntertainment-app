@@ -1,6 +1,7 @@
+import { Image } from 'expo-image';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HomeBackground } from '@/components/home-background';
@@ -12,6 +13,7 @@ import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { useBrandSurface } from '@/hooks/use-theme';
 import { type AdminModerationReport, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { apiImageSource } from '@/lib/auth-image';
 import type { UiIconName } from '@/domain/ui-icon';
 
 /**
@@ -161,7 +163,13 @@ export default function AdminModerationScreen() {
 
               {item.image_url ? (
                 <Pressable onPress={() => setZoom(item.image_url)}>
-                  <Image source={{ uri: item.image_url }} style={styles.image} resizeMode="cover" />
+                  {/* Private evidence (F-11): only with the admin's token, kept in memory only. */}
+                  <Image
+                    source={apiImageSource(item.image_url, token)}
+                    style={styles.image}
+                    contentFit="cover"
+                    cachePolicy="memory"
+                  />
                 </Pressable>
               ) : null}
 
@@ -195,7 +203,9 @@ export default function AdminModerationScreen() {
       {/* Beanstandetes Bild groß anzeigen */}
       <Modal visible={zoom !== null} transparent animationType="fade" onRequestClose={() => setZoom(null)}>
         <Pressable style={styles.zoomBackdrop} onPress={() => setZoom(null)}>
-          {zoom ? <Image source={{ uri: zoom }} style={styles.zoomImage} resizeMode="contain" /> : null}
+          {zoom ? (
+            <Image source={apiImageSource(zoom, token)} style={styles.zoomImage} contentFit="contain" cachePolicy="memory" />
+          ) : null}
         </Pressable>
       </Modal>
     </HomeBackground>

@@ -53,6 +53,8 @@ import { FontFamily, Radius, Spacing } from '@/constants/theme';
 import { accountLabel } from '@/domain/account';
 import { firstUnseenIndex, remainingLabel, stepStory, type StoryGroup } from '@/domain/story';
 import type { Story } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
+import { apiImageSource } from '@/lib/auth-image';
 
 /** Wie lange eine Story steht. Aus der Praxis: unter 4 s hetzt, über 7 s langweilt. */
 const STORY_MS = 5000;
@@ -81,6 +83,8 @@ export function StoryViewer({
 }: StoryViewerProps) {
   const insets = useSafeAreaInsets();
   const reduced = useReducedMotion();
+  // Story images are private (F-11): the server shows them only with the viewer's token.
+  const { token } = useAuth();
   /** Wo wir gerade stehen: welche Person, welche ihrer Storys. */
   const [at, setAt] = useState({ group: startGroup ?? 0, story: 0 });
   const progress = useSharedValue(0);
@@ -171,7 +175,7 @@ export function StoryViewer({
         {story.image_url ? (
           // `contain` und nicht `cover`: Eine Story ist ein Bild, das jemand
           // aufgenommen hat – abgeschnitten wäre es ein anderes Bild.
-          <Image source={{ uri: story.image_url }} style={styles.image} contentFit="contain" />
+          <Image source={apiImageSource(story.image_url, token)} style={styles.image} contentFit="contain" cachePolicy="memory" />
         ) : null}
 
         {/* Zeitleiste: ein Segment pro Story DIESER Person. */}

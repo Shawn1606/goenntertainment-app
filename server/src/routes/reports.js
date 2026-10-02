@@ -24,7 +24,7 @@ import { requireAuth, requireAdmin } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { parseReportInput } from '../reports.js';
-import { mediaUrl, publicBase } from '../media.js';
+import { mediaUrl } from '../media.js';
 
 const router = createRouter();
 
@@ -168,7 +168,7 @@ async function loadTargets(req, reports) {
           label: row.body,
           author: row.author,
           detail: null,
-          image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+          image_url: mediaUrl(req, row.image_path),
         }),
       );
     } else if (type === 'story') {
@@ -183,7 +183,7 @@ async function loadTargets(req, reports) {
           label: row.caption ?? '(ohne Text)',
           author: row.author,
           detail: null,
-          image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+          image_url: mediaUrl(req, row.image_path),
         }),
       );
     }

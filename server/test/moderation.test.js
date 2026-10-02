@@ -202,6 +202,42 @@ test('the image sent to the model is the re-encoded one, typed by its bytes (F-1
   assert.equal(lastImageBlock().source.media_type, 'image/png');
 });
 
+test("an automatic timeout keeps the refused image as private evidence, for admins only (F-11)", async () => {
+  // Own accounts: this test bans its author.
+  const author = await createUser('modbanned', { accountType: 'creator', created: userIds });
+  const admin = await createUser('modadmin', { isAdmin: true, created: userIds });
+  mock.respond({ verdict: verdict({ severity: 3, fields: ['bild'], categories: ['sonstiges'], reason: 'Test.' }) });
+
+  const res = await createImagePost(author.token, PNG_1X1, 'image/png');
+  assert.equal(res.status, 403, 'the AI moderation banned the author');
+
+  const report = await first(
+    "SELECT image_path FROM moderation_reports WHERE user_id = ? AND action = 'timeout' ORDER BY id DESC LIMIT 1",
+    [author.user.id],
+  );
+  assert.ok(report?.image_path, 'the report keeps the evidence image');
+
+  // The addresses the admin screens get: the AI evidence (ban list) and the report.
+  const auth = (token) => ({ headers: { Authorization: `Bearer ${token}` } });
+  const evidence = (await (await fetch(`${base}/api/admin/evidence`, auth(admin.token))).json()).data.find(
+    (e) => e.user.id === author.user.id,
+  );
+  const moderation = (await (await fetch(`${base}/api/admin/moderation`, auth(admin.token))).json()).data.find(
+    (m) => m.user?.id === author.user.id && m.image_url,
+  );
+  for (const url of [evidence?.image_url, moderation?.image_url]) {
+    assert.ok(url, 'an evidence address is listed');
+    assert.doesNotMatch(url, /\/storage\//, `not a public address: ${url}`);
+    assert.equal((await fetch(url)).status, 401, `${url} without a token`);
+    assert.equal((await fetch(url, auth(creator.token))).status, 403, `${url} for a non-admin`);
+    const shown = await fetch(url, auth(admin.token));
+    assert.equal(shown.status, 200, `${url} for an admin`);
+    assert.equal(shown.headers.get('x-content-type-options'), 'nosniff');
+  }
+  const name = report.image_path.split('/').pop();
+  assert.equal((await fetch(`${base}/storage/evidence/${name}`)).status, 404, 'never under /storage');
+});
+
 test('a refusal by the provider still refuses the content', async () => {
   mock.respond({ refusal: true });
   const r = await postAndCount(creator.token, 'Wird nicht geprueft');

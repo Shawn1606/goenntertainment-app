@@ -38,6 +38,7 @@ import type { UiIconName } from '@/domain/ui-icon';
 import { useBrandSurface, useSignals } from '@/hooks/use-theme';
 import { ApiError, api, type AdminReport, type ReportTarget } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { apiImageSource } from '@/lib/auth-image';
 import * as feedback from '@/lib/feedback';
 import { goBack } from '@/lib/go-back';
 
@@ -254,10 +255,12 @@ export default function AdminReportsScreen() {
                       { backgroundColor: surface.chipBg, borderColor: surface.chipBorder },
                     ]}>
                     {report.target.image_url ? (
+                      // A reported story's image is private (F-11): sent with the admin's token.
                       <Image
-                        source={{ uri: report.target.image_url }}
+                        source={apiImageSource(report.target.image_url, token)}
                         style={styles.targetImage}
                         contentFit="cover"
+                        cachePolicy="memory"
                       />
                     ) : null}
                     <View style={styles.targetText}>

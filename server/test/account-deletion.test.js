@@ -24,6 +24,7 @@ import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
+import { resolveStored } from '../src/storage.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 import { TEST_INTERNAL_SECRET } from './support/startup-env.js';
 // A valid 1x1 PNG (the one written here before was malformed; see test/support/images.js).
@@ -75,14 +76,19 @@ async function insertGrant(userId, { expired = false } = {}) {
   return token;
 }
 
-const storagePath = (relative) => path.join(process.cwd(), 'storage', relative);
+/**
+ * Where the server keeps a stored value: story images and evidence in the private tree, the rest
+ * in the public one (src/storage.js, F-11). The files this file plants lie where the server would
+ * have written them, so the deletion is checked against the right place.
+ */
+const storagePath = (relative) => resolveStored(relative);
 
 /** Aus einer Bild-Adresse den Pfad unter storage/ machen. */
 const relativeFromUrl = (url) => url.slice(url.indexOf('/storage/') + '/storage/'.length);
 
 /** Legt eine Datei unter storage/<ordner>/ an und merkt sie zum Aufraeumen. */
 function writeStorageFile(folder) {
-  fs.mkdirSync(storagePath(folder), { recursive: true });
+  fs.mkdirSync(path.dirname(storagePath(`${folder}/x.png`)), { recursive: true });
   const relative = `${folder}/zfa-test-${crypto.randomBytes(8).toString('hex')}.png`;
   fs.writeFileSync(storagePath(relative), PNG_1X1);
   createdFiles.push(relative);

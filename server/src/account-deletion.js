@@ -37,9 +37,8 @@
  * Woche. Der Verlauf der anderen behaelt Titel, Ort und Datum (das ist ihre
  * Erinnerung, dass sie dort waren) und verliert nur das Bild.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { pool } from './db.js';
+import { removeStored } from './storage.js';
 
 /**
  * Alle Stellen, an denen ein Pfad unter storage/ stehen kann.
@@ -75,21 +74,16 @@ async function stillReferenced(filePath) {
 }
 
 /**
- * Datei unter storage/ entfernen – best effort.
+ * Datei entfernen – best effort.
  *
  * Der Pfad kommt zwar aus der eigenen DB, trotzdem wird geprueft, dass er
- * innerhalb von storage/ bleibt: Ein `../` in einer Zeile waere sonst ein
- * Loeschbefehl fuer beliebige Dateien des Servers.
+ * innerhalb seines Ordners bleibt: Ein `../` in einer Zeile waere sonst ein
+ * Loeschbefehl fuer beliebige Dateien des Servers. storage.js resolves the value against its
+ * root: the public tree for avatars, banners and post images, the private one for story images
+ * and evidence (F-11), so those go with the account too.
  */
-function removeStoredFile(filePath) {
-  const root = path.resolve(process.cwd(), 'storage');
-  const target = path.resolve(root, filePath);
-  if (!target.startsWith(root + path.sep)) return;
-  try {
-    fs.unlinkSync(target);
-  } catch {
-    /* Datei evtl. schon weg. */
-  }
+async function removeStoredFile(filePath) {
+  await removeStored(filePath);
 }
 
 /**
@@ -203,7 +197,7 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
   // weiter auf Bilder, die es noch gibt. Umgekehrt (Datei weg, Konto noch da)
   // waere es ein Konto mit kaputten Bildern.
   for (const file of new Set(files)) {
-    if (!(await stillReferenced(file))) removeStoredFile(file);
+    if (!(await stillReferenced(file))) await removeStoredFile(file);
   }
 
   return 'deleted';
