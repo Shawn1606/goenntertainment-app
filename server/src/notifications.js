@@ -31,6 +31,16 @@ import { pool, toIso } from './db.js';
 import { mediaUrl } from './media.js';
 import { followerIdsOf } from './follows.js';
 import { logError } from './log.js';
+import { notBlockedWith } from './people.js';
+
+/**
+ * SQL condition: a notification the recipient may see (alias `n`). Notifications caused by
+ * someone in a block relation with the recipient, in either direction, are left out of the list
+ * and of every unread counter (F-13, F-08): they carry the other person's name and, for comments,
+ * their text. Notifications without an actor (system messages) always count. Takes TWO bound
+ * values, both the recipient's id.
+ */
+export const VISIBLE_NOTIFICATION = `(n.actor_id IS NULL OR ${notBlockedWith('n.actor_id')})`;
 
 /** Sorten, die es gibt. Neue Sorte = Zeile hier und ein Symbol in der App. */
 export const NOTIFICATION_TYPES = ['story', 'activity', 'post', 'like', 'comment', 'follow'];

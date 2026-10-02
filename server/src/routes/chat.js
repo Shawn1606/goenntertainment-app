@@ -37,6 +37,7 @@ import { HttpError } from '../validate.js';
 import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm, findBlockedTermInValue } from '../blocked-terms.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { isRoomKind, nextBurst, pageLimit, parseMessageInput } from '../messaging.js';
+import { notBlockedWith } from '../people.js';
 
 const router = createRouter();
 
@@ -212,9 +213,10 @@ async function loadMessages(req, roomId, userId, { after, before, limit }) {
     filters.push(before);
   }
 
-  // Nachrichten blockierter Konten fallen fuer mich weg. Nur fuer mich: Die
-  // anderen im Raum sehen sie weiter, denn mein Blockieren ist meine
-  // Entscheidung und nicht die Loeschung eines fremden Beitrags.
+  // Messages of anyone in a block relation with me disappear for me, in both directions (F-13):
+  // whoever blocked and whoever was blocked no longer read each other in a shared room. Only for
+  // the two of them: the others in the room still see both, because a block is a view and not
+  // the deletion of someone else's message.
   const descending = Boolean(before) && !after;
   const [rows] = await pool.query(
     `SELECT m.id, m.user_id, m.body, m.created_at, m.shared_activity_id, m.shared_title,
@@ -225,13 +227,12 @@ async function loadMessages(req, roomId, userId, { after, before, limit }) {
        JOIN users u ON u.id = m.user_id
        LEFT JOIN activities a ON a.id = m.shared_activity_id
       WHERE ${where}
-        AND NOT EXISTS (SELECT 1 FROM user_blocks b
-                         WHERE b.blocker_id = ? AND b.blocked_id = m.user_id)
+        AND ${notBlockedWith('m.user_id')}
       ORDER BY m.id ${descending ? 'DESC' : 'ASC'}
       LIMIT ?`,
-    // Reihenfolge der Platzhalter: die des WHERE, dann der Blockier-Vergleich,
-    // dann das Limit.
-    [...filters, userId, limit],
+    // Reihenfolge der Platzhalter: die des WHERE, dann der Blockier-Vergleich
+    // (zweimal die eigene ID), dann das Limit.
+    [...filters, userId, userId, limit],
   );
 
   const ordered = descending ? rows.reverse() : rows;
@@ -311,12 +312,16 @@ router.get('/chats', requireAuth, async (req, res, next) => {
       // Letzte Nachricht je Raum: erst die hoechste ID pro Raum, dann diese
       // Zeilen holen. Ein Fenster-Ausdruck waere kuerzer, laeuft aber nicht auf
       // aelteren MariaDB-Staenden.
+      // It is the last message I may see: none of someone in a block relation with me (F-13),
+      // the same rule as in the room itself (loadMessages).
       const [lastRows] = await pool.query(
         `SELECT m.room_id, m.body, m.created_at, m.shared_title, u.name
            FROM chat_messages m
            JOIN users u ON u.id = m.user_id
-          WHERE m.id IN (SELECT MAX(id) FROM chat_messages WHERE room_id IN (${ph}) GROUP BY room_id)`,
-        roomIds,
+          WHERE m.id IN (SELECT MAX(m2.id) FROM chat_messages m2
+                          WHERE m2.room_id IN (${ph}) AND ${notBlockedWith('m2.user_id')}
+                          GROUP BY m2.room_id)`,
+        [...roomIds, me, me],
       );
       lastRows.forEach((row) => {
         lastByRoom.set(row.room_id, {
@@ -329,7 +334,7 @@ router.get('/chats', requireAuth, async (req, res, next) => {
       });
 
       // Ungelesen = alles nach meinem Lesestand, ohne meine eigenen Nachrichten
-      // und ohne die blockierter Konten.
+      // und ohne die von Konten, mit denen eine Blockierung besteht (beide Richtungen, F-13).
       const [unreadRows] = await pool.query(
         `SELECT m.room_id, COUNT(*) AS c
            FROM chat_messages m
@@ -337,10 +342,9 @@ router.get('/chats', requireAuth, async (req, res, next) => {
           WHERE m.room_id IN (${ph})
             AND m.user_id <> ?
             AND m.id > COALESCE(r.last_read_id, 0)
-            AND NOT EXISTS (SELECT 1 FROM user_blocks b
-                             WHERE b.blocker_id = ? AND b.blocked_id = m.user_id)
+            AND ${notBlockedWith('m.user_id')}
           GROUP BY m.room_id`,
-        [me, ...roomIds, me, me],
+        [me, ...roomIds, me, me, me],
       );
       unreadRows.forEach((row) => unreadByRoom.set(row.room_id, Number(row.c)));
     }

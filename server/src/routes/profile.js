@@ -21,7 +21,7 @@ import { abilitiesFor } from '../accounts.js';
 import { linkFilterText, parseLinkList } from '../social.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl } from '../media.js';
-import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
+import { blockExistsBetween, hiddenByBlock, notBlockedWith, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
 import { notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
@@ -175,10 +175,12 @@ router.get('/users', requireAuth, async (req, res, next) => {
            OR (f.addressee_id = u.id AND f.requester_id = ?)
         WHERE u.id <> ?
           AND (u.banned_until IS NULL OR u.banned_until <= NOW())
+          -- A block in either direction: neither finds the other (F-13).
+          AND ${notBlockedWith('u.id')}
           AND (u.name LIKE ? OR u.username LIKE ?)
         ORDER BY (u.username = ?) DESC, u.name ASC
         LIMIT ${SEARCH_LIMIT}`,
-      [req.user.id, req.user.id, req.user.id, like, like, term],
+      [req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, like, like, term],
     );
 
     res.json({
@@ -238,7 +240,10 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
       [req.params.username],
     );
 
-    if (!user) throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+    // A block in either direction answers like an unknown name (F-13): the same 404 and text.
+    if (!user || (await hiddenByBlock(req.user.id, user.id))) {
+      throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+    }
 
     const showsPosts = abilitiesFor(user).hasPublicProfile;
 
@@ -413,7 +418,10 @@ function followList(direction) {
   return async (req, res, next) => {
     try {
       const target = await first('SELECT id FROM users WHERE username = ?', [req.params.username]);
-      if (!target) throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+      // The lists of someone in a block relation answer like an unknown profile (F-13).
+      if (!target || (await hiddenByBlock(req.user.id, target.id))) {
+        throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+      }
 
       const [rows] = await pool.query(
         `SELECT ${USER_COLUMNS},
@@ -819,10 +827,15 @@ router.post('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, r
 router.delete('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
+    // Withdrawing one's own like always works, also after a block (F-13) ...
     await pool.query('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?', [
       post.id,
       req.user.id,
     ]);
+    // ... but the answer shows the post only to someone it is not hidden from.
+    if (await hiddenByBlock(req.user.id, post.user_id)) {
+      throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    }
     res.json({ data: transformPost(req, await loadPost(post.id, req.user.id)) });
   } catch (err) {
     next(err);
@@ -836,6 +849,10 @@ router.delete('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req,
 router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
+    // The post of someone in a block relation answers like a post that does not exist (F-13).
+    if (await hiddenByBlock(req.user.id, post.user_id)) {
+      throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    }
     const [rows] = await pool.query(
       `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
          FROM post_comments c

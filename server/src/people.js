@@ -76,6 +76,27 @@ export async function blockExistsBetween(a, b) {
   return Boolean(row);
 }
 
+/**
+ * Columns that may be compared with the viewer in notBlockedWith(). Code-controlled identifiers
+ * only: the column is spliced into the SQL text, so it must never come from a request.
+ */
+const BLOCK_COLUMNS = new Set(['u.id', 'm.user_id', 'm2.user_id', 's.user_id', 'n.actor_id', 'c.user_id']);
+
+/**
+ * SQL condition "no block in either direction between `column` and the viewer" (F-13).
+ *
+ * A block hides both people from each other everywhere: lists, counters, chats, comments,
+ * notifications. Who blocked whom does not matter for what is shown (the same rule as
+ * blockExistsBetween for what may be done). The condition takes TWO bound values, both the
+ * viewer's id, in this order.
+ */
+export function notBlockedWith(column) {
+  if (!BLOCK_COLUMNS.has(column)) throw new Error(`notBlockedWith: unexpected column ${column}`);
+  return `NOT EXISTS (SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = ${column} AND b.blocked_id = ?)
+                          OR (b.blocker_id = ? AND b.blocked_id = ${column}))`;
+}
+
 /** Die IDs, die ich blockiert habe – zum Ausfiltern in Listen. */
 export async function blockedIdsOf(userId) {
   const [rows] = await pool.query('SELECT blocked_id FROM user_blocks WHERE blocker_id = ?', [userId]);
@@ -87,6 +108,17 @@ export async function loadUser(id) {
   const row = await first(`SELECT ${USER_COLUMNS} FROM users u WHERE u.id = ?`, [Number(id) || 0]);
   if (!row) throw new HttpError(404, 'Dieses Konto gibt es nicht.');
   return row;
+}
+
+/**
+ * Reads addressed to another person (their profile, their lists, their stories, their post) end
+ * here when a block stands between the two (F-13): the caller throws the same 404 it gives for
+ * something that does not exist, with the same message, so the answer is no block oracle.
+ * Never true for one's own things.
+ */
+export async function hiddenByBlock(viewerId, ownerId) {
+  if (Number(viewerId) === Number(ownerId)) return false;
+  return blockExistsBetween(viewerId, ownerId);
 }
 
 /**

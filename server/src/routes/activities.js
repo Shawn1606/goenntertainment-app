@@ -9,7 +9,7 @@ import { accountTiersEnabled, hideImportedSql } from '../features.js';
 import { awardActivityPoints } from '../rewards.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { notifyFollowers } from '../notifications.js';
-import { blockExistsBetween, transformUser } from '../people.js';
+import { blockExistsBetween, notBlockedWith, transformUser } from '../people.js';
 import { logError } from '../log.js';
 import { singleUpload } from '../uploads.js';
 import { rateLimit } from '../rate-limit.js';
@@ -61,6 +61,7 @@ function transform(
   viewsCount = 0,
   saved = false,
   social = {},
+  participantsCount = participants.length,
 ) {
   return {
     id: activity.id,
@@ -103,7 +104,9 @@ function transform(
       username: p.username,
       avatar_url: mediaUrl(req, p.avatar),
     })),
-    participants_count: participants.length,
+    // The true number, also when faces are left out of `participants` for the viewer (a block,
+    // F-13): it is capacity, and capacity must stay honest.
+    participants_count: participantsCount,
     is_joined: participants.some((p) => p.id === currentUserId),
     // Beitritts-Zeitpunkt der:des aktuellen Nutzer:in (fuer den Verlauf in „Meine
     // Aktivitaeten"). null, wenn nicht beigetreten.
@@ -142,6 +145,7 @@ function transformLoaded(req, activity, rel, currentUserId) {
       commentsCount: rel.comments.get(activity.id) ?? 0,
       likedByMe: rel.liked.has(activity.id),
     },
+    rel.participantCounts.get(activity.id) ?? 0,
   );
 }
 
@@ -159,6 +163,7 @@ async function loadRelations(ids, userId = null) {
       hosts: new Map(),
       interests: new Map(),
       participants: new Map(),
+      participantCounts: new Map(),
       views: new Map(),
       saved: new Set(),
       likes: new Map(),
@@ -194,11 +199,19 @@ async function loadRelations(ids, userId = null) {
       ORDER BY ai.\`rank\`, i.name`,
     ids,
   );
+  // The faces the viewer may see: nobody in a block relation with them (F-13; the viewer is
+  // never in one with themselves). The count below stays the true number.
   const [participantRows] = await pool.query(
     `SELECT au.activity_id, au.created_at AS joined_at, u.id, u.name, u.username, u.avatar
        FROM activity_user au
        JOIN users u ON u.id = au.user_id
-      WHERE au.activity_id IN (${ph})`,
+      WHERE au.activity_id IN (${ph})
+        ${userId ? `AND ${notBlockedWith('u.id')}` : ''}`,
+    userId ? [...ids, userId, userId] : ids,
+  );
+  const [participantCountRows] = await pool.query(
+    `SELECT activity_id, COUNT(*) AS c FROM activity_user
+      WHERE activity_id IN (${ph}) GROUP BY activity_id`,
     ids,
   );
 
@@ -248,13 +261,14 @@ async function loadRelations(ids, userId = null) {
   interestRows.forEach((r) => interests.get(r.activity_id)?.push(r));
   const participants = new Map(ids.map((id) => [id, []]));
   participantRows.forEach((r) => participants.get(r.activity_id)?.push(r));
+  const participantCounts = new Map(participantCountRows.map((r) => [r.activity_id, Number(r.c)]));
   const views = new Map(viewRows.map((r) => [r.activity_id, Number(r.c)]));
   const saved = new Set(savedRows.map((r) => r.activity_id));
   const likes = new Map(likeRows.map((r) => [r.activity_id, Number(r.c)]));
   const comments = new Map(commentRows.map((r) => [r.activity_id, Number(r.c)]));
   const liked = new Set(likedRows.map((r) => r.activity_id));
 
-  return { hosts, interests, participants, views, saved, likes, comments, liked };
+  return { hosts, interests, participants, participantCounts, views, saved, likes, comments, liked };
 }
 
 /** Ein Event fertig in API-Form – oder ein 404. */
@@ -643,10 +657,17 @@ router.delete('/:id', requireAuth, rateLimit('content'), async (req, res, next) 
 router.post('/:id/join', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first(
-      'SELECT id, max_participants, title, location, starts_at, banner_path FROM activities WHERE id = ?',
+      'SELECT id, user_id, max_participants, title, location, starts_at, banner_path FROM activities WHERE id = ?',
       [req.params.id],
     );
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
+
+    // Joining creates contact with the host (their event chat, their participant list): refused
+    // when a block stands between the two, in either direction, with the same neutral answer as
+    // a like or a comment (F-13). The event itself stays visible (an open product decision).
+    if (await blockExistsBetween(req.user.id, activity.user_id)) {
+      throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+    }
 
     // Kapazitaet pruefen (nur wenn ein Limit gesetzt ist). Bereits beigetretene
     // Nutzer:innen duerfen bleiben – der Beitritt ist idempotent.

@@ -34,7 +34,7 @@ import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { notifyFollowers } from '../notifications.js';
-import { loadUser } from '../people.js';
+import { hiddenByBlock, loadUser, notBlockedWith } from '../people.js';
 import { singleUpload } from '../uploads.js';
 import { ALLOWED_MIME, processImageOr422 } from '../images.js';
 import { removeStored, sendPrivateFile, STORED_NAME, storeImage } from '../storage.js';
@@ -76,12 +76,13 @@ router.get('/stories', requireAuth, async (req, res, next) => {
     // Frees the space of expired stories; never throws (see ../stories.js).
     await sweepExpiredStories();
 
+    // Nobody in a block relation with me, in either direction (F-13).
     const [rows] = await pool.query(
       `${STORY_QUERY}
-        WHERE ${STORY_LIVE}
+        WHERE ${STORY_LIVE} AND ${notBlockedWith('s.user_id')}
         ORDER BY seen ASC, s.created_at DESC, s.id DESC
         LIMIT ${STORY_LIMIT}`,
-      [req.user.id, req.user.id],
+      [req.user.id, req.user.id, req.user.id, req.user.id],
     );
 
     res.json({
@@ -114,6 +115,10 @@ router.get('/users/:id/stories', requireAuth, async (req, res, next) => {
     // Ueber `loadUser`, damit ein unbekanntes Konto denselben 404 gibt wie
     // ueberall sonst – und nicht eine leere Liste, die „keine Storys" behauptet.
     const owner = await loadUser(req.params.id);
+    // Someone in a block relation answers like an account that does not exist (F-13).
+    if (await hiddenByBlock(req.user.id, owner.id)) {
+      throw new HttpError(404, 'Dieses Konto gibt es nicht.');
+    }
     res.json({ data: await storiesOf(req, owner.id, req.user.id) });
   } catch (err) {
     next(err);
@@ -230,10 +235,14 @@ router.get('/media/stories/:file', requireAuth, async (req, res, next) => {
 // POST /api/stories/:id/view  (geschuetzt) – als gesehen merken (idempotent).
 router.post('/stories/:id/view', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
-    const story = await first('SELECT id FROM stories WHERE id = ? AND expires_at > NOW()', [
+    const story = await first('SELECT id, user_id FROM stories WHERE id = ? AND expires_at > NOW()', [
       req.params.id,
     ]);
-    if (!story) throw new HttpError(404, 'Diese Story gibt es nicht mehr.');
+    // A story of someone in a block relation answers like one that has expired (F-13), and no
+    // view is recorded.
+    if (!story || (await hiddenByBlock(req.user.id, story.user_id))) {
+      throw new HttpError(404, 'Diese Story gibt es nicht mehr.');
+    }
 
     await pool.query(
       `INSERT INTO story_views (story_id, user_id, created_at) VALUES (?, ?, NOW())
