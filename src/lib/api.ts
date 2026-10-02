@@ -1164,14 +1164,25 @@ export const api = {
     }),
 
   /**
-   * Fordert eine „Passwort vergessen"-Mail an. Antwortet immer neutral (die API
-   * verrät nicht, ob die Adresse registriert ist) – ein 422 kommt nur bei einer
-   * ungültigen E-Mail-Eingabe.
+   * Fordert eine „Passwort vergessen"-Mail an: Sie bringt einen 6-stelligen Code (F-09; no link).
+   * Antwortet immer neutral (die API verrät nicht, ob die Adresse registriert ist) – ein 422
+   * kommt nur bei einer ungültigen E-Mail-Eingabe. Also the way to get a new code; the server
+   * sends at most one mail a minute per account.
    */
   forgotPassword: (email: string) =>
     request<{ status: string; message: string }>('/forgot-password', {
       method: 'POST',
       body: { email },
+    }),
+
+  /**
+   * Sets a new password with the code from the "Passwort vergessen" mail (signed out). Signs out
+   * every device. A wrong, expired or used code and an unknown address get the same 422 on `code`.
+   */
+  resetPassword: (input: { email: string; code: string; password: string; password_confirmation: string }) =>
+    request<{ status: string; message: string }>('/reset-password', {
+      method: 'POST',
+      body: input,
     }),
 
   interests: () => request<{ data: Interest[] }>('/interests'),
