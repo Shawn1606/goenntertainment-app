@@ -327,14 +327,14 @@ test('F-18: no healthcheck carries a password', () => {
 test('F-29: uploads are mounted read-only into caddy, read-write only into node, never into api', () => {
   const config = base();
   const all = mounts(config);
+  console.log(`mounts: ${all.length} checked`);
+  assert.deepEqual(all.filter((m) => m.service === 'api').map((m) => `${posix(m.source)} -> ${m.target}`), [], 'api mounts something');
+  const binds = all.filter((m) => m.type === 'bind' && /storage/.test(posix(m.source)));
+  assert.deepEqual(binds.map((m) => `${m.service}: ${posix(m.source)}`), [], 'an upload folder bound from the clone');
   const of = (source) => all.filter((m) => m.type === 'volume' && m.source === source)
     .map((m) => `${m.service}:${m.read_only ? 'ro' : 'rw'}`).sort();
   assert.deepEqual(of('uploads'), ['backup:ro', 'caddy:ro', 'node:rw', 'storage-init:rw']);
   assert.deepEqual(of('private-media'), ['backup:ro', 'node:rw', 'storage-init:rw']);
-  assert.deepEqual(all.filter((m) => m.service === 'api'), [], 'api mounts something');
-  const binds = all.filter((m) => m.type === 'bind' && /storage/.test(posix(m.source)));
-  assert.deepEqual(binds, [], 'an upload folder bound from the clone');
-  console.log(`mounts: ${all.length} checked`);
 });
 
 test('F-29: caddy serves only stored public images from the volume and answers 404 for anything else under /storage', () => {
@@ -348,7 +348,8 @@ test('F-29: caddy serves only stored public images from the volume and answers 4
   const routes = caddyAdapt().apps.http.servers.srv0.routes[0].handle[0].routes;
   const uploadAt = routes.findIndex((r) => r.match?.[0]?.path_regexp);
   const storageAt = routes.findIndex((r) => r.match?.[0]?.path?.includes('/storage/*'));
-  assert.ok(uploadAt >= 0 && storageAt > uploadAt, 'the upload route comes before the /storage 404');
+  assert.ok(uploadAt >= 0, 'caddy has no route that serves uploads itself');
+  assert.ok(storageAt > uploadAt, 'no /storage 404 after the upload route');
   assert.equal(routes[uploadAt].match[0].path_regexp.pattern, expected, 'the allow-list mirrors server/src/storage.js');
   for (const folder of privateFolders) assert.ok(!expected.includes(folder), `private folder ${folder} is served`);
   const upload = caddyHandlers(routes[uploadAt]);
@@ -463,6 +464,7 @@ test('F-45: the MySQL binary log keeps the required retention, never the MySQL d
 
 test('F-17: backups go to the required BACKUP_DIR bind, never created implicitly, and to a volume in CI', () => {
   const backup = base().services.backup;
+  assert.ok(backup, 'no backup service');
   const bind = backup.volumes.find((v) => v.target === '/backups');
   assert.equal(bind.type, 'bind');
   assert.equal(posix(bind.source).replace(/^[A-Za-z]:/, ''), ciValues().BACKUP_DIR);
@@ -508,6 +510,7 @@ test('F-17: the preflight refuses a BACKUP_DIR inside the clone and checks the e
     'envfile /work/backups; FAKE_DOCKER_STATUS=1 run compose-fails',
     'ENV_FILE=/work/none.env run no-env-file',
   ].join('\n');
+  assert.ok(fs.existsSync(path.join(DEPLOY_DIR, 'scripts', 'preflight.sh')), 'no deploy/scripts/preflight.sh');
   const r = dockerRun(serviceImage('db'), {
     mounts: [{ src: DEPLOY_DIR, dst: '/clone/deploy' }],
     entrypoint: 'bash',
@@ -571,7 +574,10 @@ test('F-17: the backup runs nightly at 02:30 UTC and refuses an invalid retentio
 });
 
 test('settings checked in two places use the same patterns (preflight and the services)', () => {
-  const read = (file, name) => new RegExp(`${name}='([^']+)'`).exec(readText(path.join(DEPLOY_DIR, 'scripts', file)))?.[1];
+  const read = (file, name) => {
+    const full = path.join(DEPLOY_DIR, 'scripts', file);
+    return fs.existsSync(full) ? new RegExp(`${name}='([^']+)'`).exec(readText(full))?.[1] : undefined;
+  };
   const pairs = [
     ['RETENTION_PATTERN', 'backup.sh', 'RETENTION_PATTERN', 'preflight.sh'],
     ['BINLOG_RETENTION_PATTERN', 'db-entrypoint.sh', 'BINLOG_RETENTION_PATTERN', 'preflight.sh'],
@@ -585,6 +591,7 @@ test('settings checked in two places use the same patterns (preflight and the se
 });
 
 test('scripts the containers read from the working tree keep LF line ends', () => {
+  assert.ok(fs.existsSync(path.join(DEPLOY_DIR, 'scripts')), 'no deploy/scripts folder');
   const files = [
     ...fs.readdirSync(path.join(DEPLOY_DIR, 'scripts')).map((f) => path.join(DEPLOY_DIR, 'scripts', f)),
     path.join(DEPLOY_DIR, 'Caddyfile'),
@@ -707,27 +714,38 @@ test('networks: only caddy publishes ports (IPv4), db and the jobs sit on intern
   console.log(`networks: ${Object.keys(nets).length} networks, ${services.length} services checked`);
 });
 
+/**
+ * The hop from `front` to `back`: the one network both sit on and `front`'s fixed address there,
+ * with that network's subnet and dynamic range. Fails when they share no network or several (then
+ * the back could see the front at either address).
+ */
+function hop(config, front, back) {
+  const on = (s) => Object.keys(config.services[s]?.networks ?? {});
+  const shared = on(front).filter((n) => on(back).includes(n));
+  assert.equal(shared.length, 1, `${front} and ${back} share exactly one network (they share ${shared.join(', ') || 'none'})`);
+  const [network] = shared;
+  const ip = config.services[front].networks[network]?.ipv4_address;
+  assert.ok(ip, `${front} has a fixed address on ${network}`);
+  const ipam = config.networks[network]?.ipam?.config?.[0] ?? {};
+  return { network, ip, subnet: ipam.subnet, range: ipam.ip_range };
+}
+
 test('F-31: the trusted proxy addresses are the fixed addresses of caddy and api (mirror)', () => {
-  const config = base();
-  const { caddy, api, node } = config.services;
-  const subnet = (name) => config.networks[name].ipam.config[0];
-  const caddyIp = caddy.networks.edge.ipv4_address;
-  const apiIp = api.networks.app.ipv4_address;
-  assert.equal(api.environment.TRUSTED_PROXIES, caddyIp, 'Laravel trusts caddy');
-  assert.equal(node.environment.NODE_TRUST_PROXY, apiIp, 'Node trusts api');
-  for (const [ip, net] of [[caddyIp, 'edge'], [apiIp, 'app']]) {
-    const { subnet: cidr, ip_range: range } = subnet(net);
-    assert.ok(inCidr(ip, cidr), `${ip} lies in ${net} ${cidr}`);
-    assert.ok(!inCidr(ip, range), `${ip} lies outside ${net}'s dynamic range ${range}: no other container can take it`);
-    assert.notEqual(ipToInt(ip) % 2 ** (32 - Number(cidr.split('/')[1])), 1, `${ip} is not the gateway`);
+  for (const [label, config] of [['production', base()], ['CI', ci()]]) {
+    const edge = hop(config, 'caddy', 'api');
+    const app = hop(config, 'api', 'node');
+    assert.equal(config.services.api.environment.TRUSTED_PROXIES, edge.ip, `${label}: Laravel trusts caddy's address`);
+    assert.equal(config.services.node.environment.NODE_TRUST_PROXY, app.ip, `${label}: Node trusts api's address`);
+    for (const h of [edge, app]) {
+      assert.ok(h.subnet && inCidr(h.ip, h.subnet), `${label}: ${h.ip} lies in ${h.network}'s fixed subnet`);
+      assert.ok(h.range && !inCidr(h.ip, h.range), `${label}: ${h.ip} lies outside ${h.network}'s dynamic range: no other container can take it`);
+      assert.notEqual(ipToInt(h.ip) % 2 ** (32 - Number(h.subnet.split('/')[1])), 1, `${label}: ${h.ip} is not the gateway`);
+    }
+    if (edge.network !== app.network) {
+      assert.ok(!inCidr(app.subnet.split('/')[0], edge.subnet) && !inCidr(edge.subnet.split('/')[0], app.subnet), `${label}: the two subnets do not overlap`);
+    }
+    console.log(`${label}: caddy ${edge.ip} on ${edge.network} (TRUSTED_PROXIES), api ${app.ip} on ${app.network} (NODE_TRUST_PROXY)`);
   }
-  const edge = subnet('edge').subnet;
-  const app = subnet('app').subnet;
-  assert.ok(!inCidr(app.split('/')[0], edge) && !inCidr(edge.split('/')[0], app), 'edge and app do not overlap');
-  // The CI override keeps the same addresses: the stack test sees the production trust chain.
-  const c = ci().services;
-  assert.equal(c.api.environment.TRUSTED_PROXIES, c.caddy.networks.edge.ipv4_address);
-  assert.equal(c.node.environment.NODE_TRUST_PROXY, c.api.networks.app.ipv4_address);
 });
 
 test('the CI override closes every network, publishes no port and keeps the moderation provider unreachable', () => {
@@ -746,9 +764,11 @@ test('hardening: no new privileges anywhere, and no capabilities for api, node a
     if (!(s.security_opt ?? []).includes('no-new-privileges:true')) problems.push(`${name}: no-new-privileges`);
   }
   for (const name of ['api', 'node', 'caddy', 'backup', 'admin-gate', 'seed']) {
-    if (!(base().services[name].cap_drop ?? []).includes('ALL')) problems.push(`${name}: cap_drop ALL`);
+    const s = base().services[name];
+    if (!s) problems.push(`${name}: no such service`);
+    else if (!(s.cap_drop ?? []).includes('ALL')) problems.push(`${name}: cap_drop ALL`);
   }
-  assert.deepEqual(base().services.caddy.cap_add, ['NET_BIND_SERVICE']);
+  if (JSON.stringify(base().services.caddy?.cap_add) !== '["NET_BIND_SERVICE"]') problems.push('caddy: cap_add NET_BIND_SERVICE only');
   console.log(`hardening: ${services.length} services checked`);
   assert.deepEqual(problems, []);
 });
