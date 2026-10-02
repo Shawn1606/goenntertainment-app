@@ -617,8 +617,11 @@ test('scripts the containers read from the working tree keep LF line ends', () =
 /** A reference is pinned when it ends in @sha256 and 64 hex digits. */
 const PINNED = /^[^\s@]+@sha256:[0-9a-f]{64}$/;
 
-/** Image references of a Dockerfile: FROM images and COPY --from images (not stage names). */
-function dockerfileImages(text, contexts = ['shared']) {
+/**
+ * Image references of a Dockerfile: FROM images and COPY --from images (not stage names, not the
+ * named build `contexts`).
+ */
+function dockerfileImages(text, contexts) {
   const stages = new Set();
   const refs = [];
   for (const line of text.split(/\r?\n/)) {
@@ -648,7 +651,7 @@ function workflowImages(text) {
   return refs;
 }
 
-test('F-25: every image in the compose files, the workflows and the CI tool images is pinned by digest, and copies agree', () => {
+test('F-25: every image in the compose files, the workflows and the Dockerfiles is pinned by digest, and copies agree', () => {
   const refs = [];
   const add = (where, list) => list.forEach((ref) => refs.push({ where, ref }));
   for (const [label, config] of [['deploy compose', base()], ['deploy compose + CI override', ci()]]) {
@@ -657,15 +660,18 @@ test('F-25: every image in the compose files, the workflows and the CI tool imag
   add('dev/docker-compose.yml', [...readText(path.join(REPO_ROOT, 'dev', 'docker-compose.yml')).matchAll(/^\s*image:\s*(\S+)/gm)].map((m) => m[1]));
   const workflows = path.join(REPO_ROOT, '.github', 'workflows');
   for (const f of fs.readdirSync(workflows).filter((n) => /\.ya?ml$/.test(n))) add(`.github/workflows/${f}`, workflowImages(readText(path.join(workflows, f))));
-  add('.github/actionlint/Dockerfile', dockerfileImages(readText(path.join(REPO_ROOT, '.github', 'actionlint', 'Dockerfile'))));
+  // Every tracked Dockerfile (the api and server images and the CI tool image). `COPY --from=`
+  // of a named build context (compose additional_contexts) reads a folder, not an image.
+  const contexts = [...new Set(servicesOf(base()).flatMap(([, s]) => Object.keys(s.build?.additional_contexts ?? {})))];
+  const dockerfiles = spawnSync('git', ['-C', REPO_ROOT, 'ls-files', '*Dockerfile*'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
+  assert.ok(dockerfiles.length > 0, 'no tracked Dockerfile found');
+  for (const f of dockerfiles) add(f, dockerfileImages(readText(path.join(REPO_ROOT, f)), contexts));
   assert.ok(refs.length > 0, 'no image reference found: refusing to report clean');
-  console.log(`image references in scope: ${refs.length} (${new Set(refs.map((r) => r.ref)).size} distinct)`);
+  console.log(`image references in scope: ${refs.length} (${new Set(refs.map((r) => r.ref)).size} distinct) in the compose files, `
+    + `the workflows and ${dockerfiles.length} Dockerfiles (${dockerfiles.join(', ')}); named build contexts: ${contexts.join(', ') || 'none'}`);
   assert.deepEqual(refs.filter((r) => !PINNED.test(r.ref)).map((r) => `${r.where}: ${r.ref}`), [], 'not pinned by digest');
 
-  // Copies of one image tag carry one digest everywhere, the Dockerfiles included (their own pins
-  // are checked by deploy/test/image.test.mjs).
-  const dockerfiles = spawnSync('git', ['-C', REPO_ROOT, 'ls-files', '*Dockerfile*'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean);
-  for (const f of dockerfiles) add(f, dockerfileImages(readText(path.join(REPO_ROOT, f))));
+  // Copies of one image tag carry one digest everywhere.
   const byTag = new Map();
   for (const { where, ref } of refs) {
     const [tag, digest] = ref.split('@');
