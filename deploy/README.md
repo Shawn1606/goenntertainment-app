@@ -39,6 +39,10 @@ Internet ─► caddy :80/:443   HTTPS, security headers, the upload allow-list
 | `admin-gate` | `mysql:8.4` (pinned) | refuses to let `caddy` start while no admin account exists (`deploy/scripts/admin-gate.sh`) | data | none | one-shot on every `up` |
 | `seed` | built from `server/Dockerfile` | creates the admin account, or loads the start data; never started by `docker compose up` (profile `tools`) | data | none | one-off, `docker compose run --rm seed` |
 
+Keep exactly one `node` container (no `--scale node=…`, no replicas): Node counts its write limits
+in memory, so a second process would multiply every limit by the number of processes
+(`server/src/rate-limit.js`). Move the counters to a shared store before running more than one.
+
 Networks (the compose file's footer has the details):
 
 | Network | Who is on it | Way out |
