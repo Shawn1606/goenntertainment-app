@@ -17,7 +17,12 @@ import {
 // The retention rules (F-16) are read through the namespace, so that this file still loads on a
 // server without them and their tests fail on an assertion.
 import * as config from '../src/config.js';
-import { TEST_ANTHROPIC_API_KEY, TEST_RETENTION, startupEnv } from './support/startup-env.js';
+import {
+  TEST_ANTHROPIC_API_KEY,
+  TEST_MODERATION_DAILY_CALL_LIMIT,
+  TEST_RETENTION,
+  startupEnv,
+} from './support/startup-env.js';
 
 const SECRET_OK = 'x'.repeat(INTERNAL_SECRET_MIN_LENGTH);
 
@@ -82,13 +87,14 @@ test('SANCTUM_EXPIRATION: optional, and a set value must be what Laravel accepts
 
 test('problems name settings, never their values', () => {
   const value = 'visible-test-only-value';
-  // The moderation key and the retention settings (both required in production) are given, so
-  // exactly the two settings that carry the visible value are named.
+  // The moderation key, its daily call limit and the retention settings (all required in
+  // production) are given, so exactly the two settings that carry the visible value are named.
   const problems = startupProblems({
     NODE_ENV: 'production',
     NODE_TRUST_PROXY: value,
     NODE_INTERNAL_SECRET: value,
     ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY,
+    MODERATION_DAILY_CALL_LIMIT: TEST_MODERATION_DAILY_CALL_LIMIT,
     ...TEST_RETENTION,
   });
   assert.equal(problems.length, 2);
@@ -175,6 +181,42 @@ test('MODERATION_FAIL_OPEN: optional, and a set value must be "true" or "false"'
   const value = 'yes-test-only';
   assert.equal(named({ MODERATION_FAIL_OPEN: value }), true);
   assert.ok(!startupProblems({ MODERATION_FAIL_OPEN: value }).some((p) => p.includes(value)), 'the value is never named');
+});
+
+/* --------------------------------------------- the daily AI moderation call limit (F-07) */
+
+test('MODERATION_DAILY_CALL_LIMIT: required in production, a whole number of at least 1 wherever it is set', () => {
+  const named = (env) => startupProblems(env).some((p) => p.startsWith('MODERATION_DAILY_CALL_LIMIT'));
+  const production = { NODE_ENV: 'production', ANTHROPIC_API_KEY: TEST_ANTHROPIC_API_KEY, ...TEST_RETENTION };
+
+  assert.equal(named(production), true, 'missing in production');
+  assert.equal(named({ ...production, MODERATION_DAILY_CALL_LIMIT: ' ' }), true, 'blank in production');
+  assert.equal(named({ ...production, MODERATION_DAILY_CALL_LIMIT: '1' }), false, 'the smallest value');
+  assert.equal(named({ ...production, MODERATION_DAILY_CALL_LIMIT: '999999999' }), false, 'the largest value');
+  assert.equal(named({}), false, 'outside production it may be unset (no cap)');
+
+  for (const bad of ['0', '-1', '1.5', '1e3', '100/d', 'abc', '01', '1000000000']) {
+    assert.equal(named({ MODERATION_DAILY_CALL_LIMIT: bad }), true, `${JSON.stringify(bad)} must stop the start`);
+    assert.equal(named({ ...production, MODERATION_DAILY_CALL_LIMIT: bad }), true, `${JSON.stringify(bad)} in production`);
+  }
+  const value = '77-test-only-calls';
+  const problems = startupProblems({ ...production, MODERATION_DAILY_CALL_LIMIT: value });
+  assert.ok(problems.some((p) => p.startsWith('MODERATION_DAILY_CALL_LIMIT')));
+  assert.ok(!problems.some((p) => p.includes(value)), 'the value is never named');
+});
+
+test('moderationDailyCallLimit: the limit, null (no cap) when unset outside production, 0 (no call) otherwise', () => {
+  assert.equal(typeof config.moderationDailyCallLimit, 'function', 'the server has no daily call limit (F-07)');
+  const limit = config.moderationDailyCallLimit;
+  assert.equal(limit({ MODERATION_DAILY_CALL_LIMIT: '250' }), 250);
+  assert.equal(limit({ MODERATION_DAILY_CALL_LIMIT: ' 250 ' }), 250);
+  assert.equal(limit({ NODE_ENV: 'production', MODERATION_DAILY_CALL_LIMIT: '250' }), 250);
+  assert.equal(limit({}), null, 'unset outside production: no cap');
+  assert.equal(limit({ MODERATION_DAILY_CALL_LIMIT: '' }), null);
+  // Past the startup gate these cannot happen; if they did, no call would be allowed.
+  assert.equal(limit({ NODE_ENV: 'production' }), 0, 'missing in production: no call');
+  assert.equal(limit({ MODERATION_DAILY_CALL_LIMIT: '0' }), 0);
+  assert.equal(limit({ MODERATION_DAILY_CALL_LIMIT: 'abc' }), 0, 'invalid: no call');
 });
 
 /* ------------------------------------------------------------- retention (F-16) */

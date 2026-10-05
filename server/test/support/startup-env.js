@@ -19,6 +19,12 @@ export const TEST_ANTHROPIC_API_KEY = 'test-only-fake-key-not-a-secret';
 export const UNREACHABLE_MODEL_URL = 'http://127.0.0.1:9';
 
 /**
+ * Test-only daily AI moderation call limit (required in production, src/config.js). A started
+ * test server asks no model at all; this is not a spending decision.
+ */
+export const TEST_MODERATION_DAILY_CALL_LIMIT = '100000';
+
+/**
  * Test-only retention settings (required in production, src/config.js): ten years each, so the
  * prune a started server runs at once deletes no row another test file wrote. Not a retention
  * decision.
@@ -47,6 +53,7 @@ export function startupEnv(overrides = {}) {
     ANTHROPIC_BASE_URL: UNREACHABLE_MODEL_URL,
     MODERATION_ENABLED: 'true',
     MODERATION_FAIL_OPEN: '',
+    MODERATION_DAILY_CALL_LIMIT: TEST_MODERATION_DAILY_CALL_LIMIT,
     ...TEST_RETENTION,
     ...overrides,
   };

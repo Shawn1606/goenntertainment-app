@@ -105,6 +105,11 @@ services:
       # Fail closed: content the model cannot check is refused. 'true' is an explicit emergency
       # switch only.
       MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-false}
+      # Global budget of AI moderation calls per UTC day across all accounts (F-07,
+      # server/src/moderation.js). How much is spent on the provider is the operator's decision:
+      # no default, and node does not start without it. Beyond it every moderated write is refused
+      # until the next UTC day, whatever MODERATION_FAIL_OPEN says.
+      MODERATION_DAILY_CALL_LIMIT: ${MODERATION_DAILY_CALL_LIMIT:?MODERATION_DAILY_CALL_LIMIT is missing in deploy/.env (the most AI moderation calls per UTC day, a whole number of at least 1; an operator decision, no default)}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.

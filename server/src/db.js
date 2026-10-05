@@ -137,6 +137,15 @@ export async function ensureSchema() {
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
 
+  // The counter of the global AI moderation budget per UTC day (F-07), see schema.sql.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS moderation_call_counts (
+      day   DATE         NOT NULL,
+      calls INT UNSIGNED NOT NULL DEFAULT 0,
+      PRIMARY KEY (day)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
   // Aktive Tage je Nutzer:in – Grundlage der Serie ("Streak"), siehe schema.sql
   // und src/streak.js. Eine Zeile pro Person und Kalendertag.
   await pool.query(`

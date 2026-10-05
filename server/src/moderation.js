@@ -17,12 +17,16 @@
  * moderation off, and production refuses to start with that or without a key (config.js
  * startupProblems). The switches are read on every check (config.js moderationSettings), not when
  * this module is loaded.
+ *
+ * Global budget (F-07): every call to the model first reserves one unit of the day's
+ * MODERATION_DAILY_CALL_LIMIT (reserveModelCall). Beyond it, or when the counter cannot be read or
+ * written, the content is refused whatever MODERATION_FAIL_OPEN says.
  */
 import 'dotenv/config';
 import Anthropic, { APIConnectionError } from '@anthropic-ai/sdk';
 import { pool } from './db.js';
 import { setBan, recordBanEvidence } from './auth.js';
-import { moderationSettings } from './config.js';
+import { moderationDailyCallLimit, moderationSettings } from './config.js';
 import { imageForModel, isProcessedImage } from './images.js';
 import { describeError, logError, logWarn } from './log.js';
 import { storeImage } from './storage.js';
@@ -76,7 +80,9 @@ export function moderationStatus() {
   if (!settings.hasKey) {
     return `KI-Moderation: AN ohne ANTHROPIC_API_KEY - ${onFailure}`;
   }
-  return `KI-Moderation: AN (${model}, Sperre ab Schwere ${timeoutSeverity} fuer ${timeoutDays} Tage) - ${onFailure}`;
+  const limit = moderationDailyCallLimit();
+  const budget = limit === null ? 'no daily call limit (outside production only)' : `at most ${limit} calls per UTC day`;
+  return `KI-Moderation: AN (${model}, Sperre ab Schwere ${timeoutSeverity} fuer ${timeoutDays} Tage) - ${onFailure}; ${budget}`;
 }
 
 /** One client per key, address and time limit: a changed environment gets a new one. */
@@ -217,15 +223,81 @@ export function buildModerationText({ context, title, description, location, int
   );
 }
 
+// --- Global daily budget of model calls (F-07) --------------------------------
+
+/**
+ * Thrown before a model call that the daily budget does not allow; classify() turns it into the
+ * status 'budget'. `kind`: 'limit' = the day's MODERATION_DAILY_CALL_LIMIT is used up, 'counter' =
+ * the counter could not be read or written.
+ */
+class CallBudgetRefusal extends Error {
+  constructor(kind) {
+    super(kind === 'limit' ? 'daily AI moderation call limit reached' : 'AI moderation call counter unavailable');
+    this.name = 'CallBudgetRefusal';
+    this.kind = kind;
+  }
+}
+
+/** The UTC day of `now` as 'YYYY-MM-DD': the counter's key. */
+const utcDay = (now = new Date()) => now.toISOString().slice(0, 10);
+
+/** The limit last logged as reached ('<day> <limit>'): logged once per UTC day and limit. */
+let limitLoggedFor = '';
+
+/**
+ * Reserves one model call in the day's counter (moderation_call_counts, one row per UTC day)
+ * before the call is made, and throws CallBudgetRefusal when that is not possible.
+ * MODERATION_DAILY_CALL_LIMIT (config.js moderationDailyCallLimit) is a global budget across all
+ * accounts: a check beyond it is refused, and so is a check whose counter cannot be read or
+ * written (fail closed). Unset outside production means no cap: nothing is counted.
+ *
+ * Atomic across requests and processes: the conditional UPDATE takes the row's lock and compares
+ * the count under it, so concurrent checks can never take more than the limit together. The day
+ * comes from this process's clock, once per reservation, so both statements name the same row
+ * even at midnight. Every request this module sends is counted, the retry without the fallback
+ * beta included; the SDK's own single retry of a failed request (maxRetries) is not counted again.
+ *
+ * Logged by count only: the limit once per UTC day and limit, a counter failure by its error code
+ * (log.js keeps SQL text and driver messages out); never a user or the content.
+ */
+async function reserveModelCall(env = process.env) {
+  const limit = moderationDailyCallLimit(env);
+  if (limit === null) return;
+  const day = utcDay();
+  let reserved;
+  try {
+    await pool.query('INSERT IGNORE INTO moderation_call_counts (day, calls) VALUES (?, 0)', [day]);
+    const [result] = await pool.query(
+      'UPDATE moderation_call_counts SET calls = calls + 1 WHERE day = ? AND calls < ?',
+      [day, limit],
+    );
+    reserved = result.affectedRows === 1;
+  } catch (err) {
+    logError('[moderation] AI moderation call counter unavailable, check refused', err);
+    throw new CallBudgetRefusal('counter');
+  }
+  if (!reserved) {
+    if (limitLoggedFor !== `${day} ${limit}`) {
+      limitLoggedFor = `${day} ${limit}`;
+      logWarn(
+        `[moderation] Daily AI moderation call limit reached: ${limit} calls on ${day} (UTC); checks are refused until the next UTC day`,
+      );
+    }
+    throw new CallBudgetRefusal('limit');
+  }
+}
+
 /**
  * Ein Claude-Aufruf mit erzwungenem JSON-Ergebnis.
  * Erst mit server-seitigem Fallback-Modell; ist das fuer den Account nicht
  * freigeschaltet, wird der Weg einmalig deaktiviert und normal weitergemacht.
+ * Each request first reserves its unit of the daily budget (reserveModelCall).
  */
 async function createMessage(params) {
   const c = getClient();
   if (process.env.MODERATION_FALLBACKS !== 'false' && !fallbacksUnavailable) {
     try {
+      await reserveModelCall();
       return await c.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' });
     } catch (err) {
       // Ist der Beta-Pfad fuer den Account nicht freigeschaltet, wird er einmalig
@@ -237,6 +309,7 @@ async function createMessage(params) {
       logWarn('[moderation] Server-seitige Fallbacks nicht verfuegbar, weiter ohne', err);
     }
   }
+  await reserveModelCall();
   return c.messages.create(params);
 }
 
@@ -274,6 +347,9 @@ function isOutage(err) {
  *                           cannot be read
  *   { status: 'invalid', error, logDetail } – the provider refused the request, or the image could
  *                           not be prepared within its limits: refused whatever MODERATION_FAIL_OPEN says
+ *   { status: 'budget', kind, error } – the model was not asked: the daily call limit is reached
+ *                           (kind 'limit') or its counter failed ('counter'); refused whatever
+ *                           MODERATION_FAIL_OPEN says (reserveModelCall, F-07)
  *
  * `error` goes into the moderation report; `logDetail` is what the server log gets: made by the
  * code, never the model's reply (which can quote the checked text) - see log.js.
@@ -322,6 +398,14 @@ async function classify({ context, title, description, location, interests, labe
       messages: [{ role: 'user', content: blocks }],
     });
   } catch (err) {
+    if (err instanceof CallBudgetRefusal) {
+      // Logged where it happened (reserveModelCall): the limit once a day, a counter failure each time.
+      return {
+        status: 'budget',
+        kind: err.kind,
+        error: err.kind === 'limit' ? 'Tageslimit der KI-Pruefung erreicht.' : 'Zaehler der KI-Pruefung konnte nicht gelesen oder geschrieben werden.',
+      };
+    }
     return { status: isOutage(err) ? 'error' : 'invalid', error: err?.message ?? String(err), logDetail: describeError(err) };
   }
 
@@ -392,8 +476,27 @@ function readVerdict(parsed) {
 /** The answer when content is refused without a verdict (no ban). */
 const MSG_NOT_CHECKABLE = 'Der Inhalt konnte nicht geprueft werden und wurde vorsichtshalber abgelehnt.';
 
+/** The answer when the model cannot be asked right now: an outage, or the call counter failed. */
+const MSG_UNAVAILABLE = 'Die Inhaltspruefung ist gerade nicht erreichbar. Bitte versuche es spaeter erneut.';
+
+/** The answer when the day's MODERATION_DAILY_CALL_LIMIT is used up (F-07). */
+const MSG_DAILY_LIMIT = 'Die Inhaltspruefung ist fuer heute ausgelastet. Bitte versuche es spaeter erneut.';
+
 /** Ordnet dem Klassifikations-Ergebnis Urteil und Massnahme zu. */
 function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
+  if (result.status === 'budget') {
+    // F-07: the global daily budget is used up, or its counter failed, so the model was not asked.
+    // No outage of the provider: MODERATION_FAIL_OPEN does not apply. Refused without a ban.
+    return {
+      verdict: 'error',
+      severity: 0,
+      allowed: false,
+      timeout: false,
+      reason: result.kind === 'limit' ? MSG_DAILY_LIMIT : MSG_UNAVAILABLE,
+      categories: [],
+      fields: [],
+    };
+  }
   if (result.status === 'refusal') {
     // Kein Urteil, aber ein deutliches Signal: Inhalt ablehnen, NICHT sperren
     // (eine Sperre ohne nachvollziehbare Begruendung waere nicht fair).
@@ -427,9 +530,7 @@ function decide(result, { isAdmin, failOpen, blockSeverity, timeoutSeverity }) {
       severity: 0,
       allowed: failOpen,
       timeout: false,
-      reason: failOpen
-        ? null
-        : 'Die Inhaltspruefung ist gerade nicht erreichbar. Bitte versuche es spaeter erneut.',
+      reason: failOpen ? null : MSG_UNAVAILABLE,
       categories: [],
       fields: [],
     };
@@ -571,8 +672,9 @@ export async function moderateContent({
     timeoutSeverity,
   });
 
-  const failed = result.status === 'error' || result.status === 'invalid';
-  if (failed) {
+  const failed = result.status === 'error' || result.status === 'invalid' || result.status === 'budget';
+  // A budget refusal was logged by count where it happened (reserveModelCall), not once per check.
+  if (failed && result.status !== 'budget') {
     logError('[moderation] Pruefung fehlgeschlagen', result.logDetail ?? 'unknown');
   }
 

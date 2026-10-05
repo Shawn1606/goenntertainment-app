@@ -362,6 +362,16 @@ CREATE TABLE IF NOT EXISTS moderation_reports (
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- AI moderation calls per UTC day (F-07): the counter of the global budget
+-- MODERATION_DAILY_CALL_LIMIT (server/src/moderation.js). One row per day; every call to the model
+-- first reserves one unit here, and a reservation beyond the limit is refused. Counts only, no user
+-- data. server/src/retention.js deletes the rows of past days.
+CREATE TABLE IF NOT EXISTS moderation_call_counts (
+  day   DATE         NOT NULL,                       -- UTC
+  calls INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (day)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Aktive Tage je Nutzer:in – Grundlage der Serie ("Streak").
 -- Eine Zeile pro Person und Kalendertag, an dem die App benutzt wurde. Der Tag
 -- kommt vom Gerät (Header X-Local-Date), damit die Serie in der Zeitzone der

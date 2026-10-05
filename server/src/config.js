@@ -17,6 +17,8 @@
  *     MODERATION_ENABLED=false: the only production switch for an outage is the explicit
  *     MODERATION_FAIL_OPEN=true. Outside production a missing key means every checked content is
  *     refused (fail closed), unless MODERATION_ENABLED=false says moderation is off on purpose.
+ *   - MODERATION_DAILY_CALL_LIMIT: the global budget of AI moderation calls per UTC day (F-07,
+ *     moderationDailyCallLimit). Outside production it may be unset: then there is no cap.
  *   - The four retention settings (RETENTION_SETTINGS, F-16): how many days data that is no
  *     longer needed is kept. Outside production they are all set or all unset; unset means the
  *     retention prune (retention.js) does not run, so nothing is deleted by default.
@@ -132,6 +134,31 @@ export function moderationSettings(env = process.env) {
   };
 }
 
+/**
+ * An accepted MODERATION_DAILY_CALL_LIMIT: a whole number from 1, at most nine digits (the
+ * counter, moderation_call_counts.calls, is an INT UNSIGNED).
+ */
+const DAILY_CALL_LIMIT_PATTERN = /^[1-9]\d{0,8}$/;
+
+const dailyCallLimitRaw = (env) => String(env.MODERATION_DAILY_CALL_LIMIT ?? '').trim();
+
+/**
+ * MODERATION_DAILY_CALL_LIMIT (F-07): the most AI moderation calls per UTC day across all
+ * accounts, a global budget on top of the per-account write limits (rate-limit.js). How much the
+ * operator spends on the provider is their decision, so the code has no default: production does
+ * not start without it (startupProblems), and the compose requires it. moderation.js reads it on
+ * every check and refuses a check beyond it, whatever MODERATION_FAIL_OPEN says. Returns
+ *   - the limit, a whole number of at least 1;
+ *   - null when it is unset outside production: no cap, and nothing is counted;
+ *   - 0 when it is missing in production or invalid: no call is allowed (fail closed). The startup
+ *     gate keeps such a server from starting, so a running server never sees 0.
+ */
+export function moderationDailyCallLimit(env = process.env) {
+  const raw = dailyCallLimitRaw(env);
+  if (raw === '') return isProduction(env) ? 0 : null;
+  return DAILY_CALL_LIMIT_PATTERN.test(raw) ? Number(raw) : 0;
+}
+
 /** The provider's own address: what the SDK uses when ANTHROPIC_BASE_URL is empty. */
 const PROVIDER_BASE_URL = 'https://api.anthropic.com';
 
@@ -164,6 +191,12 @@ function moderationProblems(env, production) {
   }
   if (!SWITCH_VALUES.includes(String(env.MODERATION_FAIL_OPEN ?? ''))) {
     problems.push("MODERATION_FAIL_OPEN (optional; 'true' or 'false')");
+  }
+  const callLimit = dailyCallLimitRaw(env);
+  if (callLimit === '' ? production : !DAILY_CALL_LIMIT_PATTERN.test(callLimit)) {
+    problems.push(
+      'MODERATION_DAILY_CALL_LIMIT (required in production: the most AI moderation calls per UTC day, a whole number of at least 1)',
+    );
   }
   return problems;
 }
@@ -270,7 +303,8 @@ export function startupProblems(env = process.env) {
     problems.push('SANCTUM_EXPIRATION (optional; when set, a positive whole number of minutes)');
   }
 
-  // AI moderation (F-06): fail closed, and production never runs without it.
+  // AI moderation (F-06): fail closed, and production never runs without it or its daily call
+  // budget (F-07).
   problems.push(...moderationProblems(env, production));
   // Retention (F-16): required in production; elsewhere all four or none (retentionSettingProblems).
   problems.push(...retentionSettingProblems(env, { required: production }));

@@ -190,6 +190,28 @@ test("the provider's own address passes the startup gate", () => {
   assert.deepEqual(startupProblems(startupEnv({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' })), []);
 });
 
+test('production refuses to start without MODERATION_DAILY_CALL_LIMIT and names it', () => {
+  const r = runToExit(startupEnv({ MODERATION_DAILY_CALL_LIMIT: '' }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal}): the server started without a daily call limit`);
+  assert.match(r.stderr, /MODERATION_DAILY_CALL_LIMIT/);
+  assert.doesNotMatch(r.stderr, /NODE_TRUST_PROXY|NODE_INTERNAL_SECRET|ANTHROPIC_API_KEY|MODERATION_ENABLED/, 'only the one missing setting is named');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('an invalid MODERATION_DAILY_CALL_LIMIT stops the start, named without its value', () => {
+  const broken = '250-test-only-calls';
+  const r = runToExit(startupEnv({ MODERATION_DAILY_CALL_LIMIT: broken }));
+  assert.equal(r.status, 1, `expected exit code 1, got ${r.status} (signal ${r.signal}): the server started with an invalid daily call limit`);
+  assert.match(r.stderr, /MODERATION_DAILY_CALL_LIMIT/);
+  assert.ok(!r.stderr.includes(broken) && !r.stdout.includes(broken), 'the value must never be printed');
+  assert.doesNotMatch(r.stdout, START_LINE);
+});
+
+test('outside production an unset MODERATION_DAILY_CALL_LIMIT does not stop the start (no cap)', async () => {
+  const env = startupEnv({ NODE_ENV: 'development', MODERATION_DAILY_CALL_LIMIT: '' });
+  assert.equal(await startsListening(env), true);
+});
+
 test('outside production MODERATION_ENABLED=false and an empty key do not stop the start', async () => {
   const env = startupEnv({ NODE_ENV: 'development', ANTHROPIC_API_KEY: '', MODERATION_ENABLED: 'false' });
   assert.equal(await startsListening(env), true);
