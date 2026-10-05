@@ -49,7 +49,7 @@ const LIFETIME_MINUTES = 43200;
 const CACHE_GRACE_SECONDS = 24 * 60 * 60;
 
 const createdUserIds = [];
-const cleanup = { tokens: [], challenges: [], resetEmails: [], cacheKeys: [], reports: [] };
+const cleanup = { tokens: [], challenges: [], resetEmails: [], cacheKeys: [], reports: [], callDaysAgo: [] };
 
 const stamp = () => crypto.randomBytes(6).toString('hex');
 // Evidence lives in the private root (src/storage.js); the prune runs with cwd PRUNE_DIR, so the
@@ -103,6 +103,9 @@ after(async () => {
       await pool.query('DELETE FROM cache_locks WHERE `key` IN (?)', [cleanup.cacheKeys]);
     }
     if (cleanup.reports.length) await pool.query('DELETE FROM moderation_reports WHERE id IN (?)', [cleanup.reports]);
+    for (const ago of cleanup.callDaysAgo) {
+      await pool.query('DELETE FROM moderation_call_counts WHERE day = UTC_DATE() - INTERVAL ? DAY', [ago]);
+    }
     await deleteTestUsers(pool, createdUserIds);
   } finally {
     // Every file and folder of this test, whatever the prune left of them.
@@ -312,6 +315,28 @@ test('npm run prune removes what is older than each retention setting and keeps 
   for (const secretish of [resets.old, files.banOld]) {
     assert.ok(!r.stdout.includes(secretish) && !r.stderr.includes(secretish), 'the output must hold counts only');
   }
+});
+
+test('npm run prune removes the AI moderation call counts of days before yesterday and keeps the rest', async () => {
+  // One row per UTC day, counts only (src/moderation.js, F-07). The rows of today and yesterday
+  // are made without changing a count the budget may hold; the older rows are this test's own.
+  const daysAgo = { today: 0, yesterday: 1, twoDays: 2, longAgo: 400 };
+  for (const ago of Object.values(daysAgo)) {
+    await pool.query('INSERT IGNORE INTO moderation_call_counts (day, calls) VALUES (UTC_DATE() - INTERVAL ? DAY, 0)', [ago]);
+  }
+  cleanup.callDaysAgo.push(daysAgo.twoDays, daysAgo.longAgo);
+
+  const r = runPrune(SETTINGS);
+
+  const present = (ago) => exists('SELECT day FROM moderation_call_counts WHERE day = UTC_DATE() - INTERVAL ? DAY', [ago]);
+  assert.equal(await present(daysAgo.longAgo), false, 'the count of 400 days ago is still there');
+  assert.equal(await present(daysAgo.twoDays), false, 'the count of two days ago is still there');
+  assert.equal(await present(daysAgo.yesterday), true, "yesterday's count was deleted");
+  assert.equal(await present(daysAgo.today), true, "today's count was deleted: the budget would start again");
+
+  assert.equal(r.status, 0, `exit code ${r.status}\n${r.stderr}`);
+  const counts = printedCounts(r.stdout);
+  assert.ok(counts.moderationCallDays >= 2, `moderationCallDays: printed ${counts.moderationCallDays}, this test alone seeded 2`);
 });
 
 /** A name storeImage() gives (src/storage.js STORED_NAME): 40 hex characters and an extension. */

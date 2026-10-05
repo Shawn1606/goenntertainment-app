@@ -20,7 +20,10 @@
  *   cacheRows, cacheLocks  rows of Laravel's database cache and its locks that expired more than
  *                        CACHE_EXPIRED_GRACE_SECONDS ago (Laravel never deletes them itself; an
  *                        expired row is unused, so this needs no retention decision);
- *   activityViews        event views older than USAGE_RETENTION_DAYS (this lowers the view count of
+ *   moderationCallDays   rows of the AI moderation call counter (moderation_call_counts,
+ *                        moderation.js) for UTC days before yesterday: counts only, unused once
+ *                        their day is over, so this needs no retention decision either;
+ *   activityViews       event views older than USAGE_RETENTION_DAYS (this lowers the view count of
  *                        old events and the business insights for them);
  *   activeDays           active days older than USAGE_RETENTION_DAYS (at least the streak window);
  *   evidenceImages       the image of a ban evidence row or an AI moderation report older than
@@ -55,6 +58,13 @@ const BATCH = 1000;
  */
 export const CACHE_EXPIRED_GRACE_SECONDS = 24 * 60 * 60;
 
+/**
+ * The AI moderation call counter keeps today's and yesterday's rows (one day back). The budget
+ * only ever reads today's row; the day of grace keeps it whatever the difference between the
+ * clocks of this process (which picks the day, moderation.js) and the database (which prunes).
+ */
+export const MODERATION_CALL_DAYS_KEPT = 1;
+
 /** The tables whose image_path holds evidence images (EVIDENCE_RETENTION_DAYS). */
 const EVIDENCE_TABLES = ['ban_evidence', 'moderation_reports'];
 
@@ -73,6 +83,7 @@ export const PRUNE_COUNTS = Object.freeze([
   'resetLinks',
   'cacheRows',
   'cacheLocks',
+  'moderationCallDays',
   'activityViews',
   'activeDays',
   'evidenceImages',
@@ -194,6 +205,10 @@ export async function pruneExpiredData({ evidenceDays, moderationReportDays, tok
   counts.cacheLocks = await deleteInBatches('DELETE FROM cache_locks WHERE expiration < UNIX_TIMESTAMP() - ?', [
     CACHE_EXPIRED_GRACE_SECONDS,
   ]);
+  counts.moderationCallDays = await deleteInBatches(
+    'DELETE FROM moderation_call_counts WHERE day < UTC_DATE() - INTERVAL ? DAY',
+    [MODERATION_CALL_DAYS_KEPT],
+  );
 
   counts.activityViews = await deleteInBatches(
     'DELETE FROM activity_views WHERE created_at IS NOT NULL AND created_at < NOW() - INTERVAL ? DAY',
