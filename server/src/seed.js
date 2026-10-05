@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { pool } from './db.js';
 import { hashPassword } from './auth.js';
 import { isReservedUsername } from './reserved-accounts.js';
-import { findSystemAccount } from './system-accounts.js';
+import { findSystemAccount, systemAccountPasswordHash } from './system-accounts.js';
 
 /**
  * Fuellt die DB mit den Start-Daten (portiert aus den Laravel-Seedern):
@@ -286,6 +286,9 @@ export const PERMANENT = [
  * und sein Profil verlinkbar ist. Zufallspasswort, keine verifizierte Mail –
  * anmelden soll sich damit niemand.
  *
+ * The random password is systemAccountPasswordHash() (src/system-accounts.js): the bcrypt hash of
+ * a secret from node:crypto that is never printed or kept.
+ *
  * An existing account is taken over only when it is exactly the host's account (same address,
  * expected username; see src/system-accounts.js). An account that merely matches the way the
  * database compares addresses is refused with SystemAccountConflict before anything is written
@@ -296,9 +299,7 @@ export async function ensureVenueHost({ name, username }) {
   const existingId = await findSystemAccount(pool, { email, username });
   if (existingId !== null) return existingId;
 
-  const password = await hashPassword(
-    `${username}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
-  );
+  const password = await systemAccountPasswordHash();
   const [res] = await pool.query(
     `INSERT INTO users (name, username, email, password, account_type, granted_account_type, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'business', 'business', NOW(), NOW())`,
