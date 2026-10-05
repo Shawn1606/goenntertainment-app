@@ -23,7 +23,7 @@
  *   moderationCallDays   rows of the AI moderation call counter (moderation_call_counts,
  *                        moderation.js) for UTC days before yesterday: counts only, unused once
  *                        their day is over, so this needs no retention decision either;
- *   activityViews       event views older than USAGE_RETENTION_DAYS (this lowers the view count of
+ *   activityViews        event views older than USAGE_RETENTION_DAYS (this lowers the view count of
  *                        old events and the business insights for them);
  *   activeDays           active days older than USAGE_RETENTION_DAYS (at least the streak window);
  *   evidenceImages       the image of a ban evidence row or an AI moderation report older than
