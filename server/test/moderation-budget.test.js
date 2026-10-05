@@ -107,28 +107,67 @@ async function callsToday() {
 }
 
 /**
- * Runs `fn` while every query on the call counter whose text matches `pattern` fails, as a counter
- * the database cannot read or write would. The failure is made at the server's own pool (the same
- * module instance the routes use); every other query runs unchanged. Returns `fn`'s result and
- * how many counter queries were refused.
+ * Runs `fn` while every query on the call counter (moderation_call_counts) goes through
+ * `handle(text, run)` first; `run()` sends the query on unchanged. The queries are intercepted at
+ * the server's own pool (the module instance the routes use); every other query runs as it is.
  */
-async function withCounterFailing(pattern, fn) {
+async function interceptingCounter(handle, fn) {
   const own = Object.hasOwn(pool, 'query');
   const original = pool.query;
-  let refused = 0;
   pool.query = function query(sql, ...rest) {
-    const text = String(typeof sql === 'string' ? sql : sql?.sql ?? '');
-    if (/moderation_call_counts/.test(text) && pattern.test(text)) {
-      refused += 1;
-      return Promise.reject(Object.assign(new Error('test-only: the counter cannot be reached'), { code: 'ER_TEST_ONLY' }));
-    }
-    return original.call(this, sql, ...rest);
+    const text = String(typeof sql === 'string' ? sql : (sql?.sql ?? ''));
+    const run = () => original.call(this, sql, ...rest);
+    return /moderation_call_counts/.test(text) ? handle(text, run) : run();
   };
   try {
-    return { result: await fn(), refused };
+    return await fn();
   } finally {
     if (own) pool.query = original;
     else delete pool.query;
+  }
+}
+
+/**
+ * Runs `fn` while every counter query whose text matches `pattern` fails, as a counter the
+ * database cannot read or write would. Returns `fn`'s result and how many queries were refused.
+ */
+async function withCounterFailing(pattern, fn) {
+  let refused = 0;
+  const result = await interceptingCounter((text, run) => {
+    if (!pattern.test(text)) return run();
+    refused += 1;
+    return Promise.reject(Object.assign(new Error('test-only: the counter cannot be reached'), { code: 'ER_TEST_ONLY' }));
+  }, fn);
+  return { result, refused };
+}
+
+/** The longest the concurrency test holds checks back so that they reach the counter together. */
+const GATHER_MAX_MS = 10_000;
+
+/**
+ * Runs `fn` while the first `expected` counter queries wait until all of them have arrived (or
+ * GATHER_MAX_MS passed) and then go on at once. Each check's first counter query is held, so all
+ * checks reserve at the same moment: the worst case for a reservation that is not atomic, made
+ * certain instead of left to the timing of the requests. Returns `fn`'s result and how many
+ * queries were held.
+ */
+async function withChecksGathered(expected, fn) {
+  let gathered = 0;
+  let open;
+  const gate = new Promise((resolve) => {
+    open = resolve;
+  });
+  const timer = setTimeout(() => open(), GATHER_MAX_MS);
+  try {
+    const result = await interceptingCounter((text, run) => {
+      if (gathered >= expected) return run();
+      gathered += 1;
+      if (gathered === expected) open();
+      return gate.then(run);
+    }, fn);
+    return { result, gathered };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -195,7 +234,9 @@ test('concurrent checks never take more than the daily limit together', async ()
     const callsBefore = mock.messageCalls().length;
     // Letters, not digits, in the texts (a digit could form a blocked number code).
     const texts = Array.from({ length: CONCURRENT }, (_, i) => `Gleichzeitig ${String.fromCharCode(97 + i)}`);
-    const results = await Promise.all(texts.map((text) => post(author.token, text)));
+    const { result: results, gathered } = await withChecksGathered(CONCURRENT, () =>
+      Promise.all(texts.map((text) => post(author.token, text))),
+    );
     const calls = mock.messageCalls().length - callsBefore;
 
     const outcome = { stored: 0, limit: 0 };
@@ -208,6 +249,7 @@ test('concurrent checks never take more than the daily limit together', async ()
     assert.equal(calls, ROOM, `${calls} of ${CONCURRENT} concurrent checks reached the provider; the limit left room for ${ROOM}`);
     assert.deepEqual(outcome, { stored: ROOM, limit: CONCURRENT - ROOM }, other.join('\n'));
     assert.deepEqual(other, []);
+    assert.equal(gathered, CONCURRENT, 'every check reached the counter, all at the same moment');
   });
   assert.equal(await callsToday(), limit, 'the counter stops exactly at the limit');
 });
