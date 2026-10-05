@@ -1130,11 +1130,20 @@ export const api = {
     }),
 
   /**
-   * Change the e-mail address (signed in): with the current password, and with two-factor sign-in
-   * also a current code. Signs out every other device; a notice goes to the previous address.
+   * Change the e-mail address (signed in), step 1: with the current password, and with two-factor
+   * sign-in also a current code. Changes nothing yet: the server mails a one-time code to the NEW
+   * address (at most one mail a minute).
    */
   changeEmail: (token: string, input: { email: string; current_password: string; code?: string }) =>
-    request<{ user: User; profile_complete: boolean }>('/user/email', { method: 'PUT', body: input, token }),
+    request<{ message: string; destination: string; expires_in: number }>('/user/email', { method: 'PUT', body: input, token }),
+
+  /**
+   * Change the e-mail address, step 2: the code from the mail to the new address, with that same
+   * address. Only now does it take effect; every other device is signed out and a notice goes to
+   * the previous address.
+   */
+  confirmEmailChange: (token: string, input: { email: string; code: string }) =>
+    request<{ user: User; profile_complete: boolean }>('/user/email/confirm', { method: 'POST', body: input, token }),
 
   /** Passwort ändern (angemeldet). Meldet alle anderen Geräte ab. */
   changePassword: (token: string, currentPassword: string, password: string) =>

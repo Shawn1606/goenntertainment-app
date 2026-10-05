@@ -8,6 +8,7 @@ import { LockIcon, MailIcon } from '@/components/ui/icons';
 import { TextField } from '@/components/ui/text-field';
 import { FontFamily } from '@/constants/theme';
 import { isEmailAddress } from '@/domain/email';
+import { normalizeResetCode } from '@/domain/reset-code';
 import { useTheme } from '@/hooks/use-theme';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -18,9 +19,11 @@ import { loadSavedEmail, saveEmail } from '@/lib/credential-store';
  * Change the e-mail address: with the current password, and with two-factor sign-in also the code.
  *
  * The address is the way back into the account (forgotten password, codes by e-mail). Whoever can
- * change it can take the account over, so being signed in is not enough (F-04). Afterwards the
- * server signs out every other device and sends a notice to the previous address; if that notice
- * cannot be sent, nothing changes.
+ * change it can take the account over, so being signed in is not enough (F-04). Two steps: the
+ * new address with the password (and code) only makes the server mail a one-time code to the NEW
+ * address; the address takes effect when that code is typed here. So the account can only move to
+ * an address whose mail its owner reads. Then the server signs out every other device and sends a
+ * notice to the previous address; if that notice cannot be sent, nothing changes.
  */
 export default function ChangeEmailScreen() {
   const router = useRouter();
@@ -29,12 +32,26 @@ export default function ChangeEmailScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
+  const [step, setStep] = useState<'address' | 'code'>('address');
+  /** The address the code went to: step 2 confirms exactly this one. Kept in memory only. */
+  const [pending, setPending] = useState<string | null>(null);
+  const [mailCode, setMailCode] = useState('');
   const [errors, setErrors] = useState<Record<string, string[]>>({});
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
 
   const method = user?.two_factor_method ?? null;
-  const canSave = isEmailAddress(email.trim()) && password.length > 0 && (!method || code.trim().length > 0) && !saving;
+  const canSend = isEmailAddress(email.trim()) && password.length > 0 && (!method || code.trim().length > 0) && !saving;
+  // The same six digits as every mailed code; anything else is refused here, before it costs a try.
+  const canConfirm = pending !== null && normalizeResetCode(mailCode) !== null && !saving;
+
+  function showError(e: unknown, field: string) {
+    if (e instanceof ApiError) {
+      setErrors(Object.keys(e.errors).length ? e.errors : { [field]: [e.firstError()] });
+    } else {
+      setErrors({ [field]: ['Unbekannter Fehler.'] });
+    }
+  }
 
   /** E-mail method: have the code sent to the CURRENT address, not the new one. */
   async function sendCode() {
@@ -50,37 +67,87 @@ export default function ChangeEmailScreen() {
     }
   }
 
-  async function onSave() {
-    if (!token || !canSave) return;
+  /** Step 1: nothing changes yet; the server mails a code to the new address. */
+  async function onSend() {
+    if (!token || !canSend) return;
+    const target = email.trim();
+    setSaving(true);
+    setErrors({});
+    try {
+      await api.changeEmail(token, {
+        email: target,
+        current_password: password,
+        ...(method ? { code: code.trim() } : {}),
+      });
+      setPending(target);
+      setMailCode('');
+      // A second-factor code is used up once checked; going back needs a fresh one.
+      setCode('');
+      setStep('code');
+    } catch (e) {
+      showError(e, 'email');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /** Step 2: the code from the new address makes the change. */
+  async function onConfirm() {
+    if (!token || !canConfirm || pending === null) return;
     const previous = user?.email ?? null;
     setSaving(true);
     setErrors({});
     try {
-      const res = await api.changeEmail(token, {
-        email: email.trim(),
-        current_password: password,
-        ...(method ? { code: code.trim() } : {}),
-      });
+      const res = await api.confirmEmailChange(token, { email: pending, code: normalizeResetCode(mailCode) ?? '' });
       applyUser(res.user);
       // Carry the remembered address over if this device remembered the previous one.
       if (previous && (await loadSavedEmail()) === previous) await saveEmail(res.user.email);
       await notifyUser('E-Mail-Adresse geändert', 'Deine neue Adresse gilt ab sofort. Andere Geräte wurden abgemeldet.');
       router.back();
     } catch (e) {
-      if (e instanceof ApiError) {
-        setErrors(Object.keys(e.errors).length ? e.errors : { email: [e.firstError()] });
-      } else {
-        setErrors({ email: ['Unbekannter Fehler.'] });
-      }
+      showError(e, 'code');
     } finally {
       setSaving(false);
     }
   }
 
+  /** Back to step 1, for another address or a new code; the typed address and password stay. */
+  function backToAddress() {
+    setStep('address');
+    setErrors({});
+  }
+
+  if (step === 'code' && pending !== null) {
+    return (
+      <SecurityScreen
+        title="E-Mail-Adresse bestätigen"
+        intro={`Wir haben dir einen Code an ${pending} geschickt. Gib ihn hier ein – erst dann gilt die neue Adresse.`}>
+        <TextField
+          label="Code aus der E-Mail"
+          value={mailCode}
+          onChangeText={setMailCode}
+          keyboardType="number-pad"
+          autoComplete="one-time-code"
+          textContentType="oneTimeCode"
+          maxLength={7}
+          leftIcon={<LockIcon />}
+          error={errors.code?.[0] ?? errors.email?.[0]}
+        />
+        <BrandButton title="Neue Adresse bestätigen" onPress={onConfirm} loading={saving} disabled={!canConfirm} />
+        <Pressable onPress={backToAddress} disabled={saving} hitSlop={8}>
+          <Text style={[styles.link, { color: colors.tint }]}>Keinen Code bekommen? Zurück</Text>
+        </Pressable>
+        <SecurityNote>
+          Deine bisherige Adresse: {user?.email ?? '—'}
+        </SecurityNote>
+      </SecurityScreen>
+    );
+  }
+
   return (
     <SecurityScreen
       title="E-Mail-Adresse ändern"
-      intro="Zum Ändern brauchst du dein aktuelles Passwort (und einen Code). Danach meldet sich GÖ4Fun auf allen anderen Geräten ab, und an deine bisherige Adresse geht ein Hinweis.">
+      intro="Zum Ändern brauchst du dein aktuelles Passwort (und einen Code). Danach schicken wir einen Code an die neue Adresse; erst mit ihm gilt sie. Dann meldet sich GÖ4Fun auf allen anderen Geräten ab, und an deine bisherige Adresse geht ein Hinweis.">
       <TextField
         label="Neue E-Mail-Adresse"
         value={email}
@@ -89,7 +156,7 @@ export default function ChangeEmailScreen() {
         autoCapitalize="none"
         autoComplete="email"
         leftIcon={<MailIcon />}
-        error={errors.email?.[0]}
+        error={errors.email?.[0] ?? (method ? undefined : errors.code?.[0])}
       />
       <TextField
         label="Aktuelles Passwort"
@@ -123,7 +190,7 @@ export default function ChangeEmailScreen() {
           ) : null}
         </>
       ) : null}
-      <BrandButton title="E-Mail-Adresse speichern" onPress={onSave} loading={saving} disabled={!canSave} />
+      <BrandButton title="Code an die neue Adresse schicken" onPress={onSend} loading={saving} disabled={!canSend} />
       <SecurityNote>
         Deine bisherige Adresse: {user?.email ?? '—'}
       </SecurityNote>

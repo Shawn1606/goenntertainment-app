@@ -50,6 +50,32 @@ test('the e-mail address changes only on its own screen, with the password (F-04
   assert.match(guarded, /<Stack\.Screen name="security\/email" \/>/);
 });
 
+test('the new address takes effect only with the code mailed to it (F-04)', () => {
+  const read = (file: string) => readFileSync(path.join(SRC, file), 'utf8');
+  const api = read('lib/api.ts');
+  // Step 1 answers that a code went out; it carries no changed account.
+  assert.match(
+    api,
+    /changeEmail: \(token: string, input: \{ email: string; current_password: string; code\?: string \}\) =>\s*request<\{ message: string; destination: string; expires_in: number \}>\('\/user\/email', \{ method: 'PUT'/,
+  );
+  // Step 2 sends the code with the address it went to, and gets the changed account back.
+  assert.match(
+    api,
+    /confirmEmailChange: \(token: string, input: \{ email: string; code: string \}\) =>\s*request<\{ user: User; profile_complete: boolean \}>\('\/user\/email\/confirm', \{ method: 'POST'/,
+  );
+
+  const screen = read('app/security/email.tsx');
+  const send = screen.indexOf('await api.changeEmail(');
+  const confirm = screen.indexOf('await api.confirmEmailChange(token, { email: pending, code: normalizeResetCode(mailCode)');
+  assert.ok(send >= 0, 'the screen does not send step 1');
+  assert.ok(confirm >= 0, 'the screen does not confirm with the code and the address it went to');
+  // Step 1 only moves on to the code; the account is taken over from step 2's answer alone.
+  assert.match(screen.slice(send, screen.indexOf('catch', send)), /setPending\(target\);[\s\S]*setStep\('code'\);/);
+  assert.equal((screen.match(/applyUser\(/g) ?? []).length, 1, 'the account is applied more than once');
+  assert.ok(screen.indexOf('applyUser(res.user)') > confirm, 'the account is applied before the code is confirmed');
+  assert.match(screen, /label="Code aus der E-Mail"/);
+});
+
 test('the sign-up and forgot-password screens use the shared check', () => {
   for (const screen of ['app/(auth)/register.tsx', 'app/(auth)/forgot-password.tsx']) {
     const text = readFileSync(path.join(SRC, screen), 'utf8');
