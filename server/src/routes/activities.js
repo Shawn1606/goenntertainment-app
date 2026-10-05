@@ -1,5 +1,6 @@
 import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
+import { pageQuery, parseListQuery, splitPage } from '../activity-pages.js';
 import { requireAuth } from '../auth.js';
 import { Validator, HttpError, missingIds } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
@@ -352,17 +353,20 @@ export async function pruneHistory() {
 }
 
 // GET /api/activities  (geschuetzt)
+//
+// One page of events (F-12): the upcoming ones by default, the viewer's own with `mine=1`, the
+// viewer's own past ones with `past=1`; at most `limit` per page, and `next_cursor` names the
+// next page. The rules and their reasons: src/activity-pages.js.
 router.get('/', requireAuth, async (req, res, next) => {
   try {
+    const query = parseListQuery(req.query);
     // Importierte Veranstaltungen sind gerade ausgeblendet (siehe features.js).
-    const hidden = hideImportedSql('activities');
-    const [activities] = await pool.query(
-      `SELECT * FROM activities ${hidden ? `WHERE ${hidden}` : ''} ORDER BY starts_at`,
-    );
-    const ids = activities.map((a) => a.id);
-    const rel = await loadRelations(ids, req.user.id);
-    const data = activities.map((a) => transformLoaded(req, a, rel, req.user.id));
-    res.json({ data });
+    const { sql, params } = pageQuery(query, req.user.id, hideImportedSql('a'));
+    const [rows] = await pool.query(sql, params);
+    const { page, nextCursor } = splitPage(rows, query.limit);
+    const rel = await loadRelations(page.map((a) => a.id), req.user.id);
+    const data = page.map((a) => transformLoaded(req, a, rel, req.user.id));
+    res.json({ data, next_cursor: nextCursor });
   } catch (err) {
     next(err);
   }

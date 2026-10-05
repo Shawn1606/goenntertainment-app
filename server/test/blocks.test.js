@@ -39,6 +39,7 @@ import path from 'node:path';
 import { createApp } from '../src/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { listedActivities } from './support/activity-list.js';
 import { cleanup, createUser } from './support/fixtures.js';
 
 /** The 20 cross-user routes the security review checked, R01-R20. */
@@ -533,8 +534,8 @@ const ROWS = [
       assert.equal(forB.is_joined, true);
       assert.ok(!ids((await show(f.A, f.eventC)).participants).includes(f.b), 'A sees B among the participants');
       assert.ok(!ids((await show(f.B, f.eventA)).participants).includes(f.a), "B sees A among E_A's participants");
-      // The list answer goes through the same loader.
-      const listed = (await get('/api/activities', f.B.token)).body.data.find((a) => a.id === f.eventC);
+      // The list answer goes through the same loader (every page of it).
+      const listed = (await listedActivities(base, f.B.token)).find((a) => a.id === f.eventC);
       assert.ok(!ids(listed.participants).includes(f.a), 'B sees A in the event list');
       assert.deepEqual(ids((await show(f.C, f.eventC)).participants).sort(), [f.a, f.b, f.c].sort(), 'control: C');
     },

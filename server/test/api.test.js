@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { listedActivities } from './support/activity-list.js';
 import { ensureSchema, first, pool } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 import { PNG_1X1 } from './support/images.js';
@@ -143,8 +144,7 @@ test('GET /api/activities liefert views_count mit', async () => {
     method: 'POST',
     headers: { Authorization: `Bearer ${visitor.token}` },
   });
-  const body = await (await get('/api/activities', host.token)).json();
-  const found = body.data.find((a) => a.id === activity.id);
+  const found = (await listedActivities(base, host.token)).find((a) => a.id === activity.id);
   assert.equal(found.views_count, 1);
 });
 
@@ -251,8 +251,8 @@ test('Hervorheben: Business hat einen Platz, der zweite wird abgelehnt', async (
 
   // Das Event traegt die Hervorhebung auch in der normalen Liste – daran haengt
   // die Sortierung in der App.
-  const list = await (await get('/api/activities', host.token)).json();
-  assert.ok(list.data.find((a) => a.id === first.id).boosted_until);
+  const list = await listedActivities(base, host.token);
+  assert.ok(list.find((a) => a.id === first.id).boosted_until);
 
   const tooMany = await boost(host.token, second.id);
   assert.equal(tooMany.status, 422);
@@ -682,8 +682,7 @@ test('GET /api/activities: der Host bringt seine Stufe mit', async () => {
   const { token, user } = await registerUser('hosttier', 'creator');
   await createActivity(token, 'Stufen-Event');
 
-  const body = await (await get('/api/activities', token)).json();
-  const mine = body.data.find((a) => a.host?.id === user.id);
+  const mine = (await listedActivities(base, token)).find((a) => a.host?.id === user.id);
   assert.equal(mine.host.account_type, 'creator');
 });
 

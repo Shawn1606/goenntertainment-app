@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { listedActivities } from './support/activity-list.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 
@@ -459,8 +460,8 @@ test('Merken ist keine Teilnahme und taucht in der Merkliste auf', async () => {
   assert.equal(list.data[0].id, activity.id);
 
   // Auch die normale Liste weiss davon.
-  const all = await (await get('/api/activities', viewer.token)).json();
-  assert.equal(all.data.find((row) => row.id === activity.id).is_saved, true);
+  const all = await listedActivities(base, viewer.token);
+  assert.equal(all.find((row) => row.id === activity.id).is_saved, true);
 
   // Zweimal merken bleibt einmal gemerkt.
   await post(`/api/activities/${activity.id}/save`, viewer.token);
