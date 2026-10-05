@@ -1,5 +1,11 @@
 import { API_URL } from '@/constants/config';
 import type { AccountType } from '@/domain/account';
+import {
+  type ActivityListQuery,
+  type ActivityPage,
+  activityListPath,
+  collectPages,
+} from '@/domain/activity-pages';
 import type { BillingPeriod } from '@/domain/billing-period';
 import type { ReportTarget } from '@/domain/report-reason';
 import { createSessionWatch } from '@/domain/session';
@@ -1214,7 +1220,16 @@ export const api = {
 
   interests: () => request<{ data: Interest[] }>('/interests'),
 
-  activities: (token: string) => request<{ data: Activity[] }>('/activities', { token }),
+  /**
+   * Events, every page (F-12; logic and tests: src/domain/activity-pages.ts). Without `query`
+   * the upcoming ones; `{ mine: true }` only the ones you host or joined; `{ past: true }` your
+   * own events that are over, latest first.
+   */
+  activities: async (token: string, query: ActivityListQuery = {}): Promise<{ data: Activity[] }> => ({
+    data: await collectPages((cursor) =>
+      request<ActivityPage<Activity>>(activityListPath(query, cursor), { token }),
+    ),
+  }),
 
   /**
    * Ein einzelnes Event.

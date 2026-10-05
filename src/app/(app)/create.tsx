@@ -89,7 +89,7 @@ export default function CreateTab() {
       if (!token || !user) return;
       let alive = true;
       api
-        .activities(token)
+        .activities(token, { mine: true })
         .then((res) => {
           if (!alive) return;
           const now = Date.now();

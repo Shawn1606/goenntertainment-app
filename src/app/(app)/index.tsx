@@ -83,6 +83,11 @@ export default function HomeScreen() {
   const { settings } = useAppSettings();
 
   const [activities, setActivities] = useState<Activity[]>([]);
+  /**
+   * Your own events that are over (F-12: the list holds upcoming events only). Only read for
+   * "Warst schon bei … dabei" in the suggestions, never shown in the feed.
+   */
+  const [pastOwn, setPastOwn] = useState<Activity[]>([]);
   const [interests, setInterests] = useState<Interest[]>([]);
   const [unreadChats, setUnreadChats] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -114,12 +119,14 @@ export default function HomeScreen() {
     if (!token) return;
     setError(null);
     try {
-      const [list, cats, chats] = await Promise.all([
+      const [list, past, cats, chats] = await Promise.all([
         api.activities(token),
+        api.activities(token, { past: true }).catch(() => null),
         api.interests().catch(() => null),
         api.chats(token).catch(() => null),
       ]);
       setActivities(list.data);
+      if (past) setPastOwn(past.data);
       if (cats) setInterests(cats.data);
       if (chats) setUnreadChats(chats.data.reduce((sum, c) => sum + (c.unread ?? 0), 0));
       setNow(new Date());
@@ -156,9 +163,11 @@ export default function HomeScreen() {
   const profile = useMemo(
     () => ({
       interestIds: (user?.interests ?? []).map((i) => i.id),
-      attendedInterestIds: activities.filter((a) => a.is_joined).flatMap((a) => a.interests.map((i) => i.id)),
+      attendedInterestIds: [...activities, ...pastOwn]
+        .filter((a) => a.is_joined)
+        .flatMap((a) => a.interests.map((i) => i.id)),
     }),
-    [user?.interests, activities],
+    [user?.interests, activities, pastOwn],
   );
 
   /**
