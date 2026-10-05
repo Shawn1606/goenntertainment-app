@@ -26,6 +26,7 @@
  * in Bloecken eingefuegt ({@link CHUNK}) – gross genug, dass es selten mehr als
  * eine Anfrage wird, klein genug fuer das Platzhalter-Limit von MySQL.
  */
+import crypto from 'node:crypto';
 import { pool, toIso } from './db.js';
 import { mediaUrl } from './media.js';
 import { followerIdsOf } from './follows.js';
@@ -51,6 +52,15 @@ function clamp(value, max) {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
+/** One row, through `db` (the pool or one connection of it). */
+function insertOne(db, { userId, actorId, type, refId, title, body }) {
+  return db.query(
+    `INSERT INTO notifications (user_id, actor_id, type, ref_id, title, body, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+    [userId, actorId, type, refId, clamp(title, MAX_TITLE) ?? type, clamp(body, MAX_BODY)],
+  );
+}
+
 /**
  * Eine Benachrichtigung an EINE Person.
  *
@@ -59,11 +69,77 @@ function clamp(value, max) {
  */
 export async function notify({ userId, actorId = null, type, refId = null, title, body = null }) {
   if (!userId || Number(userId) === Number(actorId)) return;
-  await pool.query(
-    `INSERT INTO notifications (user_id, actor_id, type, ref_id, title, body, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-    [userId, actorId, type, refId, clamp(title, MAX_TITLE) ?? type, clamp(body, MAX_BODY)],
-  );
+  await insertOne(pool, { userId, actorId, type, refId, title, body });
+}
+
+/** How long notifyOnce waits for a concurrent call with the same key, in seconds. */
+const ONCE_LOCK_WAIT_SECONDS = 5;
+
+/**
+ * Name of the MySQL named lock for one notifyOnce key. Names may have at most 64 characters, so
+ * the key is hashed. Names are server-wide: a collision would only make two calls wait for each
+ * other, never change what they write.
+ */
+function onceLockName({ userId, actorId, type, refId }) {
+  const key = JSON.stringify([
+    Number(userId),
+    actorId === null ? null : Number(actorId),
+    String(type),
+    refId === null ? null : Number(refId),
+  ]);
+  return `goenn:notify-once:${crypto.createHash('sha256').update(key).digest('hex').slice(0, 40)}`;
+}
+
+/**
+ * Like notifyQuietly, for a gesture that can be withdrawn and repeated (a like, a follow): at
+ * most ONE row per recipient, actor, type and target (F-07).
+ *
+ * The rule: no new row while a notification with the same `user_id`, `actor_id`, `type` and
+ * `ref_id` exists, whatever its age and whether it has been read. The routes call this only for a
+ * NEW like or follow (a fresh row in post_likes or follows), but after an unlike or unfollow the
+ * next one is fresh again, so without this rule a like/unlike or follow/unfollow loop notified
+ * the other person once per cycle. Withdrawing leaves the earlier row in place: a notification
+ * records something that happened (head of this file), and removing it would make the next like
+ * count as the first one again.
+ *
+ * Check and insert run under a MySQL named lock for exactly this key (GET_LOCK), so two requests
+ * at the same moment cannot both find "none yet". A single INSERT ... SELECT ... WHERE NOT EXISTS
+ * is not enough: its read takes shared next-key locks on the recipient's index range, so two
+ * DIFFERENT people notifying the same person at the same moment can deadlock, and one of the two
+ * notifications is lost (test/notify-once.test.js). The named lock only serialises calls with the
+ * same key. The check reads through the existing indexes on user_id or actor_id; none covers the
+ * whole key.
+ *
+ * Never throws: like every notification, it must not undo the like or follow it reports.
+ */
+export async function notifyOnce({ userId, actorId = null, type, refId = null, title, body = null }) {
+  if (!userId || Number(userId) === Number(actorId)) return;
+  const lock = onceLockName({ userId, actorId, type, refId });
+  let connection = null;
+  try {
+    connection = await pool.getConnection();
+    const [[{ locked }]] = await connection.query('SELECT GET_LOCK(?, ?) AS locked', [
+      lock,
+      ONCE_LOCK_WAIT_SECONDS,
+    ]);
+    if (locked !== 1) throw new Error('notifyOnce: lock not acquired in time');
+    try {
+      const [[existing]] = await connection.query(
+        `SELECT 1 AS found FROM notifications
+          WHERE user_id = ? AND actor_id <=> ? AND type = ? AND ref_id <=> ?
+          LIMIT 1`,
+        [userId, actorId, type, refId],
+      );
+      if (!existing) await insertOne(connection, { userId, actorId, type, refId, title, body });
+    } finally {
+      await connection.query('SELECT RELEASE_LOCK(?)', [lock]);
+    }
+    connection.release();
+  } catch (err) {
+    // A connection that failed part-way may still hold the lock; closing it releases the lock.
+    connection?.destroy();
+    logError('Could not deliver a notification', err);
+  }
 }
 
 /** Dieselbe Nachricht an viele – in Bloecken, siehe Kopf der Datei. */

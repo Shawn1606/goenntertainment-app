@@ -26,7 +26,7 @@ import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
-import { notifyFollowers, notifyQuietly } from '../notifications.js';
+import { notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
 import { singleUpload } from '../uploads.js';
 
@@ -377,8 +377,10 @@ router.post('/users/:id/follow', requireAuth, rateLimit('relationship'), async (
 
     // Nur bei einer WIRKLICH neuen Folge – sonst meldet jedes erneute Tippen auf
     // ein schon gefolgtes Profil noch einmal.
+    // After an unfollow the next follow is new to `follows` again: notifyOnce writes no second
+    // row for the same follower (F-07, follow/unfollow loop).
     if (fresh) {
-      await notifyQuietly({
+      await notifyOnce({
         userId: target.id,
         actorId: req.user.id,
         type: 'follow',
@@ -803,8 +805,10 @@ router.post('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, r
 
     // Nur beim ERSTEN Mal melden – sonst waere Like/Unlike/Like eine Glocke,
     // die man beliebig oft laeuten kann.
+    // A fresh row in post_likes alone is not "the first time": after an unlike the next like is
+    // fresh again. notifyOnce writes no second row for the same fan and post (F-07).
     if (result.affectedRows === 1) {
-      await notifyQuietly({
+      await notifyOnce({
         userId: post.user_id,
         actorId: req.user.id,
         type: 'like',
