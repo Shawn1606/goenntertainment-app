@@ -146,6 +146,7 @@ missing one. `deploy/.env.example` carries the same list with longer comments.
 | `NODE_INTERNAL_SECRET` | the secret Laravel sends on Node's internal routes (account deletion) | technical: generated | `openssl rand -hex 32` (at least 32 characters) |
 | `APP_NET_PREFIX` | the first three parts of a private /24 that nothing else on the host uses; the compose splits it into the edge and app networks | technical: the operator | three numbers, e.g. `172.30.42`; check with `ip -4 addr` and `docker network inspect` |
 | `ANTHROPIC_API_KEY` | the key of the AI moderation that checks every new event, post, comment, profile image and story; node does not start without it | `______` (the operator: whose provider account, and the moderation policy) | the provider's key |
+| `MODERATION_DAILY_CALL_LIMIT` | the most AI moderation calls per UTC day for all accounts together; at the limit every moderated write is refused until the next UTC day, whatever `MODERATION_FAIL_OPEN` says; node does not start without it | `______` (the operator: how much may be spent on the provider per day) | a whole number, at least 1 |
 | `EVIDENCE_RETENTION_DAYS` | days to keep evidence images of bans and moderation reports (the image goes, the record stays) | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
 | `MODERATION_REPORT_RETENTION_DAYS` | days to keep the AI moderation log, which copies every checked text and image | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
 | `TOKEN_RETENTION_DAYS` | days to keep sign-in tokens and two-factor and reset codes after they stopped being valid | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
@@ -599,7 +600,7 @@ row are required: the stack does not start without them.
 | the backend domain (`DOMAIN`), and HSTS `includeSubDomains`/`preload` for the whole business domain | the operator, with the domain owner | `______` |
 | the hosting provider and the server size | the operator | `______` |
 | the mail provider and the sender mailbox (`MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`) | the operator | `______` |
-| whose moderation provider account and key (`ANTHROPIC_API_KEY`), the moderation policy, and the moderation tuning defaults | the operator, with whoever is accountable for the app | `______` |
+| whose moderation provider account and key (`ANTHROPIC_API_KEY`), how many moderation calls per day may be spent (`MODERATION_DAILY_CALL_LIMIT`), the moderation policy, and the moderation tuning defaults | the operator, with whoever is accountable for the app | `______` |
 | retention of evidence, moderation reports, expired tokens and usage data (`EVIDENCE_RETENTION_DAYS`, `MODERATION_REPORT_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS`, `USAGE_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | where the backups live, who looks after them, the offsite copy, encryption at rest, and how long sets are kept (`BACKUP_DIR`, `BACKUP_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | how much container log is kept, whether a time limit is required (`LOG_MAX_SIZE`, `LOG_MAX_FILES`) | the operator, with whoever answers for data protection | `______` |

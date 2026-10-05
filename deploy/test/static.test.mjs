@@ -39,6 +39,7 @@ const REQUIRED = {
   NODE_INTERNAL_SECRET: 'secret',
   APP_NET_PREFIX: 'technical',
   ANTHROPIC_API_KEY: 'decision',
+  MODERATION_DAILY_CALL_LIMIT: 'decision',
   EVIDENCE_RETENTION_DAYS: 'decision',
   MODERATION_REPORT_RETENTION_DAYS: 'decision',
   TOKEN_RETENTION_DAYS: 'decision',
