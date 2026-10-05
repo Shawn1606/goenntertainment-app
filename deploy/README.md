@@ -260,8 +260,10 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
 
 7. Load the start data: the category list the app shows, and three permanent venue entries with
    their host accounts (`server/src/seed.js`, `PERMANENT`). It can run again at any time without
-   creating duplicates. Whether the venue entries belong on the production server: `______` (whoever
-   is accountable for the app, to be named before go-live).
+   creating duplicates. Nobody signs in to the host accounts: each gets a random password that
+   nobody knows and that is never printed (`server/src/system-accounts.js`). Whether the venue
+   entries belong on the production server: `______` (whoever is accountable for the app, to be
+   named before go-live).
 
    ```bash
    docker compose run --rm seed npm run seed
