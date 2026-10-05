@@ -89,6 +89,33 @@ class ProgressTest extends AppFeatureTestCase
         $this->assertSame($index + 1, $entries[$index]['rank']);
     }
 
+    /**
+     * Whether an account is an admin is told only to that account itself (F-05): the leaderboard
+     * lists other accounts and carries no `is_admin`, while the admin's own GET /api/user does.
+     */
+    public function test_leaderboard_never_says_who_is_an_admin(): void
+    {
+        $admin = $this->makeUser(['account_type' => 'creator']);
+        $admin->forceFill(['is_admin' => true])->save();
+        $this->hostEvent($admin, 'Leaderboard-Admin 1');
+        $this->hostEvent($admin, 'Leaderboard-Admin 2');
+        $viewer = $this->makeUser(['account_type' => 'creator']);
+
+        $response = $this->withBearer($this->issueToken($viewer))->getJson('/api/leaderboard')->assertOk();
+
+        $entries = $response->json('data');
+        $ids = array_map(fn (array $entry) => $entry['user']['id'], $entries);
+        $this->assertContains($admin->id, $ids, 'the admin account must be on the list');
+        foreach ([...$entries, $response->json('me')] as $entry) {
+            $this->assertArrayNotHasKey('is_admin', $entry);
+            $this->assertArrayNotHasKey('is_admin', $entry['user']);
+        }
+
+        $this->withBearer($this->issueToken($admin))->getJson('/api/user')
+            ->assertOk()
+            ->assertJsonPath('user.is_admin', true);
+    }
+
     public function test_leaderboard_knows_my_rank(): void
     {
         $user = $this->makeUser(['account_type' => 'creator']);

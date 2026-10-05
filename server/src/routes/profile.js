@@ -236,8 +236,10 @@ function friendshipStateFor(row, meId) {
 // Antwort nur, wenn man den Benutzernamen schon kennt.
 router.get('/users/:username', requireAuth, async (req, res, next) => {
   try {
+    // No `is_admin` here: whether an account is an admin is told only to that account itself
+    // (F-05), and that answer comes from the viewer's own row (`req.user`, see below).
     const user = await first(
-      `SELECT id, name, username, avatar, banner, account_type, is_admin, banned_until, created_at
+      `SELECT id, name, username, avatar, banner, account_type, banned_until, created_at
          FROM users WHERE username = ?`,
       [req.params.username],
     );
@@ -284,6 +286,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
     const following = user.id === req.user.id ? false : await isFollowing(req.user.id, user.id);
     /** Folgt die Person MIR? Daraus wird in der App „Folgt dir". */
     const followsMe = user.id === req.user.id ? false : await isFollowing(user.id, req.user.id);
+    const isMe = user.id === req.user.id;
 
     res.json({
       user: {
@@ -294,7 +297,9 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
         /** Liegt in der App weichgezeichnet hinter der Profil-Karte. */
         banner: mediaUrl(req, user.banner),
         account_type: user.account_type,
-        is_admin: Boolean(user.is_admin),
+        // Only on the viewer's own profile (F-05). On anyone else's the field is left out, so
+        // looking through profiles does not tell who the admins are.
+        ...(isMe ? { is_admin: Boolean(req.user.is_admin) } : {}),
         created_at: toIso(user.created_at),
       },
       links: showsPosts ? await loadLinks(user.id) : [],
@@ -331,7 +336,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
             req.user.id,
           )
         : 'none',
-      is_me: user.id === req.user.id,
+      is_me: isMe,
     });
   } catch (err) {
     next(err);
