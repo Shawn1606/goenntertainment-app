@@ -9,8 +9,8 @@ use Illuminate\Testing\TestResponse;
 use Tests\AppFeatureTestCase;
 
 /**
- * The auth limiters count per client address AND per account across addresses (F-01 MIRB-04,
- * F-19): rotating the client address does not reset an account's count. Each test pins small
+ * The auth limiters count per client address AND per account across addresses (F-01, F-19):
+ * rotating the client address does not reset an account's count. Each test pins small
  * numbers through config/ratelimits.php, so it shows the scope it is about in a few requests;
  * RateLimitRulesTest pins the default numbers. The counters live in the database cache store,
  * as in the deploy (AppFeatureTestCase::CACHE_STORE).
