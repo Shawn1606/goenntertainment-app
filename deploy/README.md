@@ -109,6 +109,12 @@ post, comment, profile image and story before it is stored. Node does not start 
 in production it also refuses `MODERATION_ENABLED=false`. The operator decides whose provider
 account and key this is.
 
+Also required: `MODERATION_DAILY_CALL_LIMIT`, the most AI moderation calls per UTC day across all
+accounts, a whole number of at least 1. Each check of a new event, post, comment, profile image
+or story is one call; once the day's limit is used up, node refuses them until the next UTC day,
+whatever `MODERATION_FAIL_OPEN` says. How much is spent on the provider is the operator's
+decision, so there is no default, and node does not start without it.
+
 And four retention settings, each a number of whole days. How long data that is no longer needed
 is kept is the operator's decision, so there are no defaults; node deletes what is older every
 hour (more in the comments in `.env.example`):
@@ -121,7 +127,7 @@ hour (more in the comments in `.env.example`):
   longer valid, counted from when they stopped being valid; at least 1.
 - `USAGE_RETENTION_DAYS`: event views and active days; at least 120 (the streak window).
 
-Without these five settings, too, `docker compose` refuses to start.
+Without these six settings, too, `docker compose` refuses to start.
 
 Passwörter erzeugen:
 
@@ -227,9 +233,9 @@ Docker baut nur neu, was sich geändert hat, und tauscht die Container aus. Die
 Datenbank und die Uploads bleiben dabei erhalten (sie liegen in `db-data` bzw.
 `deploy/storage/` und `deploy/storage-private/`).
 
-Coming from a version without the AI moderation key and the retention settings: add
-`ANTHROPIC_API_KEY` and the four `*_RETENTION_DAYS` settings to `deploy/.env` first (step 4),
-or the new version does not start.
+Coming from a version without the AI moderation key, its daily call limit and the retention
+settings: add `ANTHROPIC_API_KEY`, `MODERATION_DAILY_CALL_LIMIT` and the four `*_RETENTION_DAYS`
+settings to `deploy/.env` first (step 4), or the new version does not start.
 
 **Logs mitlesen:**
 
