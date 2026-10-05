@@ -108,9 +108,15 @@ test('every Laravel-only call of the app is a route in api/routes/api.php', () =
   const routes = laravelRoutes(read('api/routes/api.php'));
   const selected = calls.filter(laravelOnly);
   console.log(`client calls: ${calls.length} read, ${selected.length} Laravel-only; Laravel routes: ${routes.size}`);
-  // The only `request<` without a literal path is the function's own definition.
-  assert.equal(other.length, 1, `request<...> without a literal path: ${other.join('; ')}`);
+  // The `request<` calls without a literal path are the function's own definition and the paged
+  // event list, whose path activityListPath builds (src/domain/activity-pages.ts). That path is
+  // always `/activities?...`, which Node serves: Laravel has no such route, so the call cannot be
+  // a Laravel-only one (both are checked below).
+  assert.equal(other.length, 2, `request<...> without a literal path: ${other.join('; ')}`);
   assert.match(other[0], /request<T>\(path: string/, `request<...> without a literal path: ${other[0]}`);
+  assert.match(other[1], /request<ActivityPage<Activity>>\(activityListPath\(/, `request<...> without a literal path: ${other[1]}`);
+  assert.match(read('src/domain/activity-pages.ts'), /return `\/activities\?\$\{params\.join\('&'\)\}`;/, 'activityListPath no longer builds an /activities path');
+  assert.ok(![...routes].some((r) => /^[A-Z]+ \/activities(\/|$)/.test(r)), 'Laravel now has an /activities route: the paged list call is no longer Node-only');
   for (const c of selected) console.log(`  ${c.method} ${c.path} (src/lib/api.ts:${c.line})`);
   // The call map's ten two-factor and password calls and the e-mail change: a reader that finds
   // fewer has stopped seeing calls, and an empty list would pass.
