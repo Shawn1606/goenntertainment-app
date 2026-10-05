@@ -7,6 +7,7 @@ import { test } from 'node:test';
  * Static checks of the screen setup (F-05/F-18): the legacy admin screen with its own sign-in and
  * a hard-coded admin address is gone, and every admin screen sits behind the signed-in guard
  * (the server checks admin rights on every admin route; these screens only show what it allows).
+ * A profile shows the ADMIN badge only on the own profile.
  *
  * Failure messages name files only, never a matched value.
  */
@@ -52,6 +53,20 @@ test('every admin screen is registered inside the signed-in guard', () => {
   }
   const outside = layout.replace(guarded, '');
   assert.doesNotMatch(outside, /<Stack\.Screen name="admin/, 'an admin screen is registered outside the signed-in guard');
+});
+
+test('a profile shows the ADMIN badge only through showsAdminBadge, so only on the own profile (F-05)', () => {
+  const scanned = [...files(path.join(SRC, 'app'), /\.tsx?$/), ...files(path.join(SRC, 'components'), /\.tsx?$/)];
+  const direct = scanned.filter((file) => /\bprofile\.user\.is_admin\b/.test(readFileSync(file, 'utf8')));
+
+  assert.ok(scanned.length > 50, `only ${scanned.length} files scanned`);
+  assert.deepEqual(
+    direct.map((file) => path.relative(SRC, file)),
+    [],
+    `${scanned.length} files scanned; a profile's is_admin is read only through showsAdminBadge`,
+  );
+  const screen = readFileSync(path.join(SRC, 'app', 'profile', '[username].tsx'), 'utf8');
+  assert.match(screen, /\{showsAdminBadge\(profile\) \? \(/, 'the profile screen does not decide the badge with showsAdminBadge');
 });
 
 test('no screen, component or helper compares with a hard-coded e-mail address', () => {

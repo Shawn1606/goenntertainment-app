@@ -49,7 +49,7 @@ import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { TextField } from '@/components/ui/text-field';
 import { Features } from '@/constants/features';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
-import { accountAbilities, accountLabel } from '@/domain/account';
+import { accountAbilities, accountLabel, showsAdminBadge } from '@/domain/account';
 import { groupStories } from '@/domain/story';
 import type { UiIconName } from '@/domain/ui-icon';
 import {
@@ -850,7 +850,7 @@ export default function ProfileScreen() {
                     style={[styles.badge, { color: surface.accent, backgroundColor: surface.chipBgStrong }]}>
                     {tier.toUpperCase()}
                   </ThemedText>
-                  {profile.user.is_admin ? (
+                  {showsAdminBadge(profile) ? (
                     <ThemedText
                       type="small"
                       style={[styles.badge, { color: surface.accent, backgroundColor: surface.chipBgStrong }]}>

@@ -707,7 +707,11 @@ export type PublicProfile = {
     /** Bild hinter der Profil-Karte (weichgezeichnet); ältere Server: undefiniert. */
     banner?: string | null;
     account_type: AccountType | null;
-    is_admin: boolean;
+    /**
+     * Only on the own profile (`is_me`); on anyone else's the server leaves it out (F-05).
+     * Admin rights of the signed-in account come from its own record (`User.is_admin`).
+     */
+    is_admin?: boolean;
     created_at: string | null;
   };
   links: ProfileLink[];
