@@ -17,8 +17,8 @@ use Throwable;
 /**
  * Logs carry no request data (F-38): a failed query is reported without its bound
  * values, its statement or the driver's message; a failed call to the Node fallback and a code
- * mail that could not be sent log the exception class only (their messages carry the URL with
- * the client's path, or the recipient).
+ * mail that could not be sent (two-factor, reset, a new e-mail address) log the exception class
+ * only (their messages carry the URL with the client's path, or the recipient).
  *
  * Every log call is captured as text, exceptions included with their messages, so whatever a log
  * formatter could print is checked. Each test first proves that something was logged at all.
@@ -135,6 +135,40 @@ class LogHygieneTest extends AppFeatureTestCase
         $this->assertLoggedWithoutCanary();
         foreach ($this->logged as $line) {
             $this->assertStringNotContainsString($user->email, $line);
+        }
+        $this->assertStringContainsString(TransportException::class, implode("\n", $this->logged));
+    }
+
+    /**
+     * The code mail to a new e-mail address (F-04) the same way: 503, and the failure logged with
+     * the exception class and the user id, never the transport's message or either address.
+     */
+    public function test_an_e_mail_change_code_mail_that_cannot_be_sent_logs_the_exception_class_only(): void
+    {
+        Mail::extend('failing-for-test', fn () => new class extends AbstractTransport
+        {
+            protected function doSend(SentMessage $message): void
+            {
+                throw new TransportException('fixture transport failure for '.LogHygieneTest::canary());
+            }
+
+            public function __toString(): string
+            {
+                return 'failing-for-test';
+            }
+        });
+        config(['mail.mailers.failing-for-test' => ['transport' => 'failing-for-test'], 'mail.default' => 'failing-for-test']);
+        $user = $this->makeUser();
+        $new = 'moved-'.$user->username.'@example.invalid';
+
+        $this->withBearer($this->issueToken($user))
+            ->putJson('/api/user/email', ['email' => $new, 'current_password' => self::TEST_PASSWORD])
+            ->assertStatus(503);
+
+        $this->assertLoggedWithoutCanary();
+        foreach ($this->logged as $line) {
+            $this->assertStringNotContainsString($user->email, $line);
+            $this->assertStringNotContainsString($new, $line);
         }
         $this->assertStringContainsString(TransportException::class, implode("\n", $this->logged));
     }

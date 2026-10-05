@@ -7,6 +7,7 @@ use App\Mail\AccountSecurityNotice;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
 use App\Rules\ValidEmail;
+use App\Support\AddressCode;
 use App\Support\NodeInternal;
 use App\Support\PasswordPolicy;
 use App\Support\PasswordReset;
@@ -18,7 +19,6 @@ use Closure;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -112,6 +112,8 @@ class AccountController extends Controller
 
         // An open reset code must not be able to replace the new password right away.
         PasswordReset::forget($user);
+        // A pending e-mail change was asked for with the password that just changed.
+        AddressCode::forget($user, TwoFactor::PURPOSE_NEW_EMAIL);
 
         return response()->json(['message' => 'Passwort geändert.']);
     }
@@ -124,65 +126,88 @@ class AccountController extends Controller
      * not enough - the current password is, and with two-factor sign-in the current code too
      * (for the e-mail method mailed to the CURRENT address, POST /user/two-factor/code).
      *
-     * Order of the checks: the new address (format, unchanged, reserved), the password, the
-     * address being free, the code last - a code is used up when it is checked (a recovery code
-     * for good), so it must not be lost to a typo or a taken address.
+     * This request changes nothing yet: it mails a one-time code to the NEW address
+     * (App\Support\AddressCode), and the address takes effect only when that code comes back
+     * (POST /user/email/confirm). An account can thus only move to an address whose mail its
+     * owner reads, not to someone else's.
      *
-     * Then, in one transaction: the new address (not verified), every other session signed out,
-     * open reset codes and e-mail codes of the old address dropped, and a notice to the OLD
-     * address. If that notice cannot be sent, nothing changes (503): it is the owner's only
-     * signal that the recovery channel moved.
+     * Order of the checks: the new address (format, unchanged, reserved), the password, the
+     * address being free, the account's cap of wrong codes and the minute between two code mails,
+     * the second-factor code last - a code is used up when it is checked (a recovery code for
+     * good), so it must not be lost to a typo, a taken address or a request that is refused
+     * anyway. Should the mail to the new address then fail (503), the second-factor code is used
+     * up all the same.
      */
     public function updateEmail(Request $request): JsonResponse
     {
         /** @var User $user */
         $user = $request->user();
-        $old = (string) $user->email;
 
-        Validator::make($request->all(), [
-            'email' => [
-                'bail',
-                'required',
-                new ValidEmail,
-                static function (string $attribute, mixed $value, Closure $fail) use ($old): void {
-                    if ($value === $old) {
-                        $fail(self::MSG_SAME_EMAIL);
-                    }
-                },
-                AuthController::notReservedEmail(),
-            ],
-        ], [
-            'email.required' => ValidEmail::MESSAGE,
-        ])->validate();
-
-        $new = (string) $request->input('email');
+        $new = $this->validNewEmail($request, (string) $user->email);
 
         StepUp::assertPassword($user, $request->input('current_password'), 'current_password');
 
-        if (User::where('email', $new)->whereKeyNot($user->getKey())->exists()) {
-            throw ValidationException::withMessages(['email' => [self::MSG_EMAIL_TAKEN]]);
+        $this->refuseTakenEmail($user, $new);
+
+        TwoFactor::refuseIfLocked($user, 'code');
+        $wait = AddressCode::secondsUntilNextMail($user, TwoFactor::PURPOSE_NEW_EMAIL);
+        if ($wait > 0) {
+            return AddressCode::waitResponse($wait);
         }
 
         if (TwoFactor::isEnabled($user)) {
             TwoFactor::assertCode($user, $request->input('code'));
         }
 
+        AddressCode::send($user, TwoFactor::PURPOSE_NEW_EMAIL, $new);
+
+        return $this->codeSentResponse($new);
+    }
+
+    /**
+     * POST /api/user/email/confirm {email, code} - the code from the mail to the new address.
+     *
+     * `email` is the new address again: the code confirms the address it was mailed to and no
+     * other (App\Support\AddressCode). The address checks of updateEmail run again, and whether
+     * the address is still free.
+     *
+     * Then, in the transaction that uses the code up (with the account's row locked): the new
+     * address (verified now: the code came back from it), every other session signed out, every
+     * open code that went to the old address dropped (reset, two-factor setup and confirmation),
+     * and a notice to the OLD address. If that notice cannot be sent, nothing
+     * changes (503) and the code stays valid: the notice is the owner's only signal that the
+     * recovery channel moved.
+     */
+    public function confirmEmail(Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        $new = $this->validNewEmail($request, (string) $user->email);
+        $this->refuseTakenEmail($user, $new);
+
         try {
-            DB::transaction(function () use ($user, $old, $new) {
-                $locked = User::whereKey($user->getKey())->lockForUpdate()->firstOrFail();
-                $locked->forceFill(['email' => $new, 'email_verified_at' => null])->save();
-                $user->forceFill(['email' => $new, 'email_verified_at' => null])->syncOriginal();
+            AddressCode::confirm($user, TwoFactor::PURPOSE_NEW_EMAIL, $new, $request->input('code'), function (User $account) use ($user, $new): void {
+                $old = (string) $account->email;
+                $account->forceFill(['email' => $new, 'email_verified_at' => now()])->save();
+                $user->forceFill(['email' => $new, 'email_verified_at' => $account->email_verified_at])->syncOriginal();
 
                 Sessions::revokeOthers($user);
-                // Open reset codes (mailed to the old address) and e-mail codes.
-                TwoFactorChallenge::where('user_id', $user->getKey())
-                    ->whereIn('purpose', [TwoFactor::PURPOSE_RESET, TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM])
+                // Every open code that went to the old address, and any other pending change.
+                TwoFactorChallenge::where('user_id', $account->getKey())
+                    ->whereIn('purpose', [
+                        TwoFactor::PURPOSE_RESET,
+                        TwoFactor::PURPOSE_SETUP,
+                        TwoFactor::PURPOSE_CONFIRM,
+                        TwoFactor::PURPOSE_NEW_EMAIL,
+                    ])
                     ->delete();
 
                 Mail::to($old)->send(new AccountSecurityNotice(AccountSecurityNotice::EMAIL_CHANGED, TwoFactor::maskEmail($new)));
             });
         } catch (TransportExceptionInterface $e) {
-            // Rolled back. The user id and the exception class only: no address, no message.
+            // Rolled back, the code with it (it stays valid). The user id and the exception class
+            // only: no address, no message.
             Log::error('[account] e-mail change notice not sent; nothing changed', [
                 'user_id' => $user->getKey(),
                 'exception' => $e::class,
@@ -256,6 +281,51 @@ class AccountController extends Controller
         }
 
         return NodeInternal::deleteAccount($user, TwoFactor::createDeletionGrant($user));
+    }
+
+    /**
+     * The new address of an e-mail change, checked: an address (ValidEmail), not the current one,
+     * not reserved for the system.
+     */
+    private function validNewEmail(Request $request, string $current): string
+    {
+        Validator::make($request->all(), [
+            'email' => [
+                'bail',
+                'required',
+                new ValidEmail,
+                static function (string $attribute, mixed $value, Closure $fail) use ($current): void {
+                    if ($value === $current) {
+                        $fail(self::MSG_SAME_EMAIL);
+                    }
+                },
+                AuthController::notReservedEmail(),
+            ],
+        ], [
+            'email.required' => ValidEmail::MESSAGE,
+        ])->validate();
+
+        return (string) $request->input('email');
+    }
+
+    /** 422 on `email` when another account has $email. */
+    private function refuseTakenEmail(User $user, string $email): void
+    {
+        if (User::where('email', $email)->whereKeyNot($user->getKey())->exists()) {
+            throw ValidationException::withMessages(['email' => [self::MSG_EMAIL_TAKEN]]);
+        }
+    }
+
+    /** The answer after a code mail, in the form of the two-factor routes' answers. */
+    private function codeSentResponse(string $address): JsonResponse
+    {
+        $destination = TwoFactor::maskEmail($address);
+
+        return response()->json([
+            'message' => "Wir haben dir einen Code an {$destination} geschickt.",
+            'destination' => $destination,
+            'expires_in' => TwoFactor::CODE_TTL,
+        ]);
     }
 
     /** Stimmt das aktuelle Passwort? Als Regel, damit die Meldung am Feld steht. */

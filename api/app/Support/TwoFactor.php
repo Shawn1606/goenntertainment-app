@@ -28,7 +28,9 @@ use RuntimeException;
  * Alles, was auf einen Code wartet, ist ein „Vorgang" in two_factor_challenges -
  * die Anmeldung nach dem Passwort ('login'), das Einschalten per E-Mail
  * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm'). The password reset
- * code ('reset') lives there too, with its own rules (App\Support\PasswordReset).
+ * code ('reset') lives there too, with its own rules (App\Support\PasswordReset), and so does the
+ * code that proves control of the new address of an e-mail change while signed in ('new_email';
+ * App\Support\AddressCode).
  *
  * Die App haelt fuer einen Vorgang nur einen zufaelligen Token in der Hand, in
  * der Tabelle steht sein sha256. Er ist das, was „Passwort war richtig" von
@@ -58,7 +60,7 @@ use RuntimeException;
  * Whoever knows the password can start a new challenge as often as the limiters allow, so the
  * per-challenge cap alone still adds up. Every wrong code also counts per ACCOUNT, across all
  * challenges and step-ups (sign-in, switching on and off, recovery codes, e-mail change, account
- * deletion): at the cap (config ratelimits.two-factor-failures, default 10 in 15 minutes) no
+ * deletion, and the codes of App\Support\AddressCode): at the cap (config ratelimits.two-factor-failures, default 10 in 15 minutes) no
  * code is checked, no sign-in challenge is started and no code is mailed until the window has
  * passed. The count lives in the cache store (the database in the deploy) and is not reset by a
  * right code. A known password can therefore lock the second factor for the window: that is
@@ -88,6 +90,12 @@ final class TwoFactor
      * and never goes through attempt(), so wrong reset codes do not feed the account's cap below.
      */
     public const PURPOSE_RESET = 'reset';
+
+    /**
+     * A code mailed to the NEW address of an e-mail change (F-04), signed in: the address takes
+     * effect only with it (App\Support\AddressCode, AccountController::confirmEmail).
+     */
+    public const PURPOSE_NEW_EMAIL = 'new_email';
 
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
     public const CODE_TTL = 600;
@@ -875,6 +883,16 @@ final class TwoFactor
     public static function hashCode(string $tokenHash, string $code): string
     {
         return hash_hmac('sha256', 'code|'.$tokenHash.'|'.$code, self::key());
+    }
+
+    /**
+     * A code that proves control of $address (App\Support\AddressCode): the HMAC covers the
+     * challenge AND the address the code was mailed to, so the code confirms that address and no
+     * other, and the address itself is not stored.
+     */
+    public static function hashAddressCode(string $tokenHash, string $code, string $address): string
+    {
+        return hash_hmac('sha256', 'address|'.$tokenHash.'|'.$code.'|'.$address, self::key());
     }
 
     private static function hashRecoveryCode(string $normalized): string

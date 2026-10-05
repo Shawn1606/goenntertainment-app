@@ -54,7 +54,8 @@ You can start developing by editing the files inside the **app** directory. This
 
 ### Mail in development
 
-Laravel (`api/`) sends 2FA codes, password reset codes and other mail over SMTP. In
+Laravel (`api/`) sends 2FA codes, password reset codes, the codes that confirm a new e-mail
+address, and other mail over SMTP. In
 development a local mail catcher, [Mailpit](https://github.com/axllent/mailpit),
 receives every mail, so no code is ever written to a log:
 

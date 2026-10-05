@@ -22,7 +22,7 @@ class SessionRevocationSitesTest extends TestCase
 {
     /** File => calls, with the column each change writes before it revokes. */
     private const SITES = [
-        // updatePassword: `password`; updateEmail: `email`.
+        // updatePassword: `password`; confirmEmail: `email`.
         'app/Http/Controllers/AccountController.php' => 2,
         // afterChange, after switching two-factor sign-in on or off (`two_factor_method`) or new
         // recovery codes (a two-factor account: its sign-ins go through a challenge, ended first).

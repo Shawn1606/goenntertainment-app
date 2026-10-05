@@ -315,7 +315,8 @@ class AuthController extends Controller
 
         /**
          * The e-mail address is no longer changed here (F-04): it takes the current password, and
-         * the code with two-factor sign-in, at PUT /user/email (AccountController::updateEmail).
+         * the code with two-factor sign-in, at PUT /user/email (AccountController::updateEmail),
+         * and then the code mailed to the new address (AccountController::confirmEmail).
          * Sending the unchanged address stays valid: profile forms send the whole profile.
          */
         if ($request->has('email')) {

@@ -29,6 +29,7 @@ class RouteThrottleCoverageTest extends TestCase
         'PATCH api/user' => 'throttle:profile',
         'PUT api/user/password' => 'throttle:account-sensitive',
         'PUT api/user/email' => 'throttle:account-sensitive',
+        'POST api/user/email/confirm' => 'throttle:account-sensitive',
         'DELETE api/me' => 'throttle:account-sensitive',
         'POST api/user/two-factor/email' => 'throttle:two-factor-setup',
         'POST api/user/two-factor/email/confirm' => 'throttle:two-factor-setup',

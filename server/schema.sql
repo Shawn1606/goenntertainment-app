@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS cache_locks (
 --   'reset'   – a password reset code (POST /forgot-password, signed out); its token is
 --               never handed out (api/app/Support/PasswordReset.php). The former link
 --               tokens table, password_reset_tokens, is no longer written.
+--   'new_email' – a code mailed to the NEW address of an e-mail change; the address takes
+--               effect only with it. The address is not stored: the code's HMAC covers it
+--               (api/app/Support/AddressCode.php).
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App
 -- in der Hand haelt; `code_hash` = HMAC des Codes (Schluessel APP_KEY). Wer die

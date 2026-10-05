@@ -10,10 +10,11 @@ use RuntimeException;
 use Tests\AppFeatureTestCase;
 
 /**
- * Mails with a code (password reset, two-factor) never go through the log transport, not even
- * when MAIL_MAILER names it or a failover chain contains it: the log would hold the code
- * (F-09; App\Support\CodeMail). The mail is refused like a failed one: the reset answers neutrally
- * and keeps no code, the two-factor route answers 503, and the log names the exception class.
+ * Mails with a code (password reset, two-factor, a new e-mail address) never go
+ * through the log transport, not even when MAIL_MAILER names it or a failover chain contains it:
+ * the log would hold the code (F-09, F-04; App\Support\CodeMail). The mail is refused like a
+ * failed one: the reset answers neutrally and keeps no code, the signed-in routes answer 503, and
+ * the log names the exception class.
  *
  * The real mail manager runs here (no Mail::fake), so the transport that would send is the one
  * the configuration picks.
@@ -90,6 +91,42 @@ class CodeMailTest extends AppFeatureTestCase
 
         $this->assertNoMailInTheLog();
         $this->assertRefusalLogged('[two-factor] Code-Mail nicht versendet');
+    }
+
+    /**
+     * The code that confirms a new e-mail address (F-04) goes to that address on a real
+     * transport; the positive control of the refusal below.
+     */
+    public function test_an_e_mail_change_code_goes_out_on_a_real_transport(): void
+    {
+        $user = $this->makeUser();
+        $new = 'moved-'.$user->username.'@example.invalid';
+
+        $this->withBearer($this->issueToken($user))
+            ->putJson('/api/user/email', ['email' => $new, 'current_password' => self::TEST_PASSWORD])
+            ->assertOk();
+
+        $sent = app('mail.manager')->mailer('array')->getSymfonyTransport()->messages();
+        $this->assertCount(1, $sent);
+        $this->assertSame($new, $sent->first()->getEnvelope()->getRecipients()[0]->getAddress());
+        $this->assertSame(1, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'new_email')->count());
+    }
+
+    public function test_e_mail_change_code_mails_are_refused_on_the_log_mailer(): void
+    {
+        config(['mail.default' => 'log']);
+        $user = $this->makeUser();
+
+        $this->withBearer($this->issueToken($user))
+            ->putJson('/api/user/email', ['email' => 'moved-'.$user->username.'@example.invalid', 'current_password' => self::TEST_PASSWORD])
+            ->assertStatus(503)
+            ->assertJsonPath('message', TwoFactor::MSG_MAIL_FAILED);
+
+        $this->assertNoMailInTheLog();
+        $this->assertRefusalLogged('[email-change] code mail not sent');
+        // A code nobody received is useless, and the address stays as it was.
+        $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'new_email')->count());
+        $this->assertSame($user->email, DB::table('users')->where('id', $user->id)->value('email'));
     }
 
     public function test_a_failover_chain_with_the_log_mailer_is_refused_too(): void
