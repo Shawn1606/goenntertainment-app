@@ -259,6 +259,11 @@ in `server/.env.example`.
 >   gesperrt wird dabei niemand, und du siehst den Fall weiter in der Liste.
 > - `MODERATION_FAIL_OPEN=true` lässt Inhalte bei einem Ausfall ungeprüft durch. Das ist nur ein
 >   Notschalter für einen Ausfall: bewusst setzen und danach wieder entfernen.
+> - Für alle Konten zusammen gibt es ein Tageslimit: höchstens `MODERATION_DAILY_CALL_LIMIT`
+>   KI-Prüfungen pro Tag (UTC). Ist es erreicht, wird bis zum nächsten Tag alles abgelehnt, was
+>   geprüft wird, auch mit `MODERATION_FAIL_OPEN=true`. Wer etwas hochlädt, liest dann „Die
+>   Inhaltspruefung ist fuer heute ausgelastet"; gesperrt wird dabei niemand. Am PC gibt es ohne
+>   diesen Wert kein Limit.
 > - Auf dem Server startet das Backend ohne `ANTHROPIC_API_KEY` nicht, und
 >   `MODERATION_ENABLED=false` wird dort abgelehnt.
 > - Steht im Terminal **„KI-Moderation: AN ohne ANTHROPIC_API_KEY"**, wird alles abgelehnt, was
@@ -1493,6 +1498,10 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
     ganzen Tagen (`USAGE_RETENTION_DAYS` mindestens 120). Wessen Anbieter-Konto und Schlüssel
     das ist und wie lange was aufbewahrt wird, entscheidest du; Vorgaben gibt es absichtlich
     keine. Ohne diese Werte startet der Server nicht (siehe `deploy/.env.example` und
+    `deploy/README.md`, Schritt 4).
+  - Ebenso Pflicht ist `MODERATION_DAILY_CALL_LIMIT`: wie viele KI-Prüfungen pro Tag (UTC) für
+    alle Konten zusammen höchstens laufen. Wie viel du dafür ausgibst, entscheidest du; eine
+    Vorgabe gibt es absichtlich nicht. Ohne den Wert startet der Server nicht (siehe
     `deploy/README.md`, Schritt 4).
   - Einmal `npm --prefix server ci` ausführen: Der Server braucht jetzt das Paket `sharp` (es
     rechnet jedes hochgeladene Bild neu und entfernt dabei Standort- und Kameradaten). Ohne das
