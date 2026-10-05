@@ -145,6 +145,8 @@ CREATE TABLE IF NOT EXISTS cache_locks (
 --   'new_email' – a code mailed to the NEW address of an e-mail change; the address takes
 --               effect only with it. The address is not stored: the code's HMAC covers it
 --               (api/app/Support/AddressCode.php).
+--   'first_pw' – a code mailed to the account's own address before an account without a
+--               password sets its first one (same file).
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App
 -- in der Hand haelt; `code_hash` = HMAC des Codes (Schluessel APP_KEY). Wer die

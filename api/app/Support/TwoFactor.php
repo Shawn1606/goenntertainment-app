@@ -28,8 +28,9 @@ use RuntimeException;
  * Alles, was auf einen Code wartet, ist ein „Vorgang" in two_factor_challenges -
  * die Anmeldung nach dem Passwort ('login'), das Einschalten per E-Mail
  * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm'). The password reset
- * code ('reset') lives there too, with its own rules (App\Support\PasswordReset), and so does the
- * code that proves control of the new address of an e-mail change while signed in ('new_email';
+ * code ('reset') lives there too, with its own rules (App\Support\PasswordReset), and so do the
+ * codes that prove control of an address while signed in: the new address of an e-mail change
+ * ('new_email') and the account's own address before its first password ('first_pw';
  * App\Support\AddressCode).
  *
  * Die App haelt fuer einen Vorgang nur einen zufaelligen Token in der Hand, in
@@ -96,6 +97,12 @@ final class TwoFactor
      * effect only with it (App\Support\AddressCode, AccountController::confirmEmail).
      */
     public const PURPOSE_NEW_EMAIL = 'new_email';
+
+    /**
+     * A code mailed to the account's own address before an account without a password sets its
+     * first one (App\Support\AddressCode, AccountController::updatePassword).
+     */
+    public const PURPOSE_FIRST_PASSWORD = 'first_pw';
 
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
     public const CODE_TTL = 600;

@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Http\Controllers\PasswordController;
 use App\Mail\EmailChangeCode;
+use App\Mail\FirstPasswordCode;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
 use Closure;
@@ -18,11 +19,14 @@ use Throwable;
 
 /**
  * One-time codes that prove, while signed in, that the person can read the mail of an address
- * (F-04). A change that waits for one:
+ * (F-04). Two changes wait for one:
  *
  *   - an e-mail change (TwoFactor::PURPOSE_NEW_EMAIL): the code goes to the NEW address, and the
  *     address takes effect only with it, so an account can only move to an address whose mail
- *     its owner reads (AccountController::updateEmail, ::confirmEmail).
+ *     its owner reads (AccountController::updateEmail, ::confirmEmail);
+ *   - the first password of an account without one (TwoFactor::PURPOSE_FIRST_PASSWORD): the code
+ *     goes to the account's own address, so a session alone cannot give the account a password
+ *     (AccountController::sendFirstPasswordCode, ::updatePassword).
  *
  * ## Where the code lives
  *
@@ -53,6 +57,7 @@ final class AddressCode
     /** The log prefix of each purpose; also the list of purposes this class serves. */
     private const LOG_PREFIX = [
         TwoFactor::PURPOSE_NEW_EMAIL => '[email-change]',
+        TwoFactor::PURPOSE_FIRST_PASSWORD => '[first-password]',
     ];
 
     /**
@@ -194,7 +199,11 @@ final class AddressCode
 
     private static function mail(string $purpose, string $code): Mailable
     {
-        return new EmailChangeCode($code, intdiv(TwoFactor::CODE_TTL, 60));
+        $minutes = intdiv(TwoFactor::CODE_TTL, 60);
+
+        return $purpose === TwoFactor::PURPOSE_NEW_EMAIL
+            ? new EmailChangeCode($code, $minutes)
+            : new FirstPasswordCode($code, $minutes);
     }
 
     private static function assertPurpose(string $purpose): void

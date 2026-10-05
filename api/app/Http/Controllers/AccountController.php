@@ -43,8 +43,15 @@ class AccountController extends Controller
 
     private const MSG_NOTICE_FAILED = 'Wir konnten gerade keinen Hinweis an deine bisherige Adresse schicken – deine E-Mail-Adresse bleibt unverändert. Probier es gleich noch mal.';
 
+    /** An account without a password sent no code for its first one. */
+    public const MSG_FIRST_PASSWORD_CODE = 'Dein Konto hat noch kein Passwort. Fordere einen Code per E-Mail an und gib ihn hier ein.';
+
+    /** POST /user/password/code for an account that has a password. */
+    public const MSG_HAS_PASSWORD = 'Dein Konto hat schon ein Passwort – zum Ändern brauchst du das aktuelle.';
+
     /**
-     * PUT /api/user/password {current_password, password}
+     * PUT /api/user/password {current_password, password}, or {code, password} for an account
+     * without a password
      *
      * ## Konten ohne Passwort
      *
@@ -53,17 +60,18 @@ class AccountController extends Controller
      * Die Google-Anmeldung legte Konten OHNE Passwort an - die Spalte bleibt
      * NULL, und NULL ist dort genau das: „dieses Konto hat keins" (siehe auch
      * Passwords::check, das dafuer immer false liefert). Fuer diese Konten gibt
-     * es kein aktuelles Passwort, das man abfragen koennte; sie duerfen eines
-     * SETZEN, allein mit ihrer Anmeldung. Das ist nicht weniger sicher als
-     * bisher: Wer den Token hat, konnte schon jetzt alles am Konto aendern, und
-     * die Alternative - „Passwort vergessen" per Mail - gibt es erst, wenn der
-     * Mail-Versand steht. (The reset by mailed code exists since F-09; whether setting a first
-     * password should then need it is a backlog item.)
+     * es kein aktuelles Passwort, das man abfragen koennte. They set their first one with a
+     * one-time code mailed to the account's own address (POST /user/password/code,
+     * App\Support\AddressCode), not with the session alone (F-04): whoever holds a stolen or
+     * borrowed token could otherwise give the account a password of their own and keep it.
      *
      * Entscheidend ist, dass das NUR bei NULL/leer gilt. Ein Konto mit Passwort,
      * das zusaetzlich an Google haengt, muss sein Passwort kennen - sonst waere
      * ein gestohlener Token genug, um sich dauerhaft ein eigenes Passwort
      * einzurichten.
+     *
+     * The new password is checked before the code, so a weak one does not use the code up; the
+     * code is checked last and the password set in the transaction that uses it up.
      *
      * ## Andere Geraete werden abgemeldet
      *
@@ -76,7 +84,7 @@ class AccountController extends Controller
     {
         /** @var User $user */
         $user = $request->user();
-        $hasPassword = is_string($user->password) && $user->password !== '';
+        $hasPassword = StepUp::hasPassword($user);
 
         $rules = [];
         $messages = [];
@@ -86,6 +94,10 @@ class AccountController extends Controller
         if ($hasPassword) {
             $rules['current_password'] = ['bail', 'required', $this->currentPasswordRule($user)];
             $messages['current_password.required'] = 'Bitte gib dein aktuelles Passwort ein.';
+        } else {
+            // No password yet: the code mailed to the account's address takes its place.
+            $rules['code'] = ['bail', 'required', $this->filledScalarRule(self::MSG_FIRST_PASSWORD_CODE)];
+            $messages['code.required'] = self::MSG_FIRST_PASSWORD_CODE;
         }
 
         $rules['password'] = [
@@ -98,24 +110,74 @@ class AccountController extends Controller
 
         Validator::make($request->all(), $rules, $messages)->validate();
 
+        $password = (string) $request->input('password');
+
+        if ($hasPassword) {
+            $this->setPassword($user, $user, $password);
+        } else {
+            AddressCode::confirm(
+                $user,
+                TwoFactor::PURPOSE_FIRST_PASSWORD,
+                (string) $user->email,
+                $request->input('code'),
+                function (User $account) use ($user, $password): void {
+                    // Another request set the first password since this one started: it is not
+                    // replaced with a code; the current password is needed now.
+                    if (StepUp::hasPassword($account)) {
+                        throw ValidationException::withMessages(['current_password' => ['Bitte gib dein aktuelles Passwort ein.']]);
+                    }
+                    $this->setPassword($account, $user, $password);
+                },
+            );
+        }
+
+        return response()->json(['message' => 'Passwort geändert.']);
+    }
+
+    /**
+     * POST /api/user/password/code - a code to the account's own address, for its first password.
+     *
+     * Only for accounts without a password (409 otherwise: they change it with the current one).
+     * At the account's cap of wrong codes no code is mailed; at most one mail a minute (429).
+     */
+    public function sendFirstPasswordCode(Request $request): JsonResponse
+    {
+        /** @var User $user */
+        $user = $request->user();
+
+        if (StepUp::hasPassword($user)) {
+            return response()->json(['message' => self::MSG_HAS_PASSWORD], 409);
+        }
+
+        TwoFactor::refuseIfLocked($user, 'code');
+        AddressCode::send($user, TwoFactor::PURPOSE_FIRST_PASSWORD, (string) $user->email);
+
+        return $this->codeSentResponse((string) $user->email);
+    }
+
+    /**
+     * Writes the new password to $account (the row to change), then signs out every other
+     * session of $user (the request's account, which knows the token in use).
+     */
+    private function setPassword(User $account, User $user, string $password): void
+    {
         /**
          * `Hash::make` ausdruecklich, nicht die Zuweisung an den `hashed`-Cast:
          * Der Cast uebernimmt einen Wert, der schon WIE ein bcrypt-Hash aussieht,
          * unveraendert. Wer als „neues Passwort" einen Hash schickt, haette
          * sonst ein Passwort, das die Regel oben nie gesehen hat.
          */
-        $user->password = Hash::make((string) $request->input('password'));
-        $user->remember_token = null;
-        $user->save();
+        $account->password = Hash::make($password);
+        $account->remember_token = null;
+        $account->save();
 
         Sessions::revokeOthers($user);
 
         // An open reset code must not be able to replace the new password right away.
-        PasswordReset::forget($user);
-        // A pending e-mail change was asked for with the password that just changed.
-        AddressCode::forget($user, TwoFactor::PURPOSE_NEW_EMAIL);
-
-        return response()->json(['message' => 'Passwort geändert.']);
+        PasswordReset::forget($account);
+        // A pending e-mail change was asked for with the credentials that just changed.
+        AddressCode::forget($account, TwoFactor::PURPOSE_NEW_EMAIL);
+        AddressCode::forget($account, TwoFactor::PURPOSE_FIRST_PASSWORD);
     }
 
     /**
@@ -173,8 +235,8 @@ class AccountController extends Controller
      *
      * Then, in the transaction that uses the code up (with the account's row locked): the new
      * address (verified now: the code came back from it), every other session signed out, every
-     * open code that went to the old address dropped (reset, two-factor setup and confirmation),
-     * and a notice to the OLD address. If that notice cannot be sent, nothing
+     * open code that went to the old address dropped (reset, first password, two-factor setup
+     * and confirmation), and a notice to the OLD address. If that notice cannot be sent, nothing
      * changes (503) and the code stays valid: the notice is the owner's only signal that the
      * recovery channel moved.
      */
@@ -197,6 +259,7 @@ class AccountController extends Controller
                 TwoFactorChallenge::where('user_id', $account->getKey())
                     ->whereIn('purpose', [
                         TwoFactor::PURPOSE_RESET,
+                        TwoFactor::PURPOSE_FIRST_PASSWORD,
                         TwoFactor::PURPOSE_SETUP,
                         TwoFactor::PURPOSE_CONFIRM,
                         TwoFactor::PURPOSE_NEW_EMAIL,
@@ -326,6 +389,16 @@ class AccountController extends Controller
             'destination' => $destination,
             'expires_in' => TwoFactor::CODE_TTL,
         ]);
+    }
+
+    /** Something typed (a code may come as a JSON number); $message otherwise. */
+    private function filledScalarRule(string $message): Closure
+    {
+        return static function (string $attribute, mixed $value, Closure $fail) use ($message): void {
+            if (! is_scalar($value) || trim((string) $value) === '') {
+                $fail($message);
+            }
+        };
     }
 
     /** Stimmt das aktuelle Passwort? Als Regel, damit die Meldung am Feld steht. */

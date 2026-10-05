@@ -10,7 +10,7 @@ use RuntimeException;
 use Tests\AppFeatureTestCase;
 
 /**
- * Mails with a code (password reset, two-factor, a new e-mail address) never go
+ * Mails with a code (password reset, two-factor, a new e-mail address, a first password) never go
  * through the log transport, not even when MAIL_MAILER names it or a failover chain contains it:
  * the log would hold the code (F-09, F-04; App\Support\CodeMail). The mail is refused like a
  * failed one: the reset answers neutrally and keeps no code, the signed-in routes answer 503, and
@@ -127,6 +127,21 @@ class CodeMailTest extends AppFeatureTestCase
         // A code nobody received is useless, and the address stays as it was.
         $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'new_email')->count());
         $this->assertSame($user->email, DB::table('users')->where('id', $user->id)->value('email'));
+    }
+
+    public function test_first_password_code_mails_are_refused_on_the_log_mailer(): void
+    {
+        config(['mail.default' => 'log']);
+        $user = $this->makeUser(['password' => null]);
+
+        $this->withBearer($this->issueToken($user))
+            ->postJson('/api/user/password/code')
+            ->assertStatus(503)
+            ->assertJsonPath('message', TwoFactor::MSG_MAIL_FAILED);
+
+        $this->assertNoMailInTheLog();
+        $this->assertRefusalLogged('[first-password] code mail not sent');
+        $this->assertSame(0, DB::table('two_factor_challenges')->where('user_id', $user->id)->where('purpose', 'first_pw')->count());
     }
 
     public function test_a_failover_chain_with_the_log_mailer_is_refused_too(): void

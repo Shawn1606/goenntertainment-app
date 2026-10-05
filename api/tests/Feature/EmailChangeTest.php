@@ -379,7 +379,7 @@ class EmailChangeTest extends AppFeatureTestCase
     /**
      * Since the password reset works by a mailed code (F-09), an open reset is a 'reset' challenge
      * whose code went to the OLD address; it is dropped with the e-mail codes when the change is
-     * made. (This test used to insert a reset link
+     * made, and so is an open code for a first password. (This test used to insert a reset link
      * row into password_reset_tokens, which nothing writes any more.) The challenges are made
      * directly, with the purpose spelled out, so the test also runs where the code flows do not
      * exist yet.
@@ -390,6 +390,7 @@ class EmailChangeTest extends AppFeatureTestCase
         $user = $this->makeUser(['two_factor_method' => TwoFactor::METHOD_EMAIL, 'two_factor_confirmed_at' => now()]);
         $token = $this->issueToken($user);
         TwoFactor::createChallenge($user, 'reset', TwoFactor::METHOD_EMAIL);
+        TwoFactor::createChallenge($user, 'first_pw', TwoFactor::METHOD_EMAIL);
 
         // The confirm code for this change, plus a second open one: both go.
         $this->withBearer($token)->postJson('/api/user/two-factor/code')->assertOk();
@@ -406,7 +407,7 @@ class EmailChangeTest extends AppFeatureTestCase
             ->count(), 'an open reset code of the old address survived');
         $this->assertSame(0, DB::table('two_factor_challenges')
             ->where('user_id', $user->id)
-            ->whereIn('purpose', [TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM, self::PURPOSE])
+            ->whereIn('purpose', [TwoFactor::PURPOSE_SETUP, TwoFactor::PURPOSE_CONFIRM, 'first_pw', self::PURPOSE])
             ->count());
     }
 
