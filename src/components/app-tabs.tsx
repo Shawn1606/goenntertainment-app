@@ -1,64 +1,46 @@
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs, TabList, TabSlot, TabTrigger, type TabListProps, type TabTriggerSlotProps } from 'expo-router/ui';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { initialsOf } from '@/components/story-avatar';
 import { Icon } from '@/components/ui/icon';
-import { BrandGradient, FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BrandGradient, FontFamily, Spacing, Stroke } from '@/constants/theme';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import { useAuth } from '@/lib/auth-context';
 import * as feedback from '@/lib/feedback';
 
 /**
- * Untere Leiste im Instagram-/TikTok-Muster:
+ * Die untere Leiste – drei Ziele, mehr nicht:
  *
- *   Home · Karte · ＋ Erstellen · Freunde · (dein Profilbild)
+ *   Home  ·  ( Finden )  ·  Karte
  *
- * ## Warum eine eigene Leiste statt der nativen
+ * ## Warum nur drei
  *
- * Rechts außen steht das eigene Profilbild – rund, in Farbe, mit Ring, wenn der
- * Tab aktiv ist. Genau das kann die native Leiste nicht: iOS färbt jedes Bild
- * darin als Schablone einfarbig ein, Android ebenso, und rund zuschneiden kann
- * keine von beiden. Ein Foto würde dort zum grauen Quadrat. Instagram und TikTok
- * zeichnen ihre Leiste aus demselben Grund selbst.
+ * Die App hat eine Aufgabe: etwas finden, das zu uns passt, und hingehen. Alles
+ * andere (Buchungen, Gruppen, Credits, Stempel, Konto) hängt an der Startseite
+ * oder in der Kopfzeile. Weniger Symbole heißt: Man muss nie überlegen, wo etwas
+ * ist.
  *
- * Nebeneffekt, der ohnehin richtig ist: iOS, Android und Web sehen jetzt gleich
- * aus – vorher gab es für das Web eine zweite, nachgebaute Leiste.
+ * ## Warum „Finden" in der Mitte heraussticht
  *
- * ## Warum genau diese fünf
+ * Der Gruppen-Finder ist der Kern: Wie viele seid ihr, wie alt, was wollt ihr
+ * ausgeben – und die App sagt, was passt. Er sitzt deshalb als runder
+ * Verlaufsknopf erhöht in der Mitte, genau dort, wo der Daumen ohnehin liegt.
  *
- * Links das Stöbern, in der Mitte das Erstellen, rechts außen das eigene Profil –
- * die Reihenfolge, die man aus Instagram und TikTok kennt, und genau deshalb
- * braucht sie keine Erklärung. Beschriftungen bleiben stehen: Sie kosten kaum
- * Platz und nehmen jedes Rätselraten, wofür ein Symbol steht.
- *
- * ## Fünf ist die Grenze
- *
- * Mehr Ziele passen auf ein schmales Handy nicht, ohne dass die Treffer zu klein
- * werden. Alles Weitere (Chats, Einstellungen, Admin) liegt als Stack-Route hinter
- * einem Knopf im jeweiligen Kopf.
- *
- * ## `backBehavior: 'history'`
- *
- * Die Zurück-Taste auf Android geht dorthin, wo man herkam – unabhängig davon,
- * welcher Tab zuerst deklariert ist.
+ * Eigene Leiste statt der nativen: Nur so lässt sich der Mittelknopf erhöht und
+ * im Markenverlauf zeichnen, und iOS, Android und Web sehen gleich aus.
  */
 type TabDef = {
   name: string;
-  href: '/' | '/map' | '/create' | '/friends' | '/me';
+  href: '/' | '/finder' | '/map';
   label: string;
   icon: UiIconName;
 };
 
 const TABS: TabDef[] = [
   { name: 'index', href: '/', label: 'Home', icon: 'home' },
+  { name: 'finder', href: '/finder', label: 'Finden', icon: 'search' },
   { name: 'map', href: '/map', label: 'Karte', icon: 'map' },
-  { name: 'create', href: '/create', label: 'Erstellen', icon: 'plus' },
-  { name: 'friends', href: '/friends', label: 'Freunde', icon: 'users' },
-  { name: 'me', href: '/me', label: 'Profil', icon: 'user' },
 ];
 
 export default function AppTabs() {
@@ -81,6 +63,7 @@ export default function AppTabs() {
 function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & { tab: TabDef }) {
   const colors = useTheme();
   const color = isFocused ? colors.text : colors.textSecondary;
+  const center = tab.name === 'finder';
 
   return (
     <Pressable
@@ -90,78 +73,33 @@ function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & 
         onPress?.(event);
       }}
       accessibilityRole="tab"
-      accessibilityLabel={tab.label}
+      accessibilityLabel={center ? 'Finden: was passt zu uns?' : tab.label}
       accessibilityState={{ selected: !!isFocused }}
       style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
-      <View style={styles.iconSlot}>
-        {tab.name === 'create' ? (
-          <CreateGlyph />
-        ) : tab.name === 'me' ? (
-          <ProfileGlyph focused={!!isFocused} />
-        ) : (
+      {center ? (
+        <View style={styles.centerSlot}>
+          <LinearGradient
+            colors={[...BrandGradient]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.centerButton, { borderColor: colors.background }, isFocused && styles.centerFocused]}>
+            <Icon name="search" size={26} color="#ffffff" />
+          </LinearGradient>
+        </View>
+      ) : (
+        <View style={styles.iconSlot}>
           <Icon name={tab.icon} size={26} color={color} />
-        )}
-      </View>
+        </View>
+      )}
       <Text
         style={[
           styles.label,
-          { color, fontFamily: isFocused ? FontFamily.bold : FontFamily.medium },
+          { color: center ? (isFocused ? colors.tint : colors.text) : color, fontFamily: isFocused || center ? FontFamily.bold : FontFamily.medium },
         ]}
         numberOfLines={1}>
         {tab.label}
       </Text>
     </Pressable>
-  );
-}
-
-/**
- * Das ＋ in der Mitte – als kleine Verlaufs-Kachel.
- *
- * Es ist die eine Handlung, zu der die Leiste einlädt, also trägt sie als einzige
- * Farbe, auch im Ruhezustand. Die Kachel statt eines Kreises ist das TikTok-Zitat:
- * Man erkennt den Knopf sofort als „hier entsteht etwas".
- */
-function CreateGlyph() {
-  return (
-    <LinearGradient
-      colors={[...BrandGradient]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.create}>
-      <Icon name="plus" size={20} color="#ffffff" />
-    </LinearGradient>
-  );
-}
-
-/**
- * Das eigene Profilbild – oder die Initialen, solange es keins gibt.
- *
- * Aktiv bekommt es einen Ring in Schriftfarbe, mit etwas Luft dazwischen: So
- * liest sich „hier bist du gerade", ohne dass das Foto selbst kleiner wird.
- */
-function ProfileGlyph({ focused }: { focused: boolean }) {
-  const colors = useTheme();
-  const { user } = useAuth();
-  const name = user?.name ?? '';
-
-  return (
-    <View style={[styles.avatarRing, { borderColor: focused ? colors.text : 'transparent' }]}>
-      <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
-        {user?.avatar ? (
-          <Image
-            source={{ uri: user.avatar }}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            accessible={false}
-          />
-        ) : name ? (
-          <Text style={[styles.initials, { color: colors.text }]}>{initialsOf(name)}</Text>
-        ) : (
-          <Icon name="user" size={16} color={colors.textSecondary} />
-        )}
-      </View>
-    </View>
   );
 }
 
@@ -175,7 +113,7 @@ function BottomBar(props: TabListProps) {
         styles.bar,
         {
           backgroundColor: colors.background,
-          borderTopColor: colors.backgroundSelected,
+          borderTopColor: colors.border,
           paddingBottom: Math.max(insets.bottom, Spacing.two),
         },
       ]}>
@@ -184,55 +122,33 @@ function BottomBar(props: TabListProps) {
   );
 }
 
-const AVATAR = 26;
-const RING = 2;
-const RING_GAP = 1.5;
+const CENTER = 58;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
   slot: { flex: 1 },
-  bar: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: Spacing.one + 2,
-    alignItems: 'center',
-  },
-  inner: {
-    flexDirection: 'row',
-    width: '100%',
-    maxWidth: MaxContentWidth,
-  },
-  button: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: Spacing.one,
-  },
-  /** Gleiche Höhe für alle Symbole – sonst tanzen die Beschriftungen. */
+  bar: { borderTopWidth: Stroke, paddingTop: Spacing.one + 2, alignItems: 'center' },
+  inner: { flexDirection: 'row', width: '100%', maxWidth: 520, alignSelf: 'center' },
+  button: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: Spacing.one },
   iconSlot: { height: 32, alignItems: 'center', justifyContent: 'center' },
-  pressed: { opacity: 0.6 },
-  label: { fontSize: 11 },
-  create: {
-    width: 42,
-    height: 30,
-    borderRadius: 10,
+  /** Gleiche Höhe wie die anderen – der Knopf ragt nach OBEN hinaus, die Beschriftungen bleiben auf einer Linie. */
+  centerSlot: { height: 32, alignItems: 'center', justifyContent: 'flex-end' },
+  centerButton: {
+    width: CENTER,
+    height: CENTER,
+    borderRadius: CENTER / 2,
+    borderWidth: 4,
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: -4,
+    shadowColor: '#dd2a7b',
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
-  avatarRing: {
-    width: AVATAR + (RING + RING_GAP) * 2,
-    height: AVATAR + (RING + RING_GAP) * 2,
-    borderRadius: 999,
-    borderWidth: RING,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatar: {
-    width: AVATAR,
-    height: AVATAR,
-    borderRadius: AVATAR / 2,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  initials: { fontFamily: FontFamily.bold, fontSize: 11 },
+  centerFocused: { transform: [{ scale: 1.05 }] },
+  pressed: { opacity: 0.7 },
+  label: { fontSize: 11.5 },
 });
+

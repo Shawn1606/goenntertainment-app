@@ -4,7 +4,7 @@
 # keine Domain und kein Zertifikat – also wird Laravel direkt auf Port 8080
 # geöffnet, damit das Prüfskript es ansprechen kann. Caddy startet dort gar nicht.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build --wait db node api
+#   docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d --build db api scheduler
 
 services:
   api:
@@ -13,3 +13,5 @@ services:
     environment:
       # In der Prüfung gibt es keinen Mail-Server; die 2FA-Codes landen im Log.
       MAIL_MAILER: log
+      # Der Durchgang kauft Credits – ohne echtes Geld.
+      PAYMENTS_MODE: test

@@ -4,8 +4,8 @@
 # Entwicklungs-PC ist Docker nicht installiert. Ohne diese Prüfung merkte man einen
 # kaputten Bauplan erst beim Ausrollen. Hier läuft bei jedem Push dasselbe wie auf
 # dem Server – nur ohne Caddy/HTTPS – und dann ein echter Durchgang:
-# Gesundheit → Registrierung (Laravel) → Aktivität mit Bild (Laravel → Node) → Bild
-# abrufen (über das gemeinsame Upload-Verzeichnis).
+# Gesundheit → Registrierung → Partner mit Logo (Upload) → Logo abrufen →
+# Angebot sichtbar → Credits im Testmodus → Zeitplan-Container läuft.
 name: Container
 
 on:
@@ -36,7 +36,7 @@ jobs:
         run: docker compose $COMPOSE_FILES config --quiet
 
       - name: Abbilder bauen und starten (ohne Caddy)
-        run: docker compose $COMPOSE_FILES up -d --build db node api
+        run: docker compose $COMPOSE_FILES up -d --build db api scheduler
 
       # Nicht `up --wait`: Das wertet den Einmal-Container storage-init, der sich
       # planmäßig beendet, je nach Compose-Version als Fehler.
@@ -54,41 +54,57 @@ jobs:
         run: |
           set -euo pipefail
           BASE=http://localhost:8080
+          JSON=(-H 'Content-Type: application/json' -H 'Accept: application/json')
 
           echo "--- Gesundheit (Laravel fragt die Datenbank)"
           curl -fsS "$BASE/api/health" | tee /dev/stderr | grep -q '"ok":true'
 
-          echo "--- Registrierung über Laravel"
+          echo "--- Kategorien kommen aus der Migration"
+          test "$(curl -fsS "$BASE/api/interests" | jq '.data | length')" -ge 20
+
+          echo "--- Registrierung"
           STAMP=$(date +%s)
-          REG=$(curl -fsS -X POST "$BASE/api/register" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"ci-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"ci\"}")
+          EMAIL="ci-$STAMP@example.invalid"
+          REG=$(curl -fsS -X POST "$BASE/api/register" "${JSON[@]}" \
+            -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"$EMAIL\",\"password\":\"Container-Test-$STAMP\",\"terms_version\":\"ci\"}")
           TOKEN=$(echo "$REG" | jq -r .token)
           test -n "$TOKEN" && test "$TOKEN" != null
+          AUTH=(-H "Authorization: Bearer $TOKEN")
+          test "$(echo "$REG" | jq -r .user.club_plan)" = free
 
-          echo "--- Aktivität mit Bild: Laravel baut das Formular neu und reicht es an Node weiter"
+          echo "--- Admin-Rechte über die Konsole"
+          docker compose $COMPOSE_FILES exec -T api php artisan admin:grant "$EMAIL"
+
+          echo "--- Partner anlegen und Logo hochladen (schreibt in das eingebundene storage/)"
+          PARTNER=$(curl -fsS -X POST "$BASE/api/admin/partners" "${JSON[@]}" "${AUTH[@]}" \
+            -d '{"name":"CI Kletterhalle","city":"Göttingen","is_active":true}' | jq -r .data.id)
           python3 -c "import zlib,struct;row=b'\x00'+b'\xfe\x2c\x55'*8;raw=row*8;c=lambda t,d:struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff);open('/tmp/ci.png','wb').write(b'\x89PNG\r\n\x1a\n'+c(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))+c(b'IDAT',zlib.compress(raw))+c(b'IEND',b''))"
-          STARTS=$(date -u -d '+1 day' +%Y-%m-%dT18:00:00Z)
-          ACT=$(curl -fsS -X POST "$BASE/api/activities" \
-            -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' \
-            -F 'title=Container-Test' -F 'description=Läuft im Container' \
-            -F 'location=Göttingen' -F "starts_at=$STARTS" \
-            -F 'banner=@/tmp/ci.png;type=image/png')
-          echo "$ACT" | jq '{id: .data.id, title: .data.title, banner: .data.banner_url}'
-          BANNER=$(echo "$ACT" | jq -r .data.banner_url)
-          case "$BANNER" in
-            https://ci.example.invalid/storage/banners/*) ;;
-            *) echo "Unerwartete Bild-Adresse: $BANNER"; exit 1 ;;
+          LOGO=$(curl -fsS -X POST "$BASE/api/admin/partners/$PARTNER/image" "${AUTH[@]}" -H 'Accept: application/json' \
+            -F 'kind=logo' -F 'image=@/tmp/ci.png;type=image/png' | jq -r .data.logo_url)
+          case "$LOGO" in
+            https://ci.example.invalid/storage/partners/*) ;;
+            *) echo "Unerwartete Bild-Adresse: $LOGO"; exit 1 ;;
           esac
 
-          echo "--- Bild abrufen: Node hat es gespeichert, Laravel liefert es aus"
-          curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' "$BASE${BANNER#https://ci.example.invalid}"
+          echo "--- Logo abrufen: Apache liefert es aus dem eingebundenen Ordner"
+          curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' "$BASE${LOGO#https://ci.example.invalid}"
+
+          echo "--- Angebot anlegen – es erscheint in der Liste"
+          OFFER=$(curl -fsS -X POST "$BASE/api/admin/offers" "${JSON[@]}" "${AUTH[@]}" \
+            -d "{\"partner_id\":$PARTNER,\"kind\":\"activity\",\"title\":\"CI Klettern\",\"price_cents\":2400,\"price_credits\":320,\"is_active\":true}" | jq -r .data.id)
+          curl -fsS "$BASE/api/offers" "${AUTH[@]}" -H 'Accept: application/json' | jq -e ".data | map(.id) | index($OFFER) != null"
+
+          echo "--- Credits kaufen (Testmodus, kein echtes Geld)"
+          BAL=$(curl -fsS -X POST "$BASE/api/wallet/purchase" "${JSON[@]}" "${AUTH[@]}" -d '{"credits":50}' | jq -r .data.balance)
+          test "$BAL" = 50
 
           echo "--- Wortfilter greift auch im Container"
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/register" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\"}")
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/register" "${JSON[@]}" \
+            -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\"}")
           test "$CODE" = 422
+
+          echo "--- Zeitplan-Container läuft und kennt club:renew"
+          docker compose $COMPOSE_FILES exec -T scheduler php artisan schedule:list | grep -q 'club:renew'
 
           echo "Alles in Ordnung."
 

@@ -39,14 +39,13 @@ return [
         ],
 
         /**
-         * Die Nutzer-Uploads - Profilbilder, Banner, Storys, Beitragsbilder.
+         * Die Uploads - Partner-Logos und -Titelbilder, Angebotsbilder, Beweise
+         * zu Meldungen und die Profilbilder aus der Zeit vor dem Umbau.
          *
-         * `root` zeigt ABSICHTLICH nicht in dieses Projekt, sondern auf den
-         * Ordner, den schon das Node-Backend benutzt (server/storage). Solange
-         * beide Server laufen, muessen beide dieselben Dateien sehen: Eine Kopie
-         * liefe sofort auseinander - ein Profilbild, das ueber Laravel
-         * hochgeladen wird, waere fuer die noch nicht portierten Routen
-         * unsichtbar und umgekehrt. Ein Ordner, zwei Leser.
+         * Am PC liegt der Ordner weiter unter server/storage, wo die alten
+         * Dateien schon sind (api/public/storage verweist dorthin). Im Container
+         * setzt deploy/docker-compose.yml UPLOADS_ROOT auf den eingebundenen,
+         * beschreibbaren Ordner, den Apache unter /storage ausliefert.
          *
          * In der DB stehen relative Pfade ('avatars/ab12cd.jpg'); die fertige
          * Adresse baut App\Support\Media bei jeder Antwort neu.
@@ -57,7 +56,7 @@ return [
          */
         'public' => [
             'driver' => 'local',
-            'root' => base_path('../server/storage'),
+            'root' => env('UPLOADS_ROOT') ?: base_path('../server/storage'),
             'url' => rtrim(env('PUBLIC_URL') ?: env('APP_URL', 'http://localhost'), '/').'/storage',
             'visibility' => 'public',
             'throw' => false,

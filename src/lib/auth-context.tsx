@@ -22,29 +22,17 @@ type AuthContextValue = {
    * `null` heißt: angemeldet.
    */
   login: (email: string, password: string) => Promise<TwoFactorChallenge | null>;
-  /** Zweiter Schritt der Anmeldung: Code (oder Wiederherstellungscode) eingeben. */
   completeTwoFactor: (challenge: string, code: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
-  /**
-   * Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat.
-   *
-   * Für Endpunkte, die das Konto ändern, ohne `updateProfile` zu sein – etwa
-   * Profilbild und Banner (siehe `api.setProfileImage`). Ohne das zeigten
-   * Kopfzeile und Konto-Blatt weiter das alte Bild. Bewusst kein zweiter
-   * Netzaufruf wie bei `refreshUser`: Die Antwort IST schon der neue Stand.
-   */
+  /** Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat. */
   applyUser: (user: User) => void;
   /**
-   * Die eigenen Daten neu vom Server holen.
-   *
-   * Nötig, weil sich das Konto auch OHNE Zutun der Person ändern kann: Ein Admin
-   * bestätigt eine Anfrage auf Creator (siehe admin-requests.tsx), und die App
-   * wüsste bis zum nächsten Anmelden nichts davon – Events erstellen wäre
-   * freigeschaltet, der Knopf dafür aber weiter versteckt. Scheitert still: Ein
-   * fehlgeschlagener Abgleich darf den Bildschirm nicht mit einem Fehler
-   * überziehen, der mit dem zu tun hat, was man dort gerade macht.
+   * Einzelne Felder sofort ändern – vor allem der Credit-Stand nach Kauf,
+   * Buchung oder Stempel. Die Kopfzeile zählt dann mit, ohne `/user` neu zu laden.
    */
+  patchUser: (patch: Partial<User>) => void;
+  /** Die eigenen Daten neu vom Server holen. Scheitert still. */
   refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -70,10 +58,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(me);
           }
         } catch (error) {
-          // Token ungültig (401) → verwerfen. Bei reinem Netzfehler behalten.
-          if (error instanceof ApiError && error.status === 401) {
+          // Token ungültig (401) oder Konto gesperrt (403) → verwerfen. Bei
+          // reinem Netzfehler behalten, damit man offline nicht abgemeldet wird.
+          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             await clearToken();
-          } else if (active && stored) {
+          } else if (active) {
             setToken(stored);
           }
         }
@@ -104,12 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return null;
       },
       completeTwoFactor: async (challenge, code) => {
-        const result = await api.loginTwoFactor(challenge, code);
-        await applyAuth(result);
+        await applyAuth(await api.loginTwoFactor(challenge, code));
       },
       register: async (input) => {
-        const result = await api.register(input);
-        await applyAuth(result);
+        await applyAuth(await api.register(input));
       },
       updateProfile: async (input) => {
         if (!token) throw new Error('Nicht angemeldet.');
@@ -117,14 +104,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(updated);
       },
       applyUser: (updated) => setUser(updated),
+      patchUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
       refreshUser: async () => {
         if (!token) return;
         try {
           const { user: me } = await api.me(token);
           setUser(me);
         } catch {
-          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. Ein
-          // ungültiger Token faellt ohnehin beim naechsten Start auf.
+          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen.
         }
       },
       logout: async () => {
@@ -152,4 +139,10 @@ export function useAuth(): AuthContextValue {
     throw new Error('useAuth muss innerhalb von <AuthProvider> benutzt werden.');
   }
   return ctx;
+}
+
+/** Das angemeldete Konto samt Token – für Screens hinter dem Login-Wächter. */
+export function useSession(): { token: string; user: User } | null {
+  const { token, user } = useAuth();
+  return token && user ? { token, user } : null;
 }

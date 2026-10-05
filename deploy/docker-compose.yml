@@ -1,18 +1,64 @@
 # GÖ4Fun auf einem Server – alle Teile als Container.
 #
 #   Internet ─► caddy (HTTPS, Port 80/443)
-#                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
-#                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
-#                 db  (MySQL)  ◄── beide Backends
+#                 └─► api        (Laravel, api/)   die ganze API + Bilder unter /storage
+#                 scheduler      (dasselbe Abbild)  stündlich: Abos verlängern
+#                 db             (MySQL)            ◄── api und scheduler
 #
-# Genau die Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node dahinter), nur
-# dass niemand außer Caddy von außen erreichbar ist.
+# Das Node-Backend (server/) ist seit dem Marktplatz-Umbau nicht mehr nötig:
+# Laravel beantwortet alle Routen selbst und verwaltet auch das Schema
+# (`php artisan migrate` beim Start, siehe api/docker/entrypoint.sh).
+# Von außen erreichbar ist nur Caddy.
 #
 # Starten (im Ordner deploy/, nach dem Ausfüllen von .env):
 #
 #   docker compose up -d --build
 #
 # Anleitung Schritt für Schritt: deploy/README.md
+
+x-laravel-env: &laravel-env
+  APP_NAME: GÖ4Fun
+  APP_ENV: production
+  # Niemals true auf dem Server: Laravel zeigte dann bei jedem Fehler
+  # Quelltext, Pfade und Umgebungsvariablen – auch Passwörter.
+  APP_DEBUG: 'false'
+  APP_KEY: ${APP_KEY:?APP_KEY fehlt in deploy/.env (siehe README, Schritt 4)}
+  APP_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
+  PUBLIC_URL: https://${DOMAIN:?}
+  # UTC – MySQL läuft im Container ohnehin in UTC, und die API hängt an Zeiten
+  # aus der Datenbank ein „Z" an. (Am Entwicklungs-PC steht APP_TIMEZONE auf
+  # Europe/Berlin, weil MySQL dort in deutscher Ortszeit läuft.)
+  APP_TIMEZONE: UTC
+  APP_LOCALE: de
+  APP_FALLBACK_LOCALE: de
+  # Fehler landen in `docker compose logs api`, nicht in einer Datei im Container.
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: ${LOG_LEVEL:-warning}
+  DB_CONNECTION: mysql
+  DB_HOST: db
+  DB_PORT: '3306'
+  DB_DATABASE: goenntertainment
+  DB_USERNAME: goenn
+  DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt in deploy/.env}
+  # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche, Gutscheine) im Container
+  # array = keine Sitzungen – die API arbeitet nur mit Tokens
+  # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
+  CACHE_STORE: file
+  SESSION_DRIVER: array
+  QUEUE_CONNECTION: sync
+  # Zahlungen: `off` (Standard auf dem Server) lehnt Käufe und Abos ab, `test`
+  # bucht ohne echtes Geld. Echte Zahlungen kommen erst mit einem Zahlungsanbieter.
+  PAYMENTS_MODE: ${PAYMENTS_MODE:-off}
+  # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet
+  # die App „Wir konnten dir gerade keinen Code schicken".
+  MAIL_MAILER: ${MAIL_MAILER:-smtp}
+  MAIL_HOST: ${MAIL_HOST:-}
+  MAIL_PORT: ${MAIL_PORT:-587}
+  MAIL_USERNAME: ${MAIL_USERNAME:-}
+  MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+  MAIL_SCHEME: ${MAIL_SCHEME:-}
+  MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-noreply@${DOMAIN}}
+  MAIL_FROM_NAME: GÖ4Fun
 
 services:
   db:
@@ -24,10 +70,8 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt in deploy/.env}
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD fehlt in deploy/.env}
     volumes:
+      # Die Tabellen legt Laravel beim Start an (php artisan migrate).
       - db-data:/var/lib/mysql
-      # Legt beim ALLERERSTEN Start (leeres Volume) alle Tabellen an. Spätere
-      # Ergänzungen macht das Node-Backend beim Start selbst (ensureSchema).
-      - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
     healthcheck:
       test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-p${DB_ROOT_PASSWORD}']
       interval: 5s
@@ -37,29 +81,24 @@ services:
 
   # Bereitet den Upload-Ordner vor und beendet sich dann wieder.
   #
-  # Docker legt einen fehlenden Ordner für ein Bind-Mount als root an. Das
-  # Node-Backend läuft aber absichtlich NICHT als root (Benutzer `node`, UID 1000)
-  # und könnte dort nichts speichern – jeder Upload scheiterte mit „Serverfehler".
-  # Dieser Einmal-Container gibt den Ordner dem Benutzer `node`.
+  # Docker legt einen fehlenden Ordner für ein Bind-Mount als root an. Apache
+  # läuft aber als `www-data` (UID 33) und könnte dort nichts speichern – jeder
+  # Upload (Partner-Logo, Angebotsbild) scheiterte mit „Serverfehler".
   #
-  # Als Liste und in EINER Zeile: Als gefalteter Block (`>`) mit tiefer
-  # eingerückten Folgezeilen behält YAML die Zeilenumbrüche – die Shell las
-  # dann `/storage/posts` als eigenen Befehl und scheiterte am `&&` am
-  # Zeilenanfang (`syntax error: unexpected "&&"`), und der ganze Stapel startete nicht.
+  # Als Liste und in EINER Zeile: Als gefalteter YAML-Block behielt die Shell
+  # die Zeilenumbrüche und scheiterte am `&&` am Zeilenanfang.
   storage-init:
     image: busybox:1.37
-    command:
-      - sh
-      - -c
-      - mkdir -p /storage/avatars /storage/banners /storage/evidence /storage/posts /storage/stories /storage/user-banners && chown -R 1000:1000 /storage
+    command: ['sh', '-c', 'mkdir -p /storage && chown -R 33:33 /storage']
     volumes:
       - ./storage:/storage
 
-  node:
+  api:
     build:
-      context: ../server
+      context: ../api
       additional_contexts:
         shared: ../shared
+    image: goenn/api:local
     restart: unless-stopped
     depends_on:
       db:
@@ -67,97 +106,30 @@ services:
       storage-init:
         condition: service_completed_successfully
     environment:
-      DB_HOST: db
-      DB_PORT: '3306'
-      DB_DATABASE: goenntertainment
-      DB_USERNAME: goenn
-      DB_PASSWORD: ${DB_PASSWORD:?}
-      PORT: '8000'
-      PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
-      MODERATION_MODEL: ${MODERATION_MODEL:-claude-opus-5}
-      MODERATION_BLOCK_SEVERITY: ${MODERATION_BLOCK_SEVERITY:-2}
-      MODERATION_TIMEOUT_SEVERITY: ${MODERATION_TIMEOUT_SEVERITY:-2}
-      MODERATION_TIMEOUT_DAYS: ${MODERATION_TIMEOUT_DAYS:-7}
-      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-true}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
-      FEATURE_IMPORTED_EVENTS: ${FEATURE_IMPORTED_EVENTS:-}
-      FEATURE_ACCOUNT_TIERS: ${FEATURE_ACCOUNT_TIERS:-}
+      <<: *laravel-env
+      # Nur dieser Container spielt Schema-Änderungen ein, nicht auch noch der
+      # scheduler – zwei gleichzeitige `migrate` könnten sich in die Quere kommen.
+      RUN_MIGRATIONS: 'true'
+      # Uploads schreibt Laravel genau in den Ordner, den Apache unter /storage ausliefert.
+      UPLOADS_ROOT: /var/www/api/public/storage
     volumes:
-      - ./storage:/app/storage
-    healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/api/health | grep -q "\"ok\":true"']
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
+      - ./storage:/var/www/api/public/storage
 
-  api:
-    build:
-      context: ../api
-      additional_contexts:
-        shared: ../shared
+  # Führt den Laravel-Zeitplan aus (api/routes/console.php): stündlich
+  # `club:renew` – Abos verlängern, gekündigte auslaufen lassen, Monats-Credits.
+  scheduler:
+    image: goenn/api:local
     restart: unless-stopped
+    user: www-data
     depends_on:
-      db:
-        condition: service_healthy
-      node:
-        condition: service_healthy
+      api:
+        condition: service_started
     environment:
-      APP_NAME: GÖ4Fun
-      APP_ENV: production
-      # Niemals true auf dem Server: Laravel zeigte dann bei jedem Fehler
-      # Quelltext, Pfade und Umgebungsvariablen – auch Passwörter.
-      APP_DEBUG: 'false'
-      APP_KEY: ${APP_KEY:?APP_KEY fehlt in deploy/.env (siehe README, Schritt 4)}
-      APP_URL: https://${DOMAIN:?}
-      PUBLIC_URL: https://${DOMAIN:?}
-      # UTC – und zwar überall (MySQL und Node laufen im Container ohnehin in UTC).
-      # Beide Backends hängen an Zeiten aus der Datenbank ein „Z" an, behandeln sie
-      # also als UTC. Am Entwicklungs-PC läuft MySQL dagegen in deutscher Ortszeit;
-      # dort steht APP_TIMEZONE deshalb auf Europe/Berlin, damit Laravel zu den
-      # vorhandenen Daten passt. Auf einem frischen Server gibt es diese Altlast
-      # nicht, und alle drei sprechen dieselbe Zeit.
-      APP_TIMEZONE: UTC
-      APP_LOCALE: de
-      APP_FALLBACK_LOCALE: de
-      # Fehler landen in `docker compose logs api`, nicht in einer Datei im Container.
-      LOG_CHANNEL: stderr
-      LOG_LEVEL: ${LOG_LEVEL:-warning}
-      DB_CONNECTION: mysql
-      DB_HOST: db
-      DB_PORT: '3306'
-      DB_DATABASE: goenntertainment
-      DB_USERNAME: goenn
-      DB_PASSWORD: ${DB_PASSWORD:?}
-      # Alles, was Laravel noch nicht selbst kann, geht an das Node-Backend.
-      NODE_FALLBACK_URL: http://node:8000
-      # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
-      # Standard-Tabellen für Cache/Sitzungen/Warteschlange gibt es dort nicht.
-      # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche) im Container
-      # array = keine Sitzungen – die API arbeitet nur mit Tokens
-      # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
-      CACHE_STORE: file
-      SESSION_DRIVER: array
-      QUEUE_CONNECTION: sync
-      # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet
-      # die App „Wir konnten dir gerade keinen Code schicken".
-      MAIL_MAILER: ${MAIL_MAILER:-smtp}
-      MAIL_HOST: ${MAIL_HOST:-}
-      MAIL_PORT: ${MAIL_PORT:-587}
-      MAIL_USERNAME: ${MAIL_USERNAME:-}
-      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
-      MAIL_SCHEME: ${MAIL_SCHEME:-}
-      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-noreply@${DOMAIN}}
-      MAIL_FROM_NAME: GÖ4Fun
-    volumes:
-      # Dieselben Uploads, die Node speichert – Laravel liefert sie unter /storage
-      # aus (so wie lokal über die Verknüpfung api/public/storage). Nur lesend:
-      # Geschrieben wird ausschließlich von Node.
-      - ./storage:/var/www/api/public/storage:ro
+      <<: *laravel-env
+    command: ['php', 'artisan', 'schedule:work']
+    # Das Abbild prüft sonst Apache – den gibt es in diesem Container nicht.
+    healthcheck:
+      disable: true
 
   caddy:
     image: caddy:2-alpine

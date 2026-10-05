@@ -20,17 +20,9 @@ import { Icon } from '@/components/ui/icon';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { LinkRow, RowDivider, RowNote, SettingGroup, SwitchRow } from '@/components/ui/setting-row';
 import { TextField } from '@/components/ui/text-field';
-import { Features } from '@/constants/features';
 import { Links, supportMailto } from '@/constants/links';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
 import { LEGAL_VERSION, type LegalDocId } from '@/domain/legal';
-import {
-  ACCOUNT_TIERS,
-  normalizeAccountType,
-  tierFor,
-  type AccountTier,
-  type AccountType,
-} from '@/domain/account';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useBrandSurface, useTheme } from '@/hooks/use-theme';
 import { ApiError } from '@/lib/api';
@@ -75,7 +67,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const colors = useTheme();
   const surface = useBrandSurface();
-  const backFallback = useHeaderBackFallback('/me');
+  const backFallback = useHeaderBackFallback('/account');
 
   /** Ein Rechtstext in der App – nicht im Browser (siehe Gruppe „Rechtliches"). */
   function openLegal(doc: LegalDocId) {
@@ -128,33 +120,6 @@ export default function SettingsScreen() {
       );
     } finally {
       setSavingInterests(false);
-    }
-  }
-
-  // Kontostufe (Standard/Creator/Business/Business Plus). Nur Admins dürfen
-  // umstellen – das Backend weist alle anderen mit 403 ab, für sie bleibt der
-  // Block eine Anzeige mit dem Weg zum Upgrade.
-  const accountType: AccountType = normalizeAccountType(user?.account_type);
-  const currentTier = tierFor(user?.account_type);
-  const [savingAccountType, setSavingAccountType] = useState(false);
-  const [accountTypeError, setAccountTypeError] = useState<string | null>(null);
-
-  async function onSelectAccountType(next: AccountType) {
-    // Gegen den ROHEN Wert prüfen, nicht gegen die normalisierte Anzeige:
-    // Google-Konten starten ohne Kontotyp und Bestandskonten stehen evtl. noch
-    // auf dem alten 'personal' – in beiden Fällen muss „Standard" speicherbar
-    // bleiben, damit der Wert in der Datenbank gerade gezogen wird.
-    if (next === user?.account_type || savingAccountType) return;
-    setSavingAccountType(true);
-    setAccountTypeError(null);
-    try {
-      await updateProfile({ account_type: next });
-    } catch (err) {
-      setAccountTypeError(
-        err instanceof ApiError ? err.firstError() : 'Umstellen fehlgeschlagen. Bitte erneut versuchen.',
-      );
-    } finally {
-      setSavingAccountType(false);
     }
   }
 
@@ -325,80 +290,6 @@ export default function SettingsScreen() {
               onSave={saveEdit}
             />
 
-            {/* Kontostufen sind gerade ausgeblendet (src/constants/features.ts):
-                Jedes Konto kann dasselbe, also gibt es hier nichts zu wählen. */}
-            {Features.accountTiers ? (
-              <>
-                <RowDivider />
-                {user?.is_admin ? (
-                  <View style={styles.accountTypeRow}>
-                    <View style={styles.blockHeader}>
-                      <View style={styles.rowLabel}>
-                        <Icon name="tag" size={18} color={colors.tint} />
-                        <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                          Kontotyp
-                        </ThemedText>
-                      </View>
-                      {savingAccountType ? <ActivityIndicator size="small" color={colors.tint} /> : null}
-                    </View>
-
-                    {/* Untereinander statt nebeneinander: Vier Stufen mit je einem
-                        erklärenden Satz passen in keine Zeile. */}
-                    <View style={styles.tierOptions}>
-                      {ACCOUNT_TIERS.map((tier) => (
-                        <TierOption
-                          key={tier.type}
-                          tier={tier}
-                          selected={accountType === tier.type}
-                          disabled={savingAccountType}
-                          onPress={() => onSelectAccountType(tier.type)}
-                          colors={colors}
-                        />
-                      ))}
-                    </View>
-
-                    <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                      Die Stufe schaltet Rechte frei: Events erstellen ab Creator, der Business-Bereich
-                      mit Umsatz und Reichweite ab Business. Du kannst jederzeit wechseln.
-                    </ThemedText>
-
-                    {accountTypeError ? (
-                      <ThemedText type="small" style={styles.errorText}>
-                        {accountTypeError}
-                      </ThemedText>
-                    ) : null}
-                  </View>
-                ) : (
-                  /* Ohne Admin-Rechte ist die Stufe eine Anzeige: Umstellen darf nur
-                     der Server-seitig geprüfte Admin. Der Weg zum Upgrade läuft über
-                     das Feld oben links auf der Startseite – bewusst nur dort, damit
-                     es nicht zwei Wege gibt, die auseinanderlaufen können. */
-                  <View style={styles.accountTypeRow}>
-                    <View style={styles.blockHeader}>
-                      <View style={styles.rowLabel}>
-                        <Icon name="tag" size={18} color={colors.tint} />
-                        <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                          Kontotyp
-                        </ThemedText>
-                      </View>
-                      <ThemedText style={styles.value}>{currentTier.label}</ThemedText>
-                    </View>
-
-                    <View style={styles.perkList}>
-                      {currentTier.perks.map((perk) => (
-                        <ThemedText key={perk} type="small" style={{ color: colors.textSecondary }}>
-                          · {perk}
-                        </ThemedText>
-                      ))}
-                    </View>
-
-                    <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                      {'Deinen nächsten Schritt findest du über „Upgrade" oben links auf der Startseite.'}
-                    </ThemedText>
-                  </View>
-                )}
-              </>
-            ) : null}
           </SettingGroup>
 
 
@@ -529,32 +420,32 @@ export default function SettingsScreen() {
             hint="Festlegen, worüber wir dich informieren.">
             <SwitchRow
               icon="map-pin"
-              title="Neues in deiner Nähe"
-              hint="Wenn jemand ein Event in deinem Umkreis erstellt"
+              title="Neue Partner in der Nähe"
+              hint="Wenn ein neuer Partner in deiner Nähe dazukommt"
               value={settings.notifyNearby}
               onValueChange={(v) => update('notifyNearby', v)}
             />
             <RowDivider />
             <SwitchRow
               icon="clock"
-              title="Erinnerung vor dem Start"
-              hint="Kurz bevor ein Event losgeht, bei dem du dabei bist"
+              title="Erinnerung an Buchungen"
+              hint="Bevor eine Buchung abläuft"
               value={settings.notifyReminder}
               onValueChange={(v) => update('notifyReminder', v)}
             />
             <RowDivider />
             <SwitchRow
               icon="users"
-              title="Neue Teilnehmer:innen"
-              hint="Wenn jemand deinem Event beitritt"
+              title="Neues in deinen Gruppen"
+              hint="Neue Nachrichten und Mitglieder"
               value={settings.notifyJoins}
               onValueChange={(v) => update('notifyJoins', v)}
             />
             <RowDivider />
             <SwitchRow
               icon="edit"
-              title="Änderungen an Events"
-              hint="Neue Uhrzeit, neuer Ort oder abgesagt"
+              title="Angebote und Aktionen"
+              hint="Neue Rabatte bei unseren Partnern"
               value={settings.notifyUpdates}
               onValueChange={(v) => update('notifyUpdates', v)}
             />
@@ -562,7 +453,7 @@ export default function SettingsScreen() {
             <SwitchRow
               icon="mail"
               title="Wochenrückblick"
-              hint="Einmal pro Woche, was du verpasst hast"
+              hint="Einmal pro Woche: Stempel, Credits, Tipps"
               value={settings.notifyDigest}
               onValueChange={(v) => update('notifyDigest', v)}
             />
@@ -582,7 +473,7 @@ export default function SettingsScreen() {
               title="Standort verwenden"
               hint={
                 settings.useLocation
-                  ? 'Für „In deiner Nähe" und Entfernungen auf den Karten'
+                  ? 'Für Entfernungen, die Karte und den Stempel am Aufkleber'
                   : 'Aus – Entfernungen und „In deiner Nähe" bleiben leer'
               }
               value={settings.useLocation}
@@ -594,7 +485,7 @@ export default function SettingsScreen() {
               title="Vibration"
               hint={
                 settings.haptics
-                  ? 'Kurze Rückmeldung beim Auswählen und Beitreten'
+                  ? 'Kurze Rückmeldung beim Antippen, Buchen und Stempeln'
                   : 'Aus – die App bleibt still'
               }
               value={settings.haptics}
@@ -606,7 +497,7 @@ export default function SettingsScreen() {
               title="Klänge"
               hint={
                 settings.sounds
-                  ? 'Kurze Töne beim Beitreten und bei erreichten Zielen'
+                  ? 'Kurze Töne beim Buchen und bei vollen Stempelkarten'
                   : 'Aus – Töne gibt es nur, wenn du sie einschaltest'
               }
               value={settings.sounds}
@@ -657,11 +548,11 @@ export default function SettingsScreen() {
           {/* Admin-Bereich – vorher hing er im Konto-Blatt auf der Startseite. Das Blatt
               gibt es nicht mehr; hier suchen Admins ohnehin zuerst. */}
           {user?.is_admin ? (
-            <SettingGroup label="Admin" hint="Nutzer, Meldungen und Moderation verwalten.">
+            <SettingGroup label="Admin" hint="Partner, Angebote und Nutzer verwalten.">
               <LinkRow
                 icon="shield"
                 title="Admin-Bereich öffnen"
-                hint="Dashboard, Nutzer, Meldungen, KI-Prüfung"
+                hint="Partner, Angebote, Gutscheine, Nutzer, Meldungen"
                 onPress={() => router.push('/admin-dashboard')}
               />
             </SettingGroup>
@@ -688,7 +579,7 @@ export default function SettingsScreen() {
                 openLink(
                   supportMailto(
                     'Problem melden',
-                    'Was ist passiert?\n\nWo ist es passiert (Event, Nutzer, Screen)?\n\n',
+                    'Was ist passiert?\n\nWo ist es passiert (Partner, Gruppe, Screen)?\n\n',
                   ),
                 )
               }
@@ -714,8 +605,8 @@ export default function SettingsScreen() {
             <RowDivider />
             <LinkRow
               icon="shield"
-              title="Haftung und Events"
-              hint="Wer für ein Event verantwortlich ist – und wer nicht"
+              title="Haftung und Partner"
+              hint="Wer wofür verantwortlich ist"
               onPress={() => openLegal('liability')}
             />
             <RowDivider />
@@ -738,7 +629,7 @@ export default function SettingsScreen() {
             <LinkRow
               icon="trash"
               title="Konto löschen"
-              hint="Konto, Events und Verlauf endgültig entfernen"
+              hint="Konto, Credits und Stempel endgültig entfernen"
               onPress={onDeleteAccount}
               danger
             />
@@ -763,70 +654,6 @@ export default function SettingsScreen() {
 }
 
 type ThemeColors = ReturnType<typeof useTheme>;
-
-/**
- * Eine Stufe in der Kontotyp-Auswahl.
- *
- * Was die Stufe kann, steht nur bei der ausgewählten: Vier Listen gleichzeitig
- * wären eine Wand aus Text. Der eine Satz (`tagline`) reicht, um zu erkennen,
- * worum es geht – die Einzelheiten kommen, sobald man sie gewählt hat.
- */
-function TierOption({
-  tier,
-  selected,
-  disabled,
-  onPress,
-  colors,
-}: {
-  tier: AccountTier;
-  selected: boolean;
-  disabled: boolean;
-  onPress: () => void;
-  colors: ThemeColors;
-}) {
-  const surface = useBrandSurface();
-
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="radio"
-      accessibilityState={{ selected, disabled }}
-      style={({ pressed }) => [
-        styles.tierOption,
-        {
-          backgroundColor: selected ? surface.chipBgStrong : 'transparent',
-          borderColor: selected ? colors.tint : surface.chipBorder,
-        },
-        pressed && styles.pressed,
-      ]}>
-      <View style={styles.tierHead}>
-        <ThemedText type="smallBold" style={{ color: selected ? colors.tint : colors.text }}>
-          {tier.label}
-        </ThemedText>
-        {selected ? (
-          <ThemedText type="small" style={{ color: colors.tint }}>
-            ✓ aktiv
-          </ThemedText>
-        ) : null}
-      </View>
-
-      <ThemedText type="small" style={{ color: colors.textSecondary }}>
-        {tier.tagline}
-      </ThemedText>
-
-      {selected ? (
-        <View style={styles.perkList}>
-          {tier.perks.map((perk) => (
-            <ThemedText key={perk} type="small" style={{ color: colors.textSecondary }}>
-              · {perk}
-            </ThemedText>
-          ))}
-        </View>
-      ) : null}
-    </Pressable>
-  );
-}
 
 /**
  * Konto-Zeile mit Inline-Bearbeitung: zeigt normalerweise Wert + „Bearbeiten“;

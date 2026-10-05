@@ -1,7 +1,7 @@
 /**
  * Gründe für eine Meldung – Schlüssel und Beschriftung.
  *
- * Die **Schlüssel** gehören dem Server (`server/src/reports.js`), die **Texte**
+ * Die **Schlüssel** gehören dem Server (`SafetyController::REASONS`), die **Texte**
  * dieser Datei. Warum die Trennung: Der Server muss nur wissen, welche Werte er
  * annimmt; die Formulierung wird umgeschrieben, gekürzt und irgendwann übersetzt,
  * und das soll ohne Änderung am Backend gehen. Ein Test im Server hält beide

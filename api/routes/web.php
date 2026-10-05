@@ -16,7 +16,7 @@ Route::get('/', function () {
 Route::get('/c/{token}', fn (string $token) => view('open-app', [
     'title' => 'Stempel sammeln',
     'line' => 'Öffne GÖ4Fun, um bei diesem Partner einzuchecken und deinen Stempel zu holen.',
-    'deepLink' => 'goenntertainmentapp://checkin/'.rawurlencode($token),
+    'deepLink' => 'goenntertainmentapp://c/'.rawurlencode($token),
 ]))->where('token', '[A-Za-z0-9]{16,40}');
 
 Route::get('/g/{code}', fn (string $code) => view('open-app', [

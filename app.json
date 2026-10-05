@@ -30,8 +30,12 @@
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.NFC",
         "android.permission.MODIFY_AUDIO_SETTINGS"
+      ],
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -52,12 +56,33 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Damit wir dir deinen Standort auf der Karte und Aktivitäten in deiner Nähe zeigen können."
+          "locationWhenInUsePermission": "Damit wir dir Partner in deiner Nähe zeigen und deinen Besuch beim Einchecken bestätigen können."
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-audio",
-      "expo-asset"
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Damit du den QR-Code am GÖ4Fun-Aufkleber eines Partners scannen kannst.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "Damit du dein Handy zum Einchecken an den GÖ4Fun-Aufkleber eines Partners halten kannst."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

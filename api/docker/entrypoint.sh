@@ -21,10 +21,12 @@ fi
 php artisan config:cache
 php artisan event:cache
 
-# KEIN `php artisan migrate`: Das Datenbank-Schema gehört dem Node-Backend
-# (server/schema.sql + ensureSchema beim Start). Laravels Standard-Migrationen
-# würden versuchen, die Tabelle `users` ein zweites Mal anzulegen, und der Start
-# bräche ab. Cache, Sitzungen und Warteschlange laufen deshalb ohne eigene
-# Tabellen (siehe deploy/docker-compose.yml).
+# Schema-Änderungen einspielen. Laravel verwaltet das Schema allein (api/database/
+# migrations); die erste Migration legt die Tabellen aus der Node-Zeit nur an,
+# wenn es sie noch nicht gibt, und ergänzt sonst nur fehlende Spalten.
+# Nur im Container mit RUN_MIGRATIONS=true (api), nicht im scheduler.
+if [ "$RUN_MIGRATIONS" = "true" ]; then
+  php artisan migrate --force
+fi
 
 exec "$@"

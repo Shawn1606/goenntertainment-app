@@ -35,11 +35,6 @@ export const MAX_MESSAGE_LENGTH = 1000;
  */
 export const SAME_AUTHOR_WINDOW_MS = 5 * 60 * 1000;
 
-// Die Ungelesen-Plakette liegt in `src/domain/unread-badge.ts`. Sie stand hier,
-// solange nur Chats einen Zähler hatten – seit die Glocke (Benachrichtigungen)
-// denselben trägt, wäre sie hier eine Chat-Regel, die vier Nicht-Chats
-// mitbenutzen.
-
 /** Nur die Felder, die die Anzeige-Regeln brauchen. */
 export type ChatMessageLike = {
   id: number;

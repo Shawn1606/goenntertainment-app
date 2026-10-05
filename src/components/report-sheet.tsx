@@ -3,7 +3,7 @@
  *
  * ## Ein Blatt für alles, was gemeldet werden kann
  *
- * Events, Chat-Nachrichten, Konten, Beiträge, Storys. Die Handlung ist überall
+ * Chat-Nachrichten, Konten, Gruppen, Partner, Angebote. Die Handlung ist überall
  * dieselbe, also ist es überall dasselbe Blatt – der Aufrufer sagt nur, **was**
  * gemeldet wird (`targetType`, `targetId`) und wie es heißt (`targetLabel`).
  *
@@ -41,7 +41,7 @@ type Props = {
   onClose: () => void;
   /**
    * Wird nach einer erfolgreichen Meldung aufgerufen – z. B. um zusätzlich das
-   * Blockieren anzubieten. Optional: Bei einem Event gibt es niemanden zu
+   * Blockieren anzubieten. Optional: Bei einem Angebot gibt es niemanden zu
    * blockieren.
    */
   onReported?: () => void;
@@ -70,7 +70,7 @@ export function ReportSheet({ target, onClose, onReported }: Props) {
     setSending(true);
     setError(null);
     try {
-      await api.reportContent(token, {
+      await api.report(token, {
         targetType: target.type,
         targetId: target.id,
         reason,

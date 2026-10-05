@@ -13,7 +13,8 @@
     2. Die WLAN-IP dieses PCs ermitteln und in .env.local als EXPO_PUBLIC_API_URL eintragen.
        Die IP kommt per DHCP von der Fritzbox und wechselt – genau das war bisher der
        häufigste Grund für „Login dauert ewig" am Handy.
-    3. Laravel (8000), Node-Backend (8001) und Expo/Metro (8081) in eigenen Fenstern
+    3. Laravel (8000) und Expo/Metro (8081) in eigenen Fenstern (das Node-Backend
+       wird seit dem Marktplatz-Umbau nicht mehr gebraucht)
        starten – nur was noch nicht läuft. Hat sich die IP geändert, wird ein laufendes
        Metro neu gestartet, denn Metro liest .env.local nur beim Start.
     4. Kurzer Statusbericht mit der exp://-Adresse fürs Handy.
@@ -150,10 +151,6 @@ if (-not $NoServers) {
         Start-DevWindow 'Goenn Laravel-API 8000' 'php api/artisan serve --host=0.0.0.0 --port=8000'
         $started += 'Laravel'
     }
-    if (-not (Test-Port 8001)) {
-        Start-DevWindow 'Goenn Node-Backend 8001' 'npm --prefix server run dev'
-        $started += 'Node'
-    }
     if ($envChanged -and (Test-Port 8081)) {
         Stop-PortOwnerWindow 8081
         $started += 'Metro (neu, wegen neuer IP)'
@@ -164,9 +161,9 @@ if (-not $NoServers) {
         if ($started -notcontains 'Metro (neu, wegen neuer IP)') { $started += 'Metro' }
     }
 
-    # Kurz warten, bis die Backends antworten (Laravel ist in 2–3 s da, Node etwas später).
+    # Kurz warten, bis Laravel antwortet (meist nach 2–3 s).
     for ($i = 0; $i -lt 20; $i++) {
-        if ((Test-Health 'http://127.0.0.1:8000/api/health') -and (Test-Health 'http://127.0.0.1:8001/api/health')) { break }
+        if (Test-Health 'http://127.0.0.1:8000/api/health') { break }
         Start-Sleep -Seconds 2
     }
 }
@@ -180,7 +177,6 @@ function Mark([bool]$v) {
 }
 
 $laravel = Test-Health 'http://127.0.0.1:8000/api/health'
-$node = Test-Health 'http://127.0.0.1:8001/api/health'
 $lan = if ($ip) { Test-Health "http://${ip}:8000/api/health" } else { $false }
 $metro = Test-Port 8081
 
@@ -190,7 +186,6 @@ $report = @(
     "$(Mark ([bool]$ip)) .env.local: $envNote",
     "$(Mark $mysqlUp) MySQL (3306)",
     "$(Mark $laravel) Laravel-API (8000)",
-    "$(Mark $node) Node-Backend (8001)",
     "$(Mark $lan) Backend übers WLAN erreichbar",
     "$(Mark $metro) Expo/Metro (8081)"
 )

@@ -6,19 +6,19 @@ ohne dass dein PC läuft. Diese Adresse wird in den App-Build eingebacken.
 ## Was hier läuft
 
 Alles, was auf dem Server gebraucht wird, steckt in **Containern**: fertig
-gepackten Paketen, die ihre PHP- bzw. Node-Version und alle Bibliotheken selbst
+gepackten Paketen, die ihre PHP-Version und alle Bibliotheken selbst
 mitbringen. Auf dem Server muss dafür nur **Docker** installiert sein.
 
 ```
-Internet ─► caddy   HTTPS-Zertifikat, Port 80/443
-              └─► api    Laravel (api/)   – Anmeldung, Konto, Zwei-Faktor …
-                    └─► node   Node (server/)  – alles, was noch nicht umgezogen ist
-            db     MySQL – von beiden Backends benutzt
+Internet ─► caddy      HTTPS-Zertifikat, Port 80/443
+              └─► api        Laravel (api/) – die ganze API und die Bilder unter /storage
+            scheduler  dasselbe Abbild – stündlich Abos verlängern (club:renew)
+            db         MySQL
 ```
 
-Das ist dieselbe Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node
-dahinter). Von außen erreichbar ist nur Caddy; `api`, `node` und `db` sprechen
-nur untereinander.
+Das Node-Backend (`server/`) wird seit dem Marktplatz-Umbau nicht mehr
+gebraucht. Von außen erreichbar ist nur Caddy; `api`, `scheduler` und `db`
+sprechen nur untereinander.
 
 Die **Handy-App selbst** steckt nicht in einem Container – sie wird mit EAS als
 APK bzw. iOS-App gebaut und bekommt die Server-Adresse mit (siehe unten).
@@ -27,7 +27,6 @@ APK bzw. iOS-App gebaut und bekommt die Server-Adresse mit (siehe unten).
 |---|---|
 | `deploy/docker-compose.yml` | welche Container es gibt und wie sie zusammenhängen |
 | `api/Dockerfile` | Bauplan für den Laravel-Container (PHP 8.4 + Apache) |
-| `server/Dockerfile` | Bauplan für den Node-Container |
 | `deploy/Caddyfile` | HTTPS und Weiterleitung an Laravel |
 | `deploy/.env` | deine Zugangsdaten (aus `.env.example`, **nie ins Git**) |
 
@@ -44,8 +43,7 @@ APK bzw. iOS-App gebaut und bekommt die Server-Adresse mit (siehe unten).
 Warum Hetzner: deutsches Unternehmen, Server in Deutschland – die
 unkomplizierte Antwort auf die DSGVO-Frage.
 
-4 GB RAM reichen für MySQL, Laravel und Node gut. Der 2-GB-Tarif geht auch, wird
-bei vielen gleichzeitigen Bild-Uploads aber knapp.
+2 GB RAM reichen für MySQL und Laravel; mit 4 GB ist Luft für Wachstum.
 
 ---
 
@@ -85,9 +83,9 @@ git clone https://github.com/Shawn1606/goenntertainment-app.git goenntertainment
 cd goenntertainment/deploy
 ```
 
-Gebraucht werden die Ordner `api/`, `server/`, `shared/` und `deploy/`.
-`shared/` enthält die Listen, die App, Node und Laravel gemeinsam lesen (gesperrte
-Begriffe, häufige Passwörter). Fehlt der Ordner, bricht der Bau mit einem Fehler
+Gebraucht werden die Ordner `api/`, `shared/` und `deploy/`.
+`shared/` enthält, was App und Laravel gemeinsam lesen: gesperrte Begriffe,
+häufige Passwörter und die Club-Regeln (`club.json`: Preise, Rabatte, Credits). Fehlt der Ordner, bricht der Bau mit einem Fehler
 zu `shared` ab – gewollt: Ohne den Wortfilter startet die API nicht, statt still
 ohne ihn zu laufen.
 
@@ -126,11 +124,11 @@ Für 2FA-Codes per E-Mail außerdem `MAIL_HOST`, `MAIL_USERNAME` und
 docker compose up -d --build
 ```
 
-Beim ersten Mal dauert es einige Minuten: die zwei Abbilder bauen, MySQL
-einrichten, `server/schema.sql` einspielen, Zertifikat holen. Das Schema wird
-**automatisch** angelegt – nichts von Hand einspielen und **kein**
-`php artisan migrate` (das Schema gehört dem Node-Backend; Laravels
-Standard-Migrationen würden die Tabelle `users` doppelt anlegen wollen).
+Beim ersten Mal dauert es einige Minuten: das Abbild bauen, MySQL einrichten,
+Tabellen und Kategorien anlegen, Zertifikat holen. Das Schema spielt der
+`api`-Container bei **jedem** Start selbst ein (`php artisan migrate --force`,
+siehe `api/docker/entrypoint.sh`) – nichts von Hand einspielen. Auf einer
+Datenbank aus der Node-Zeit legt die erste Migration nur an, was fehlt.
 
 Zusehen, bis alles „healthy" ist:
 
@@ -151,17 +149,19 @@ nicht auf den Server:
 docker compose logs caddy --tail 30
 ```
 
-## Schritt 7 – Kategorien und Admin-Konto anlegen
+## Schritt 7 – Admin-Konto
 
-Das legt die Kategorien (Sport, Musik …) an und – wenn `ADMIN_EMAIL` und
-`ADMIN_PASSWORD` in `.env` stehen – das Admin-Konto:
+Registriere dich ganz normal in der App und mach dein Konto dann zum Admin:
 
 ```bash
-docker compose exec node npm run seed
+docker compose exec api php artisan admin:grant name@example.com
 ```
 
-> Achtung: `seed` legt auch Beispieldaten an. Auf einem Server, der schon echte
-> Nutzer:innen hat, vorher `server/src/seed.js` lesen.
+Danach erscheint im Konto der **Admin-Bereich**: Partner anlegen, Angebote,
+Gutschein-Auflagen, Nutzer. Die Kategorien legt Schritt 5 schon automatisch an.
+
+> **Keine Demo-Partner auf dem Server.** `php artisan db:seed --class=DemoMarketplaceSeeder`
+> legt „Demo: …"-Partner zum Ausprobieren an und verweigert in `production` den Dienst.
 
 ---
 
@@ -194,7 +194,7 @@ Datenbank und die Uploads bleiben dabei erhalten (sie liegen in `db-data` bzw.
 **Logs mitlesen:**
 
 ```bash
-docker compose logs -f api node
+docker compose logs -f api scheduler
 ```
 
 **Datenbank sichern** – bitte einrichten, das ist der einzige unersetzliche Teil:
@@ -206,8 +206,8 @@ docker compose exec db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" goennter
 Die Nutzer-Uploads liegen in `deploy/storage/` und gehören ins selbe Backup. Am
 besten als täglicher Cronjob plus Hetzner-Snapshot (~1 €/Monat).
 
-**Firewall:** Nur 22 (SSH), 80 und 443 müssen offen sein. MySQL, Laravel und
-Node haben absichtlich **keine** Ports nach außen – erreichbar ist nur Caddy.
+**Firewall:** Nur 22 (SSH), 80 und 443 müssen offen sein. MySQL und Laravel
+haben absichtlich **keine** Ports nach außen – erreichbar ist nur Caddy.
 
 ## Wenn etwas nicht startet
 
@@ -215,12 +215,14 @@ Node haben absichtlich **keine** Ports nach außen – erreichbar ist nur Caddy.
 |---|---|
 | `APP_KEY fehlt in deploy/.env` | Schritt 4: `APP_KEY` erzeugen und eintragen |
 | `api` bleibt „unhealthy" | `docker compose logs api` – meist falsches `DB_PASSWORD` |
-| Uploads scheitern mit „Serverfehler" | `docker compose logs storage-init` – der Upload-Ordner gehört nicht UID 1000 |
-| „Das Bild ist zu groß" | Bild über 5 MB – die Grenze zieht das Node-Backend |
+| Uploads scheitern mit „Serverfehler" | `docker compose logs storage-init` – der Upload-Ordner gehört nicht UID 33 (`www-data`) |
+| „Das Bild ist zu groß" | Bild über 5 MB – die Grenze zieht `api/app/Support/Uploads.php` |
+| Kauf meldet „Bezahlen ist noch nicht freigeschaltet" | `PAYMENTS_MODE` ist `off` (Standard) – echte Zahlungen sind noch nicht angebunden |
+| Abos verlängern sich nicht | `docker compose logs scheduler` – der Zeitplan-Container läuft nicht |
 
 ## Geprüft wird automatisch
 
-Bei jedem Push baut GitHub beide Abbilder, startet alles (ohne Caddy) und
-spielt eine Registrierung samt Bild-Upload durch – siehe
+Bei jedem Push baut GitHub das Abbild, startet alles (ohne Caddy) und spielt
+Registrierung, Partner mit Logo-Upload, Angebot und Credits-Kauf (Testmodus) durch – siehe
 `.github/workflows/docker.yml`. Läuft das grün, bauen und starten die Container
 auch auf dem Server.

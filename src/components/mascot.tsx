@@ -43,7 +43,7 @@
  * vollkommen in Ordnung: Die Figur trägt keine Information, die nur in der
  * Bewegung steckt.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
@@ -58,7 +58,7 @@ import Animated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
-import Svg, { Circle, Ellipse, G, Path } from 'react-native-svg';
+import Svg, { Circle, Defs, Ellipse, G, LinearGradient as SvgLinearGradient, Path, Stop } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
 import { ERROR_REACTION, type MascotGesture } from '@/domain/mascot-mood';
@@ -203,7 +203,29 @@ export type MascotProps = {
    * ist der Normalfall: Neben ihr steht immer ein Satz, der dasselbe sagt.
    */
   label?: string;
+  /**
+   * Die türkisen Funkwellen neben der erhobenen Hand – wie im Instagram-Logo.
+   * Sie stehen dort, wo Goenni „funkt": beim NFC-Check-in und beim Winken.
+   */
+  waves?: boolean;
+  /** Jede neue Zahl lässt die Figur einmal springen (siehe `MascotBuddy`). */
+  jumpKey?: number;
 };
+
+/**
+ * Hellere bzw. dunklere Stufe einer Hex-Farbe – für den Glanz-Verlauf des
+ * Körpers. Unbekannte Formate kommen unverändert zurück (dann eben ohne Glanz).
+ */
+function shade(hex: string, amount: number): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!match) return hex;
+  const n = parseInt(match[1], 16);
+  const mix = (c: number) => Math.round(amount >= 0 ? c + (255 - c) * amount : c * (1 + amount));
+  const r = mix((n >> 16) & 255);
+  const g = mix((n >> 8) & 255);
+  const b = mix(n & 255);
+  return `#${((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1)}`;
+}
 
 /**
  * Augen und Mund je Stimmung – OHNE die Pupillen der offenen Augen.
@@ -322,6 +344,8 @@ export function Mascot({
   gesture = 'none',
   style,
   label,
+  waves = false,
+  jumpKey = 0,
 }: MascotProps) {
   const reduced = useReducedMotion();
   const breath = useSharedValue(0);
@@ -343,7 +367,7 @@ export function Mascot({
    * nicht im Gleichschritt blinzeln – das sähe nach Bildschirmfehler aus, nicht
    * nach Leben. Einmal beim Einhängen gezogen und danach fest.
    */
-  const phase = useRef(Math.random()).current;
+  const [phase] = useState(() => Math.random());
 
   const eyesOpen = OPEN_EYE_MOODS.includes(mood);
 
@@ -393,10 +417,11 @@ export function Mascot({
     return () => cancelAnimation(bounce);
   }, [reduced, mood, bounce]);
 
-  // Der Sprung beim Erscheinen: hoch mit Feder, zurück mit Feder. Einmal.
+  // Der Sprung beim Erscheinen: hoch mit Feder, zurück mit Feder. Einmal – und
+  // noch einmal bei jedem neuen `jumpKey` (Antippen, frischer Stempel).
   useEffect(() => {
     cancelAnimation(jump);
-    if (!celebrate || reduced) {
+    if ((!celebrate && !jumpKey) || reduced) {
       jump.value = 0;
       return;
     }
@@ -406,7 +431,7 @@ export function Mascot({
       withDelay(60, withSpring(0, { damping: 14, stiffness: 180 })),
     );
     return () => cancelAnimation(jump);
-  }, [celebrate, reduced, jump]);
+  }, [celebrate, jumpKey, reduced, jump]);
 
   /**
    * Blinzeln.
@@ -598,7 +623,7 @@ export function Mascot({
       <MascotShadow size={size} color={color} />
 
       <Animated.View style={[bodyOrigin, bodyStyle]}>
-        <MascotBody mood={mood} size={size} color={color} faceColor={faceColor} />
+        <MascotBody mood={mood} size={size} color={color} faceColor={faceColor} waves={waves} />
 
         {/* Der Winkarm. Eigene Ebene, weil er um die SCHULTER drehen muss und nicht
             um die Bildmitte – dafür sitzt der Bezugspunkt auf dem Ansatz. Er liegt
@@ -664,16 +689,32 @@ function MascotBody({
   size,
   color,
   faceColor,
+  waves,
 }: {
   mood: MascotMood;
   size: number;
   color?: string;
   faceColor: string;
+  waves: boolean;
 }) {
   const body = color ?? DEFAULT_BODY;
+  /**
+   * Eindeutige Verlaufs-ID je Figur. Im Web teilen sich alle SVGs einer Seite
+   * EINEN Namensraum für IDs – zwei Figuren mit derselben ID bekämen sonst den
+   * Verlauf der ersten, auch wenn die zweite eine andere Farbe hat.
+   */
+  const skinId = `goenni-skin-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
 
   return (
     <Svg width={size} height={size} viewBox="0 0 92 92" fill="none">
+      {/* Glanz wie im Instagram-Logo: oben heller, unten satter. */}
+      <Defs>
+        <SvgLinearGradient id={skinId} x1="0.2" y1="0" x2="0.8" y2="1">
+          <Stop offset="0" stopColor={shade(body, 0.28)} />
+          <Stop offset="0.55" stopColor={body} />
+          <Stop offset="1" stopColor={shade(body, -0.12)} />
+        </SvgLinearGradient>
+      </Defs>
       {/* Der Schatten steht NICHT hier: Er gehört zur festen Ebene darunter
           (`MascotShadow`), sonst würde er beim Hüpfen mitspringen. */}
 
@@ -699,12 +740,32 @@ function MascotBody({
         r={4.2}
         fill={body}
       />
+      {/* Lichtpunkt auf der Antennen-Kugel. */}
+      <Circle
+        cx={(mood === 'oops' ? 34.4 : 46) - 1.4}
+        cy={(mood === 'cheer' ? 6.4 : mood === 'oops' ? 10.2 : 8.4) - 1.4}
+        r={1.2}
+        fill="#ffffff"
+        fillOpacity={0.7}
+      />
 
-      {/* Körper: ein weicher Tropfen, unten breiter als oben. */}
+      {/* Körper: ein weicher Tropfen, unten breiter als oben – mit Glanz. */}
       <Path
         d="M46 19c15.5 0 25 11.6 25 27.5 0 16.4-9.8 27.5-25 27.5S21 62.9 21 46.5C21 30.6 30.5 19 46 19Z"
-        fill={body}
+        fill={`url(#${skinId})`}
       />
+      {/* Glanzlicht oben links: macht aus der Fläche einen Körper. */}
+      <Ellipse cx={36.5} cy={29} rx={7.5} ry={4.2} transform="rotate(-24 36.5 29)" fill="#ffffff" fillOpacity={0.28} />
+
+      {waves ? (
+        <Path
+          d="M82.5 30.5c1.9 1.3 2.4 3.4 2 5.8M85.4 26.6c3 2 3.9 5.4 3.2 9.4"
+          stroke="#25f4ee"
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          fill="none"
+        />
+      ) : null}
 
       {/* Linkes Ärmchen. Beim Jubeln nach oben – der Unterschied trägt den Moment
           stärker als jedes Gesicht, weil man ihn auch klein noch sieht. Das RECHTE

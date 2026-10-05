@@ -1,612 +1,381 @@
-import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, RefreshControl, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { useState } from 'react';
+import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { ActivityDetailModal } from '@/components/activity-detail-modal';
-import { ActivityFilterBar } from '@/components/activity-filter-bar';
-import { BrandLogo } from '@/components/brand-logo';
-import { CategoryStrip } from '@/components/category-strip';
-import { ActivityPost } from '@/components/feed/activity-post';
-import { EvergreenRail } from '@/components/feed/evergreen-rail';
-import { FeedEmpty } from '@/components/feed/feed-empty';
-import { HomeBackground } from '@/components/home-background';
-import { MascotError } from '@/components/mascot';
-import { ReportSheet } from '@/components/report-sheet';
-import { ShareSheet } from '@/components/share-sheet';
+import { MascotEmpty, MascotError } from '@/components/mascot';
+import { MascotBuddy } from '@/components/mascot-buddy';
+import { OfferCard } from '@/components/offer-card';
+import { PartnerLogo } from '@/components/partner-logo';
+import { PlanBadge } from '@/components/plan-badge';
+import { StampCard } from '@/components/stamp-card';
+import { TopBar } from '@/components/top-bar';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { CategoryIcon } from '@/components/ui/category-icon';
 import { Icon } from '@/components/ui/icon';
-import { IconButton } from '@/components/ui/icon-button';
-import { OptionsSheet, type SheetOption } from '@/components/ui/options-sheet';
-import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
-import { toggledLike } from '@/domain/activity-social';
-import {
-  activeFilterCount,
-  EMPTY_FILTER,
-  filterActivities,
-  isFilterActive,
-  type ActivityFilter,
-} from '@/domain/activity-filter';
-import { mixFeed, type FeedItem } from '@/domain/feed-mix';
-import { firstName, greetingLine } from '@/domain/greeting';
-import { explainMatch, rankActivities } from '@/domain/recommendations';
-import { unreadBadge } from '@/domain/unread-badge';
+import { PressableScale } from '@/components/ui/pressable-scale';
+import { Rail } from '@/components/ui/rail';
+import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
+import { formatPercent, planFor, stampProgress } from '@/domain/club';
+import { formatDay } from '@/domain/date-format';
+import { homeSections } from '@/domain/home-sections';
+import { homeTips } from '@/domain/mascot-tips';
+import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import { type Activity, type Interest, api, ApiError } from '@/lib/api';
-import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
-import { confirmAction, notifyUser } from '@/lib/confirm';
+import { CLUB_RULES } from '@/lib/club-rules';
 import * as feedback from '@/lib/feedback';
-import { takeWeakPasswordFlag } from '@/lib/security-nudge';
-import { useNearbyActivities } from '@/lib/use-nearby-activities';
+import { useMarket } from '@/lib/market-context';
 
 /**
- * Home – der Feed.
+ * Home – alles Wichtige auf einen Blick.
  *
- * ## Aufbau (Instagram + TikTok)
+ *   Kopf:       Logo · Credits · du
+ *   Club:       Goenni mit dem passenden Tipp, deine Stufe, dein Rabatt
+ *   Schnell:    Einchecken · Pass · Gruppen · Buchungen
+ *   Offen:      die nächste Buchung als Ticket
+ *   Stempel:    die Karte in klein
+ *   Angebote:   nach Kategorie, Top, in der Nähe, mit Credits
+ *   Partner:    wer mitmacht
  *
- *   Kopf:    GÖ4Fun-Schriftzug · Suche · Chats
- *   Reiter:  Für dich | In der Nähe | Heute
- *   Kacheln: Filter · Kategorien zum Antippen
- *   Feed:    eine Aktivität unter der anderen, jede wie ein Instagram-Post –
- *            im „Für dich"-Reiter mit dem Grund, warum sie vorgeschlagen wird,
- *            und zwischendurch einer Leiste „Jederzeit möglich" (Dauerangebote,
- *            siehe src/domain/feed-mix.ts)
- *
- * ## „Für dich" ist eine Vorschlags-Seite
- *
- * Die Reihenfolge kommt aus `rankActivities` (eigene Interessen, Nähe, bald,
- * Verlauf). Neu ist, dass der Feed das auch SAGT: „Für dich · Passt zu Sport"
- * steht über jedem Beitrag, der wegen eines Interesses oben steht. Ein
- * Vorschlag, dessen Grund man nicht kennt, wirkt zufällig; einer mit Grund wirkt
- * wie ein Tipp von jemandem, der einen kennt.
- *
- * ## Die Lupe öffnet die Suche
- *
- * Vorher klappte sie hier eine Filterleiste auf – und Leute fand man nur im
- * Freunde-Tab. Jetzt öffnet sie `/search` (Personen UND Aktivitäten, mit
- * Verlauf). Die Filter stehen als erste Kachel in der Kategorie-Reihe.
+ * Die Reihenfolge ist die Frage, die man beim Öffnen hat: Was habe ich (Club,
+ * Credits, Stempel)? Was steht an (Buchung)? Was kann ich machen (Angebote)?
  */
-
-type FeedTab = 'for-you' | 'nearby' | 'today';
-
-const FEED_TABS: { key: FeedTab; label: string }[] = [
-  { key: 'for-you', label: 'Für dich' },
-  { key: 'nearby', label: 'In der Nähe' },
-  { key: 'today', label: 'Heute' },
-];
-
 export default function HomeScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
   const colors = useTheme();
-  const { user, token } = useAuth();
-  const { settings } = useAppSettings();
-
-  const [activities, setActivities] = useState<Activity[]>([]);
-  const [interests, setInterests] = useState<Interest[]>([]);
-  const [unreadChats, setUnreadChats] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const { user } = useAuth();
+  const market = useMarket();
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [category, setCategory] = useState<number | null>(null);
 
-  const [tab, setTab] = useState<FeedTab>('for-you');
-  const [filter, setFilter] = useState<ActivityFilter>(EMPTY_FILTER);
-  const [filterOpen, setFilterOpen] = useState(false);
+  const plan = planFor(CLUB_RULES, user?.club_plan);
+  const stamps = market.club?.stamps ?? null;
+  const progress = stampProgress(CLUB_RULES, stamps?.total ?? 0);
+  const openBookings = market.bookings.filter((b) => b.status === 'confirmed');
+  const nextBooking = openBookings[0] ?? null;
+  const unread = market.groups.reduce((sum, g) => sum + g.unread, 0);
 
-  const [selected, setSelected] = useState<Activity | null>(null);
-  const [focusComments, setFocusComments] = useState(false);
-  const [sharing, setSharing] = useState<Activity | null>(null);
-  const [menuFor, setMenuFor] = useState<Activity | null>(null);
-  const [reporting, setReporting] = useState<Activity | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  // Kein useMemo: Der React Compiler (app.json → reactCompiler) merkt sich das selbst.
+  const tips = homeTips({
+    firstName: user?.name?.split(' ')[0] ?? null,
+    hour: new Date().getHours(),
+    stampsFilled: progress.filled,
+    stampsRemaining: progress.remaining,
+    rewardCredits: CLUB_RULES.stampCard.rewardCredits,
+    credits: user?.credits_balance ?? 0,
+    plan: plan.key,
+    openBookings: openBookings.length,
+    groups: market.groups.length,
+  });
 
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    // Minütlich, damit „Heute, 18:00" und „Läuft gerade" nicht stehen bleiben,
-    // wenn die App offen liegt.
-    const timer = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(timer);
-  }, []);
+  const interestById = new Map(market.interests.map((i) => [i.id, i]));
+  const { categoryIds, featured, nearby, withCredits, partners } = homeSections(market.offers, {
+    category,
+    distanceById: market.distanceById,
+  });
+  /** Nur Kategorien, in denen es wirklich Angebote gibt – leere Chips wären Sackgassen. */
+  const categories = market.interests.filter((i) => categoryIds.has(i.id));
 
-  const { nearbyIds, distanceById, hasLocation } = useNearbyActivities(activities, settings.useLocation);
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    setError(null);
-    try {
-      const [list, cats, chats] = await Promise.all([
-        api.activities(token),
-        api.interests().catch(() => null),
-        api.chats(token).catch(() => null),
-      ]);
-      setActivities(list.data);
-      if (cats) setInterests(cats.data);
-      if (chats) setUnreadChats(chats.data.reduce((sum, c) => sum + (c.unread ?? 0), 0));
-      setNow(new Date());
-    } catch {
-      setError('Die Aktivitäten konnten nicht geladen werden. Läuft das Backend?');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useFocusEffect(
-    useCallback(() => {
-      load();
-      // Einmal nach der Anmeldung: War das eingegebene Passwort schwach, sagen wir
-      // es – genau dann, wenn es noch frisch im Kopf ist (src/lib/security-nudge.ts).
-      if (takeWeakPasswordFlag()) {
-        confirmAction(
-          'Dein Passwort ist schwach',
-          'Es ist leicht zu erraten. Weil in GÖ4Fun dein Konto und deine Daten dranhängen, lohnt sich ein stärkeres – dauert eine Minute.',
-          'Jetzt ändern',
-        ).then((ok) => {
-          if (ok) router.push('/security/password');
-        });
-      }
-    }, [load, router]),
-  );
-
-  const onRefresh = useCallback(async () => {
+  const onRefresh = async () => {
     setRefreshing(true);
-    await load();
+    await market.refresh();
     setRefreshing(false);
-  }, [load]);
+  };
 
-  const profile = useMemo(
-    () => ({
-      interestIds: (user?.interests ?? []).map((i) => i.id),
-      attendedInterestIds: activities.filter((a) => a.is_joined).flatMap((a) => a.interests.map((i) => i.id)),
-    }),
-    [user?.interests, activities],
-  );
-
-  /**
-   * Was der Feed zeigt. Vergangenes fliegt überall raus – außer es läuft gerade
-   * noch (dann steht „Läuft gerade" auf dem Bild). Drei Stunden nach Beginn gilt
-   * ein Event als vorbei; genau diese Grenze kennt auch `urgencyFor`.
-   */
-  const feed = useMemo<FeedItem<Activity>[]>(() => {
-    const cutoff = now.getTime() - 3 * 60 * 60 * 1000;
-    const upcoming = activities.filter((a) => {
-      if (a.is_permanent) return true;
-      const at = Date.parse(a.starts_at ?? '');
-      return !Number.isFinite(at) || at >= cutoff;
-    });
-
-    const windowed: ActivityFilter = tab === 'today' ? { ...filter, when: 'today' } : filter;
-    const matching = filterActivities(upcoming, windowed, { now, distanceById });
-    const asPosts = (list: Activity[]): FeedItem<Activity>[] =>
-      list.map((activity) => ({ kind: 'post', key: `post-${activity.id}`, activity }));
-
-    if (tab === 'nearby') {
-      return asPosts(
-        matching
-          .filter((a) => nearbyIds.has(a.id))
-          .sort((a, b) => (distanceById.get(a.id) ?? Infinity) - (distanceById.get(b.id) ?? Infinity)),
-      );
-    }
-    if (tab === 'today') {
-      return asPosts(
-        matching
-          .filter((a) => !a.is_permanent)
-          .sort((a, b) => Date.parse(a.starts_at ?? '') - Date.parse(b.starts_at ?? '')),
-      );
-    }
-    // Für dich: nach Relevanz, Dauerangebote eingestreut statt oben gestapelt.
-    return mixFeed(rankActivities(matching, profile, { now, distanceById }));
-  }, [activities, filter, tab, now, distanceById, nearbyIds, profile]);
-
-  const postCount = useMemo(() => feed.filter((i) => i.kind === 'post').length, [feed]);
-
-  const replaceActivity = useCallback((updated: Activity) => {
-    setActivities((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
-    setSelected((prev) => (prev && prev.id === updated.id ? updated : prev));
-  }, []);
-
-  const removeFromFeed = useCallback((id: number) => {
-    setActivities((prev) => prev.filter((a) => a.id !== id));
-    setSelected((prev) => (prev && prev.id === id ? null : prev));
-  }, []);
-
-  const open = useCallback((activity: Activity) => {
-    setFocusComments(false);
-    setSelected(activity);
-  }, []);
-
-  const openComments = useCallback((activity: Activity) => {
-    feedback.tapped();
-    setFocusComments(true);
-    setSelected(activity);
-  }, []);
-
-  const toggleJoin = useCallback(
-    async (activity: Activity) => {
-      if (!token) return;
-      if (activity.is_joined) {
-        const ok = await confirmAction(
-          'Nicht mehr dabei sein?',
-          'Dein Platz wird frei, und den Event-Chat siehst du danach nicht mehr.',
-          'Austreten',
-          true,
-        );
-        if (!ok) return;
-      }
-      setBusyId(activity.id);
-      try {
-        const { data } = activity.is_joined
-          ? await api.leaveActivity(token, activity.id)
-          : await api.joinActivity(token, activity.id);
-        if (activity.is_joined) feedback.left();
-        else feedback.joined();
-        replaceActivity(data);
-      } catch (e) {
-        await notifyUser('Hat nicht geklappt', e instanceof ApiError ? e.firstError() : 'Bitte versuch es gleich noch mal.');
-      } finally {
-        setBusyId(null);
-      }
-    },
-    [token, replaceActivity],
-  );
-
-  const toggleSave = useCallback(
-    async (activity: Activity) => {
-      if (!token) return;
-      feedback.selected();
-      // Sofort umschalten, der Server bestätigt danach – ein Lesezeichen, das
-      // erst nach einer Sekunde reagiert, fühlt sich kaputt an.
-      replaceActivity({ ...activity, is_saved: !activity.is_saved });
-      try {
-        const { data } = activity.is_saved
-          ? await api.unsaveActivity(token, activity.id)
-          : await api.saveActivity(token, activity.id);
-        replaceActivity(data);
-      } catch {
-        replaceActivity(activity);
-      }
-    },
-    [token, replaceActivity],
-  );
-
-  const toggleLike = useCallback(
-    async (activity: Activity) => {
-      if (!token) return;
-      // Gleiches Prinzip wie beim Merken: sofort umspringen, dann bestätigen
-      // (siehe src/domain/activity-social.ts).
-      replaceActivity(toggledLike(activity));
-      try {
-        const { data } = activity.liked_by_me
-          ? await api.unlikeActivity(token, activity.id)
-          : await api.likeActivity(token, activity.id);
-        replaceActivity(data);
-      } catch {
-        replaceActivity(activity);
-      }
-    },
-    [token, replaceActivity],
-  );
-
-  const deleteActivity = useCallback(
-    async (activity: Activity) => {
-      if (!token) return;
-      const own = activity.host?.id === user?.id;
-      const ok = await confirmAction(
-        'Aktivität löschen',
-        own
-          ? `„${activity.title}" wirklich löschen? Alle, die dabei sind, verlieren ihren Platz.`
-          : `„${activity.title}" von ${activity.host?.name ?? 'dieser Person'} als Admin löschen? Das lässt sich nicht rückgängig machen.`,
-        'Löschen',
-        true,
-      );
-      if (!ok) return;
-      try {
-        await api.deleteActivity(token, activity.id);
-        feedback.left();
-        removeFromFeed(activity.id);
-      } catch (e) {
-        await notifyUser('Löschen fehlgeschlagen', e instanceof ApiError ? e.firstError() : 'Bitte versuch es noch mal.');
-      }
-    },
-    [token, user?.id, removeFromFeed],
-  );
-
-  const openChat = useCallback(
-    (activity: Activity) => {
-      const own = activity.host?.id === user?.id;
-      if (!activity.is_joined && !own) {
-        notifyUser('Erst mitmachen', 'Den Chat einer Aktivität sehen alle, die dabei sind. Tipp auf „Mitmachen".');
-        return;
-      }
-      router.push({ pathname: '/chat', params: { kind: 'activity', id: String(activity.id), title: activity.title } });
-    },
-    [router, user?.id],
-  );
-
-  const openHost = useCallback(
-    (activity: Activity) => {
-      const username = activity.host?.username;
-      if (!username) return;
-      if (activity.host?.id === user?.id) {
-        router.navigate('/me');
-      } else {
-        router.push({ pathname: '/profile/[username]', params: { username } });
-      }
-    },
-    [router, user?.id],
-  );
-
-  const toggleCategory = useCallback((id: number) => {
-    feedback.selected();
-    setFilter((prev) => ({
-      ...prev,
-      interestIds: prev.interestIds.includes(id) ? prev.interestIds.filter((x) => x !== id) : [...prev.interestIds, id],
-    }));
-  }, []);
-
-  /** Die Optionen hinter „…" am Beitrag. Löschen: eigene – und als Admin alle. */
-  const menuOptions = useMemo<SheetOption[]>(() => {
-    const a = menuFor;
-    if (!a) return [];
-    const own = a.host?.id === user?.id;
-    const options: SheetOption[] = [
-      { key: 'open', label: 'Details ansehen', icon: 'info', onPress: () => open(a) },
-      { key: 'share', label: 'Teilen', icon: 'share', onPress: () => setSharing(a) },
-      {
-        key: 'save',
-        label: a.is_saved ? 'Nicht mehr merken' : 'Merken',
-        icon: a.is_saved ? 'bookmark-filled' : 'bookmark',
-        onPress: () => toggleSave(a),
-      },
-    ];
-    if (a.host?.username && !own) {
-      options.push({ key: 'host', label: `Profil von ${a.host.name}`, icon: 'user', onPress: () => openHost(a) });
-    }
-    if (!own) options.push({ key: 'report', label: 'Melden', icon: 'flag', destructive: true, onPress: () => setReporting(a) });
-    if (own || user?.is_admin) {
-      options.push({
-        key: 'delete',
-        label: own ? 'Aktivität löschen' : 'Als Admin löschen',
-        icon: 'trash',
-        destructive: true,
-        onPress: () => deleteActivity(a),
-      });
-    }
-    return options;
-  }, [menuFor, user?.id, user?.is_admin, open, toggleSave, openHost, deleteActivity]);
-
-  const reasonFor = useCallback(
-    (activity: Activity) => (tab === 'for-you' && !activity.is_permanent ? explainMatch(activity, profile) : null),
-    [tab, profile],
-  );
-
-  const chatBadge = unreadBadge(unreadChats);
-  const greeting = greetingLine(now, firstName(user?.name));
-  const filterCount = activeFilterCount(filter);
-
-  const header = (
-    <View>
-      <View style={[styles.topBar, { paddingTop: insets.top + Spacing.one }]}>
-        <BrandLogo size="small" />
-        <View style={styles.topIcons}>
-          <IconButton
-            icon="search"
-            label="Suchen: Leute und Aktivitäten"
-            onPress={() => {
-              feedback.tapped();
-              router.push('/search');
-            }}
-          />
-          <IconButton
-            icon="send"
-            label={chatBadge ? `Chats, ${chatBadge} ungelesen` : 'Chats'}
-            badge={chatBadge}
-            onPress={() => router.push('/chats')}
-          />
-        </View>
-      </View>
-
-      <View style={[styles.tabs, { borderBottomColor: colors.backgroundSelected }]} accessibilityRole="tablist">
-        {FEED_TABS.map((t) => {
-          const active = t.key === tab;
-          return (
-            <Pressable
-              key={t.key}
-              onPress={() => {
-                feedback.selected();
-                setTab(t.key);
-              }}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: active }}
-              style={styles.tab}>
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: active ? colors.text : colors.textSecondary, fontFamily: active ? FontFamily.bold : FontFamily.medium },
-                ]}>
-                {t.label}
-              </Text>
-              <View style={[styles.tabLine, { backgroundColor: active ? colors.tint : 'transparent' }]} />
-            </Pressable>
-          );
-        })}
-      </View>
-
-      {tab === 'for-you' && !isFilterActive(filter) ? (
-        <View style={styles.greeting}>
-          <Icon name={greeting.icon} size={16} color={colors.tint} />
-          <Text style={[styles.greetingText, { color: colors.text }]} numberOfLines={1}>
-            {greeting.text} – das passt gerade zu dir
-          </Text>
-        </View>
-      ) : null}
-
-      {interests.length > 0 ? (
-        <View style={styles.strip}>
-          <CategoryStrip
-            interests={interests}
-            selectedIds={filter.interestIds}
-            onToggle={toggleCategory}
-            onOpenFilter={() => {
-              feedback.tapped();
-              setFilterOpen((v) => !v);
-            }}
-            filterCount={filterCount}
-          />
-        </View>
-      ) : null}
-
-      {filterOpen ? (
-        <View style={styles.filter}>
-          <ActivityFilterBar
-            filter={filter}
-            onChange={setFilter}
-            interests={interests}
-            resultCount={postCount}
-            distanceAvailable={hasLocation}
-          />
-          <Pressable
-            onPress={() => {
-              setFilter(EMPTY_FILTER);
-              setFilterOpen(false);
-            }}
-            accessibilityRole="button"
-            hitSlop={6}
-            style={styles.filterClose}>
-            <Text style={[styles.filterCloseText, { color: colors.tint }]}>
-              {isFilterActive(filter) ? 'Filter zurücksetzen' : 'Filter schließen'}
-            </Text>
-          </Pressable>
-        </View>
-      ) : null}
-    </View>
-  );
+  const quick: { key: string; label: string; icon: UiIconName; badge?: number; onPress: () => void }[] = [
+    { key: 'checkin', label: 'Einchecken', icon: 'nfc', onPress: () => router.push('/checkin') },
+    { key: 'pass', label: 'Mein Pass', icon: 'qr', onPress: () => router.push({ pathname: '/checkin', params: { mode: 'pass' } }) },
+    { key: 'groups', label: 'Gruppen', icon: 'users', badge: unread, onPress: () => router.push('/groups') },
+    { key: 'bookings', label: 'Buchungen', icon: 'ticket', badge: openBookings.length, onPress: () => router.push('/bookings') },
+  ];
 
   return (
-    <HomeBackground>
-      <FlatList
-        data={feed}
-        keyExtractor={(item) => item.key}
-        ListHeaderComponent={header}
-        contentContainerStyle={styles.list}
+    <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
+      <TopBar />
+      <ScrollView
         style={styles.flex}
-        renderItem={({ item }) =>
-          item.kind === 'evergreen' ? (
-            <View style={styles.column}>
-              <EvergreenRail activities={item.activities} distanceById={distanceById} onOpen={open} />
-            </View>
-          ) : (
-            <View style={styles.column}>
-              <ActivityPost
-                activity={item.activity}
-                now={now}
-                distanceKm={distanceById.get(item.activity.id) ?? null}
-                isOwn={item.activity.host?.id === user?.id}
-                busy={busyId === item.activity.id}
-                reason={reasonFor(item.activity)}
-                onOpen={open}
-                onOpenComments={openComments}
-                onToggleJoin={toggleJoin}
-                onToggleSave={toggleSave}
-                onToggleLike={toggleLike}
-                onShare={setSharing}
-                onChat={openChat}
-                onMore={setMenuFor}
-                onOpenHost={item.activity.host?.username ? openHost : undefined}
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.tint} />}
+        showsVerticalScrollIndicator={false}>
+        <View style={styles.column}>
+          {/* Club-Kopf: Goenni, Stufe, Rabatt. */}
+          <Card tone="night" style={styles.hero}>
+            <MascotBuddy tips={tips} tone="night" size={70} />
+            <View style={styles.heroFoot}>
+              <View style={{ flex: 1, gap: 4 }}>
+                <PlanBadge plan={plan.key} tone="night" />
+                <Text style={styles.heroLine} numberOfLines={2}>
+                  {plan.discountPercent > 0
+                    ? `Du sparst ${formatPercent(plan.discountPercent)} bei jedem Partner – in der Gruppe noch mehr.`
+                    : 'Mit Gold sparst du bei jedem Partner.'}
+                </Text>
+              </View>
+              <Button
+                title={plan.key === 'free' ? 'Upgrade' : 'Vorteile'}
+                icon="crown"
+                variant="light"
+                size="small"
+                onPress={() => router.push('/club')}
               />
             </View>
-          )
-        }
-        ListEmptyComponent={
-          loading ? null : error ? (
-            <View style={styles.column}>
-              <MascotError detail={error} onRetry={load} />
-            </View>
-          ) : (
-            <FeedEmpty
-              tab={tab}
-              filtered={isFilterActive(filter)}
-              hasLocation={hasLocation}
-              onCreate={() => router.navigate('/create')}
-              onReset={() => {
-                setFilter(EMPTY_FILTER);
-                setTab('for-you');
-              }}
-            />
-          )
-        }
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.tint} />}
-        initialNumToRender={3}
-        windowSize={7}
-        showsVerticalScrollIndicator={false}
-      />
+          </Card>
 
-      <ActivityDetailModal
-        activity={selected}
-        onClose={() => setSelected(null)}
-        onChanged={replaceActivity}
-        onDeleted={removeFromFeed}
-        focusComments={focusComments}
-        distanceKm={selected ? distanceById.get(selected.id) ?? null : null}
-      />
-      <OptionsSheet
-        visible={menuFor !== null}
-        title={menuFor?.title}
-        options={menuOptions}
-        onClose={() => setMenuFor(null)}
-      />
-      <ShareSheet activity={sharing} onClose={() => setSharing(null)} />
-      <ReportSheet
-        target={reporting ? { type: 'activity', id: reporting.id, label: reporting.title } : null}
-        onClose={() => setReporting(null)}
-      />
-    </HomeBackground>
+          {/* Schnellzugriffe */}
+          <View style={styles.quick}>
+            {quick.map((q) => (
+              <View key={q.key} style={styles.quickWrap}>
+                <PressableScale
+                  onPress={q.onPress}
+                  accessibilityRole="button"
+                  accessibilityLabel={q.badge ? `${q.label}, ${q.badge}` : q.label}
+                  style={[styles.quickTile, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                  <View style={[styles.quickIcon, { backgroundColor: colors.backgroundSelected }]}>
+                    <Icon name={q.icon} size={22} color={colors.tint} />
+                  </View>
+                  <Text style={[styles.quickLabel, { color: colors.text }]} numberOfLines={1}>
+                    {q.label}
+                  </Text>
+                  {q.badge ? (
+                    <View style={[styles.badge, { backgroundColor: colors.tint, borderColor: colors.background }]}>
+                      <Text style={styles.badgeText}>{q.badge > 9 ? '9+' : q.badge}</Text>
+                    </View>
+                  ) : null}
+                </PressableScale>
+              </View>
+            ))}
+          </View>
+
+          {/* Die nächste Buchung als Ticket. */}
+          {nextBooking ? (
+            <Card onPress={() => router.push({ pathname: '/booking/[id]', params: { id: String(nextBooking.id) } })} accessibilityLabel={`Deine Buchung: ${nextBooking.offer_title}`}>
+              <View style={styles.ticket}>
+                <View style={[styles.ticketIcon, { backgroundColor: colors.tint }]}>
+                  <Icon name="ticket" size={22} color="#ffffff" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.kicker, { color: colors.tint }]}>Deine nächste Buchung</Text>
+                  <Text style={[styles.ticketTitle, { color: colors.text }]} numberOfLines={1}>
+                    {nextBooking.offer_title}
+                  </Text>
+                  <Text style={[styles.ticketMeta, { color: colors.textSecondary }]} numberOfLines={1}>
+                    {nextBooking.partner_name} · {nextBooking.people} {nextBooking.people === 1 ? 'Person' : 'Personen'}
+                    {nextBooking.preferred_date ? ` · ${formatDay(nextBooking.preferred_date)}` : ''}
+                  </Text>
+                </View>
+                <View style={[styles.code, { borderColor: colors.borderStrong }]}>
+                  <Text style={[styles.codeText, { color: colors.text }]}>{nextBooking.code}</Text>
+                </View>
+              </View>
+            </Card>
+          ) : null}
+
+          {/* Stempelkarte in klein. */}
+          {stamps ? (
+            <PressableScale onPress={() => router.push('/stamps')} accessibilityRole="button" accessibilityLabel="Stempelkarte öffnen" scaleTo={0.98}>
+              <StampCard card={stamps} compact />
+            </PressableScale>
+          ) : null}
+        </View>
+
+        {market.error && market.offers.length === 0 ? (
+          <View style={styles.column}>
+            <MascotError detail={market.error} onRetry={market.refresh} />
+          </View>
+        ) : null}
+
+        {!market.loading && !market.error && market.offers.length === 0 ? (
+          <View style={styles.column}>
+            <Card>
+              <MascotEmpty mood="thinking" gesture="wave">
+                <Text style={[styles.emptyTitle, { color: colors.text }]}>Bald geht&apos;s los!</Text>
+                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                  Wir holen gerade die ersten Partner in Göttingen an Bord. Deine Stempel und Credits kannst du schon sammeln.
+                </Text>
+              </MascotEmpty>
+            </Card>
+          </View>
+        ) : null}
+
+        {/* Kategorien */}
+        {categories.length > 0 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+            <Chip label="Alle" active={category === null} onPress={() => setCategory(null)} />
+            {categories.map((c) => (
+              <Chip
+                key={c.id}
+                label={c.name}
+                active={category === c.id}
+                icon={<CategoryIcon interest={c} size={15} color={category === c.id ? '#ffffff' : colors.text} />}
+                onPress={() => setCategory((prev) => (prev === c.id ? null : c.id))}
+              />
+            ))}
+          </ScrollView>
+        ) : null}
+
+        {featured.length > 0 ? (
+          <Section title="Top-Angebote" action="Alle" onAction={() => router.push('/finder')}>
+            <Rail itemWidth={260}>
+              {featured.map((o) => (
+                <OfferCard key={o.id} offer={o} interest={interestById.get(o.interest_id ?? -1)} distanceKm={market.distanceById.get(o.id)} />
+              ))}
+            </Rail>
+          </Section>
+        ) : null}
+
+        <View style={styles.column}>
+          <Card tone="soft" onPress={() => router.push('/finder')} accessibilityLabel="Gruppen-Finder öffnen">
+            <View style={styles.cta}>
+              <View style={[styles.ctaIcon, { backgroundColor: colors.tint }]}>
+                <Icon name="users" size={22} color="#ffffff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.ctaTitle, { color: colors.text }]}>Was machen wir heute?</Text>
+                <Text style={[styles.ctaText, { color: colors.textSecondary }]}>
+                  Sag, wie viele ihr seid und wie alt – wir finden, was passt. Je mehr, desto günstiger.
+                </Text>
+              </View>
+              <Icon name="chevron-right" size={20} color={colors.textSecondary} />
+            </View>
+          </Card>
+        </View>
+
+        {nearby.length > 0 ? (
+          <Section title="In deiner Nähe">
+            <Rail itemWidth={220}>
+              {nearby.map((o) => (
+                <OfferCard key={o.id} offer={o} width={220} interest={interestById.get(o.interest_id ?? -1)} distanceKm={market.distanceById.get(o.id)} />
+              ))}
+            </Rail>
+          </Section>
+        ) : null}
+
+        {withCredits.length > 0 ? (
+          <Section title="Mit Credits einlösen" action="Credits" onAction={() => router.push('/wallet')}>
+            <Rail itemWidth={220}>
+              {withCredits.map((o) => (
+                <OfferCard key={o.id} offer={o} width={220} interest={interestById.get(o.interest_id ?? -1)} distanceKm={market.distanceById.get(o.id)} />
+              ))}
+            </Rail>
+          </Section>
+        ) : null}
+
+        <View style={styles.column}>
+          <Card onPress={() => router.push('/wallet')} accessibilityLabel="Gutschein einlösen">
+            <View style={styles.cta}>
+              <View style={[styles.ctaIcon, { backgroundColor: '#f5b50a' }]}>
+                <Icon name="gift" size={22} color="#ffffff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.ctaTitle, { color: colors.text }]}>Gutschein gekauft?</Text>
+                <Text style={[styles.ctaText, { color: colors.textSecondary }]}>
+                  GÖ4Fun-Karten gibt&apos;s bei unseren Handelspartnern. Code eingeben, Credits bekommen.
+                </Text>
+              </View>
+              <Icon name="chevron-right" size={20} color={colors.textSecondary} />
+            </View>
+          </Card>
+        </View>
+
+        {partners.length > 0 ? (
+          <Section title="Unsere Partner">
+            <Rail itemWidth={120} gap={Spacing.two}>
+              {partners.map((p) => (
+                <View key={p.id} style={{ width: 120 }}>
+                  <PressableScale
+                    onPress={() => router.push({ pathname: '/partner/[id]', params: { id: String(p.id) } })}
+                    accessibilityRole="button"
+                    accessibilityLabel={p.name}
+                    style={[styles.partner, { borderColor: colors.border, backgroundColor: colors.background }]}>
+                    <PartnerLogo name={p.name} uri={p.logo_url} />
+                    <Text style={[styles.partnerName, { color: colors.text }]} numberOfLines={2}>
+                      {p.name}
+                    </Text>
+                  </PressableScale>
+                </View>
+              ))}
+            </Rail>
+          </Section>
+        ) : null}
+      </ScrollView>
+    </View>
+  );
+}
+
+function Section({ title, action, onAction, children }: { title: string; action?: string; onAction?: () => void; children: React.ReactNode }) {
+  const colors = useTheme();
+  return (
+    <View style={styles.section}>
+      <View style={[styles.column, styles.sectionHead]}>
+        <Text style={[styles.sectionTitle, { color: colors.text }]} accessibilityRole="header">
+          {title}
+        </Text>
+        {action && onAction ? (
+          <PressableScale onPress={onAction} haptic="select" accessibilityRole="button" hitSlop={8}>
+            <Text style={[styles.sectionAction, { color: colors.tint }]}>{action}</Text>
+          </PressableScale>
+        ) : null}
+      </View>
+      {children}
+    </View>
+  );
+}
+
+function Chip({ label, active, icon, onPress }: { label: string; active: boolean; icon?: React.ReactNode; onPress: () => void }) {
+  const colors = useTheme();
+  return (
+    <PressableScale
+      onPress={() => {
+        feedback.selected();
+        onPress();
+      }}
+      haptic="none"
+      accessibilityRole="button"
+      accessibilityState={{ selected: active }}
+      style={[
+        styles.chip,
+        { borderColor: active ? colors.tint : colors.border, backgroundColor: active ? colors.tint : colors.background },
+      ]}>
+      {icon}
+      <Text style={[styles.chipText, { color: active ? '#ffffff' : colors.text }]}>{label}</Text>
+    </PressableScale>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  list: { paddingBottom: Spacing.six },
-  column: { width: '100%', maxWidth: 620, alignSelf: 'center' },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.three,
-    paddingBottom: Spacing.one,
-    width: '100%',
-    maxWidth: MaxContentWidth,
-    alignSelf: 'center',
-  },
-  topIcons: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  tabs: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: Spacing.four,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  tab: { alignItems: 'center', paddingTop: Spacing.two, gap: Spacing.two },
-  tabLabel: { fontSize: 15 },
-  tabLine: { height: 3, width: 28, borderRadius: 2 },
-  greeting: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
-    width: '100%',
-    maxWidth: 620,
-    alignSelf: 'center',
-  },
-  greetingText: { fontFamily: FontFamily.semibold, fontSize: 14, flexShrink: 1 },
-  strip: { paddingVertical: Spacing.three },
-  filter: {
-    paddingHorizontal: Spacing.three,
-    paddingBottom: Spacing.three,
-    maxWidth: 620,
-    width: '100%',
-    alignSelf: 'center',
-    gap: Spacing.two,
-  },
-  filterClose: { alignSelf: 'center', paddingVertical: Spacing.one },
-  filterCloseText: { fontFamily: FontFamily.semibold, fontSize: 14 },
+  content: { paddingTop: Spacing.three, paddingBottom: Spacing.six, gap: Spacing.three },
+  column: { width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingHorizontal: Spacing.three, gap: Spacing.three },
+  hero: { gap: Spacing.three },
+  heroFoot: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  heroLine: { color: Night.textMuted, fontFamily: FontFamily.medium, fontSize: 13, lineHeight: 18 },
+  quick: { flexDirection: 'row', gap: Spacing.two },
+  quickWrap: { flex: 1 },
+  quickTile: { borderWidth: Stroke, borderRadius: Radius.card, alignItems: 'center', paddingVertical: Spacing.three, gap: 6 },
+  quickIcon: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
+  quickLabel: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  badge: { position: 'absolute', top: 6, right: 6, minWidth: 20, height: 20, borderRadius: 10, borderWidth: 2, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  badgeText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 10.5 },
+  ticket: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  ticketIcon: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  kicker: { fontFamily: FontFamily.bold, fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4 },
+  ticketTitle: { fontFamily: FontFamily.bold, fontSize: 16 },
+  ticketMeta: { fontFamily: FontFamily.medium, fontSize: 13 },
+  code: { borderWidth: Stroke, borderStyle: 'dashed', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6 },
+  codeText: { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 0.5 },
+  chips: { paddingHorizontal: Spacing.three, gap: Spacing.two },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: Stroke, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
+  chipText: { fontFamily: FontFamily.semibold, fontSize: 14 },
+  section: { gap: Spacing.two },
+  sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  sectionTitle: { fontFamily: FontFamily.bold, fontSize: 19, letterSpacing: -0.3 },
+  sectionAction: { fontFamily: FontFamily.bold, fontSize: 14 },
+  cta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  ctaIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  ctaTitle: { fontFamily: FontFamily.bold, fontSize: 16 },
+  ctaText: { fontFamily: FontFamily.medium, fontSize: 13, lineHeight: 18 },
+  partner: { borderWidth: Stroke, borderRadius: Radius.card, alignItems: 'center', padding: Spacing.three, gap: Spacing.two, minHeight: 124 },
+  partnerName: { fontFamily: FontFamily.semibold, fontSize: 13, textAlign: 'center' },
+  emptyTitle: { fontFamily: FontFamily.bold, fontSize: 20 },
+  emptyText: { fontFamily: FontFamily.medium, fontSize: 14, textAlign: 'center', lineHeight: 20 },
 });

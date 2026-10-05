@@ -12,30 +12,13 @@ import { AtIcon, CheckIcon, DotIcon, LockIcon, MailIcon, UserIcon } from '@/comp
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { PasswordMeter } from '@/components/ui/password-meter';
 import { TextField } from '@/components/ui/text-field';
-import { Features } from '@/constants/features';
 import { MIN_AGE } from '@/constants/operator';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
-import { tierFor } from '@/domain/account';
 import { LEGAL_VERSION } from '@/domain/legal';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { blockedTermMessage } from '@/lib/blocked-terms';
 import { passwordStrength } from '@/lib/password-strength';
-
-/**
- * Jedes neue Konto ist Standard – hier gibt es nichts zu wählen.
- *
- * Creator und die Business-Stufen schalten Rechte frei und brauchen deshalb ein
- * Ja vom Admin: Man fragt sie nach der Anmeldung unter „Upgrade" an. Früher
- * stand „Creator" hier zur Auswahl, womit die Bestätigung im Admin-Panel
- * umgehbar war (ein neues Konto ging schneller als eine Anfrage). Der Server
- * nimmt seit dieser Änderung auch nur noch Standard an – eine Auswahl hier wäre
- * also nur ein Weg in einen 422-Fehler (siehe server/src/accounts.js).
- *
- * Label und Satz kommen aus src/domain/account.ts, damit hier keine zweite
- * Beschreibung derselben Stufe entsteht.
- */
-const START_TIER = tierFor('standard');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -129,7 +112,6 @@ export default function RegisterScreen() {
         username: username.trim(),
         email: email.trim(),
         password,
-        account_type: START_TIER.type,
         interests,
         // Der Stand, dem tatsächlich zugestimmt wurde. Nicht bloß ein „ja":
         // Nur mit der Version lässt sich nach einer Änderung erkennen, wer noch
@@ -187,34 +169,10 @@ export default function RegisterScreen() {
 
             </View>
 
-            {/* Kontostufen sind gerade ausgeblendet (src/constants/features.ts) – ein
-                Hinweis auf „Creator" und „Upgrade" zeigte auf etwas, das es nicht gibt. */}
-            {Features.accountTiers ? (
-            <View>
-              <Text style={styles.typeLabel}>Konto-Typ</Text>
-              <View style={styles.typeNote}>
-                <Text style={styles.typeNoteTitle}>{START_TIER.label}</Text>
-                <Text style={styles.typeNoteText}>{START_TIER.tagline}</Text>
-              </View>
-              <Text style={styles.typeHint}>
-                Damit fängt jedes Konto an. Eigene Events erstellen (Creator) und die
-                Business-Stufen schalten wir frei – das fragst du nach der Anmeldung im
-                Upgrade-Bildschirm an.
-              </Text>
-              {/* Kann mit der festen Stufe eigentlich nicht kommen. Steht trotzdem
-                  hier, weil ein Feldfehler sonst nirgends landen würde: Der
-                  allgemeine Hinweis oben füllt sich nur, wenn es KEINE Feldfehler
-                  gibt (siehe onSubmit). */}
-              {errors.account_type?.[0] ? <Text style={styles.generalError}>{errors.account_type[0]}</Text> : null}
-            </View>
-            ) : errors.account_type?.[0] ? (
-              <Text style={styles.generalError}>{errors.account_type[0]}</Text>
-            ) : null}
-
             <View>
               <Text style={styles.typeLabel}>Interessen</Text>
               <Text style={styles.interestHint}>
-                Wähle mindestens {MIN_INTERESTS} aus – so schlagen wir dir passende Aktivitäten vor.
+                Wähle mindestens {MIN_INTERESTS} aus – so schlagen wir dir passende Angebote vor.
               </Text>
               <InterestPicker value={interests} onChange={setInterests} palette={INTEREST_PALETTE} />
               {interests.length > 0 && !interestsOk ? (
@@ -251,8 +209,8 @@ export default function RegisterScreen() {
                   onPress={() => router.push({ pathname: '/legal', params: { doc: 'privacy' } })}>
                   Datenschutz
                 </Text>
-                {' '}gelesen. Mir ist klar, dass Events von Nutzer:innen kommen und die Teilnahme
-                auf eigene Verantwortung erfolgt (
+                {' '}gelesen. Mir ist klar, dass die Aktivitäten von unseren Partnern durchgeführt werden und
+                die Teilnahme auf eigene Verantwortung erfolgt (
                 <Text
                   style={styles.link}
                   onPress={() => router.push({ pathname: '/legal', params: { doc: 'liability' } })}>
@@ -345,39 +303,6 @@ const styles = StyleSheet.create({
   interestHint: {
     marginLeft: Spacing.one,
     marginBottom: Spacing.two,
-    fontSize: 13,
-    color: Brand.textMuted,
-    fontFamily: FontFamily.regular,
-  },
-  /** Erklärt, wo Creator und die Business-Stufen herkommen. */
-  typeHint: {
-    marginTop: Spacing.two,
-    marginLeft: Spacing.one,
-    fontSize: 13,
-    lineHeight: 18,
-    color: Brand.textMuted,
-    fontFamily: FontFamily.regular,
-  },
-  /**
-   * Sieht aus wie ein Eingabefeld, ist aber keins: Die Stufe steht fest, das
-   * Feld sagt nur, welche. Deshalb ohne Akzentfarbe – sonst wirkt es angetippt.
-   */
-  typeNote: {
-    borderRadius: Radius.field,
-    borderWidth: 1.5,
-    borderColor: Brand.inputBorder,
-    backgroundColor: Brand.inputBg,
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.three,
-    gap: Spacing.one,
-  },
-  typeNoteTitle: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: Brand.text,
-    fontFamily: FontFamily.bold,
-  },
-  typeNoteText: {
     fontSize: 13,
     color: Brand.textMuted,
     fontFamily: FontFamily.regular,

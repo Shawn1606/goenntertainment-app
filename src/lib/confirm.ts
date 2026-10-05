@@ -14,7 +14,10 @@ export function confirmAction(
   destructive = false,
 ): Promise<boolean> {
   if (Platform.OS === 'web') {
-    const ok = typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}`);
+    // Der Browser-Dialog kennt nur „OK": Was OK bedeutet, steht deshalb im Text –
+    // bei Käufen ist das die Pflichtangabe „Zahlungspflichtig …".
+    const meaning = confirmLabel !== 'OK' ? `\n\nOK = ${confirmLabel}` : '';
+    const ok = typeof window !== 'undefined' && window.confirm(`${title}\n\n${message}${meaning}`);
     return Promise.resolve(Boolean(ok));
   }
 
