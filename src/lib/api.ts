@@ -1154,6 +1154,24 @@ export const api = {
     }),
 
   /**
+   * An account without a password (former Google sign-in), step 1: a one-time code to the
+   * account's own address (at most one mail a minute).
+   */
+  requestFirstPasswordCode: (token: string) =>
+    request<{ message: string; destination: string; expires_in: number }>('/user/password/code', {
+      method: 'POST',
+      token,
+    }),
+
+  /** An account without a password, step 2: the first password, with the mailed code. */
+  setFirstPassword: (token: string, code: string, password: string) =>
+    request<{ message: string }>('/user/password', {
+      method: 'PUT',
+      body: { code, password },
+      token,
+    }),
+
+  /**
    * Eigenes Konto endgültig löschen. `password` (bzw. bei Konten ohne Passwort
    * `confirm: 'LÖSCHEN'`), bei aktiver 2FA zusätzlich `code`.
    */
