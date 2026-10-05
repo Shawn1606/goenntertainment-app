@@ -17,7 +17,7 @@ import sharp from 'sharp';
 
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { hasMetadataTrace, JPEG_8X8, palettePngOfSize, PNG_1X1, pngOfSize, withJpegExif } from './support/images.js';
-import { assertLoopbackBaseUrl, startModelMock, verdict } from './support/model-mock.js';
+import { assertLoopbackBaseUrl, closedLoopbackUrl, startModelMock, verdict } from './support/model-mock.js';
 
 /** What test/test.env gave this process, before this file changes it. */
 const INHERITED_MODERATION_ENABLED = process.env.MODERATION_ENABLED;
@@ -595,6 +595,97 @@ test('an unavailable provider (429, 5xx) still follows MODERATION_FAIL_OPEN', as
       assert.deepEqual({ ...(await lastReport(author.user.id)) }, { verdict: 'error', action: 'none' });
     });
   }
+});
+
+/* ---------------------- outages seen from this side: the time limit and a lost connection (F-06) */
+
+/**
+ * The longest a test here waits for one answer: ten times the time limit this file sets
+ * (MODERATION_TIMEOUT_MS=1500). A check that is still running then has no working time limit.
+ */
+const ANSWER_BOUND_MS = 15_000;
+
+/** postAndCount, but it stops waiting after ANSWER_BOUND_MS and reports that (`unanswered`). */
+async function postWithinBound(token, body) {
+  const callsBefore = mock.messageCalls().length;
+  const form = new FormData();
+  form.append('body', body);
+  try {
+    const res = await fetch(`${base}/api/posts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+      signal: AbortSignal.timeout(ANSWER_BOUND_MS),
+    });
+    return { status: res.status, json: await res.json(), calls: mock.messageCalls().length - callsBefore };
+  } catch (err) {
+    if (err?.name !== 'TimeoutError') throw err;
+    return { unanswered: true, calls: mock.messageCalls().length - callsBefore };
+  }
+}
+
+/**
+ * Posts once with MODERATION_FAIL_OPEN unset and once with 'true' and returns what went wrong: an
+ * outage refuses the content when the switch is unset ("not reachable", no ban) and lets it
+ * through when it is 'true'; both are reported as 'error'.
+ */
+async function outageFailures(author, text, { reachesStandIn = true } = {}) {
+  const failures = [];
+  for (const failOpen of ['', 'true']) {
+    await withEnv({ MODERATION_FAIL_OPEN: failOpen }, async () => {
+      const label = `MODERATION_FAIL_OPEN=${JSON.stringify(failOpen)}`;
+      const before = await postCount(author.user.id);
+      const r = await postWithinBound(author.token, `${text} ${failOpen === '' ? 'zu' : 'offen'}`);
+      if (r.unanswered) {
+        failures.push(`${label}: no answer within ${ANSWER_BOUND_MS} ms - the check has no working time limit`);
+        return;
+      }
+      if (reachesStandIn && r.calls < 1) failures.push(`${label}: the check did not reach the local stand-in`);
+      if (!reachesStandIn && r.calls !== 0) failures.push(`${label}: ${r.calls} request(s) reached the stand-in`);
+      const report = { ...(await lastReport(author.user.id)) };
+      const stored = (await postCount(author.user.id)) - before;
+      if (failOpen === 'true') {
+        if (r.status !== 201) failures.push(`${label}: ${r.status} ${JSON.stringify(r.json)} instead of 201`);
+        if (stored !== 1) failures.push(`${label}: ${stored} post(s) stored instead of 1`);
+        if (report.verdict !== 'error' || report.action !== 'none') failures.push(`${label}: report ${JSON.stringify(report)}`);
+      } else {
+        if (r.status !== 422 || r.json.message !== MSG_UNAVAILABLE) failures.push(`${label}: ${r.status} ${JSON.stringify(r.json)}`);
+        if (stored !== 0) failures.push(`${label}: the post was stored`);
+        if (report.verdict !== 'error' || report.action !== 'blocked') failures.push(`${label}: report ${JSON.stringify(report)}`);
+      }
+    });
+  }
+  const banned = await first('SELECT banned_until FROM users WHERE id = ?', [author.user.id]);
+  if (banned.banned_until !== null) failures.push('the author was banned');
+  return failures;
+}
+
+test('a provider that does not answer within the time limit follows MODERATION_FAIL_OPEN like an outage', async () => {
+  const author = await createUser('modnoanswer', { accountType: 'creator', created: userIds });
+  mock.respond({ hang: true });
+  assert.deepEqual(await outageFailures(author, 'Keine Antwort'), []);
+});
+
+test('a refused connection to the provider follows MODERATION_FAIL_OPEN like an outage', async () => {
+  const author = await createUser('modrefused', { accountType: 'creator', created: userIds });
+  mock.respond({ verdict: verdict({ severity: 0 }) });
+  // The provider's address is a loopback port where nothing listens.
+  const failures = await withEnv({ ANTHROPIC_BASE_URL: await closedLoopbackUrl() }, () =>
+    outageFailures(author, 'Keine Verbindung', { reachesStandIn: false }),
+  );
+  assert.deepEqual(failures, []);
+});
+
+test('a reply that stops after its headers ends at the time limit and follows MODERATION_FAIL_OPEN', async () => {
+  const author = await createUser('modstalled', { accountType: 'creator', created: userIds });
+  mock.respond({ stall: true });
+  assert.deepEqual(await outageFailures(author, 'Antwort bleibt stehen'), []);
+});
+
+test('a connection that breaks while the reply is read follows MODERATION_FAIL_OPEN like an outage', async () => {
+  const author = await createUser('moddropped', { accountType: 'creator', created: userIds });
+  mock.respond({ drop: true });
+  assert.deepEqual(await outageFailures(author, 'Verbindung bricht ab'), []);
 });
 
 /* ------------------------------------- the server-side fallback beta (keep these tests last) */

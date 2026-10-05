@@ -41,7 +41,9 @@ import { storeImage } from './storage.js';
  *   timeoutSeverity  Ab dieser Schwere gibt es zusaetzlich den automatischen Timeout
  *                    (MODERATION_TIMEOUT_SEVERITY).
  *   requestTimeoutMs Harte Obergrenze pro Pruefung, damit das Anlegen eines Events nicht haengt
- *                    (MODERATION_TIMEOUT_MS).
+ *                    (MODERATION_TIMEOUT_MS). It covers the whole check, the reply's body
+ *                    included (the deadline in classify()); the SDK's own timeout, set to the same
+ *                    value, covers only the wait for the reply's headers.
  * When the model does not answer, MODERATION_FAIL_OPEN decides (config.js moderationSettings);
  * the incident is stored as a report either way.
  */
@@ -291,14 +293,15 @@ async function reserveModelCall(env = process.env) {
  * Ein Claude-Aufruf mit erzwungenem JSON-Ergebnis.
  * Erst mit server-seitigem Fallback-Modell; ist das fuer den Account nicht
  * freigeschaltet, wird der Weg einmalig deaktiviert und normal weitergemacht.
- * Each request first reserves its unit of the daily budget (reserveModelCall).
+ * Each request first reserves its unit of the daily budget (reserveModelCall). `signal` is the
+ * check's deadline (classify()): it ends every request of this check, the reply's body included.
  */
-async function createMessage(params) {
+async function createMessage(params, signal) {
   const c = getClient();
   if (process.env.MODERATION_FALLBACKS !== 'false' && !fallbacksUnavailable) {
     try {
       await reserveModelCall();
-      return await c.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' });
+      return await c.beta.messages.create({ ...params, betas: [FALLBACK_BETA], fallbacks: 'default' }, { signal });
     } catch (err) {
       // Ist der Beta-Pfad fuer den Account nicht freigeschaltet, wird er einmalig
       // abgeschaltet und es geht ohne Fallback weiter – sonst wuerde die Moderation
@@ -310,7 +313,7 @@ async function createMessage(params) {
     }
   }
   await reserveModelCall();
-  return c.messages.create(params);
+  return c.messages.create(params, { signal });
 }
 
 /**
@@ -326,15 +329,44 @@ function fallbackBetaUnavailable(err) {
 }
 
 /**
+ * Error codes of a connection that broke while the reply was being read: undici's socket error
+ * (the fetch the SDK uses) and Node's own socket errors, wherever they sit in the cause chain.
+ */
+const LOST_CONNECTION_CODES = new Set(['UND_ERR_SOCKET', 'ECONNRESET', 'EPIPE', 'ETIMEDOUT']);
+
+/** Whether `err`, or an error in its cause chain, says that the connection broke. */
+function lostConnection(err) {
+  let current = err;
+  for (let depth = 0; depth < 5 && current && typeof current === 'object'; depth += 1) {
+    if (LOST_CONNECTION_CODES.has(current.code)) return true;
+    current = current.cause;
+  }
+  return false;
+}
+
+/**
  * Whether a failed request means that the provider is unavailable right now: no connection, the
  * time limit, 408, 429 or a 5xx (529 "overloaded" included). Only then may MODERATION_FAIL_OPEN let
- * content through (decide()). Every other failure is no outage: the provider refused this request
- * (400, 413, 422 - an image over its limits, say), or the key, account or settings are wrong (401,
- * 403, 404). Content behind such an error is refused whatever the switch says, or any user could
- * skip the check on demand by sending what the provider refuses.
+ * content through (decide()). What the call throws in each case (seen with the SDK version of
+ * server/package-lock.json against the local stand-in, test/moderation.test.js):
+ *   - no connection before the reply's headers (refused, reset, unreachable): the SDK's
+ *     APIConnectionError. Once the headers are in, the SDK reads the body without wrapping its
+ *     errors, so a connection that breaks then arrives as fetch's TypeError ('terminated') with
+ *     the socket error as its cause (lostConnection);
+ *   - the time limit: the SDK's own timeout covers only the wait for the headers (it throws
+ *     APIConnectionTimeoutError, an APIConnectionError). The check's deadline in classify() covers
+ *     the whole call, body included; when it ends a request, the SDK throws APIUserAbortError, or
+ *     the body read an AbortError - neither is an APIConnectionError, so `timeLimitReached` (the
+ *     deadline fired) decides, whatever the class.
+ * Every other failure is no outage: the provider refused this request (400, 413, 422 - an image
+ * over its limits, say), or the key, account or settings are wrong (401, 403, 404). Content behind
+ * such an error is refused whatever the switch says, or any user could skip the check on demand by
+ * sending what the provider refuses.
  */
-function isOutage(err) {
-  if (err instanceof APIConnectionError) return true; // the SDK's time limit is one of these
+function isOutage(err, { timeLimitReached = false } = {}) {
+  if (timeLimitReached) return true;
+  if (err instanceof APIConnectionError) return true;
+  if (lostConnection(err)) return true;
   const status = err?.status;
   return status === 408 || status === 429 || (Number.isInteger(status) && status >= 500);
 }
@@ -383,20 +415,28 @@ async function classify({ context, title, description, location, interests, labe
     text: buildModerationText({ context, title, description, location, interests, label, hasImage: Boolean(image) }),
   });
 
+  const { model, requestTimeoutMs } = tuning();
+  // The check's deadline (MODERATION_TIMEOUT_MS): it ends the call however far it got, the reply's
+  // body included, which the SDK's own timeout does not cover (isOutage).
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), requestTimeoutMs);
   let response;
   try {
-    response = await createMessage({
-      model: tuning().model,
-      // Genug Luft fuer das (standardmaessig aktive) Nachdenken plus das JSON.
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      output_config: {
-        // Klassifikation braucht keine tiefe Analyse -> guenstig und schnell.
-        effort: 'low',
-        format: { type: 'json_schema', schema: VERDICT_SCHEMA },
+    response = await createMessage(
+      {
+        model,
+        // Genug Luft fuer das (standardmaessig aktive) Nachdenken plus das JSON.
+        max_tokens: 4096,
+        system: SYSTEM_PROMPT,
+        output_config: {
+          // Klassifikation braucht keine tiefe Analyse -> guenstig und schnell.
+          effort: 'low',
+          format: { type: 'json_schema', schema: VERDICT_SCHEMA },
+        },
+        messages: [{ role: 'user', content: blocks }],
       },
-      messages: [{ role: 'user', content: blocks }],
-    });
+      deadline.signal,
+    );
   } catch (err) {
     if (err instanceof CallBudgetRefusal) {
       // Logged where it happened (reserveModelCall): the limit once a day, a counter failure each time.
@@ -406,7 +446,15 @@ async function classify({ context, title, description, location, interests, labe
         error: err.kind === 'limit' ? 'Tageslimit der KI-Pruefung erreicht.' : 'Zaehler der KI-Pruefung konnte nicht gelesen oder geschrieben werden.',
       };
     }
-    return { status: isOutage(err) ? 'error' : 'invalid', error: err?.message ?? String(err), logDetail: describeError(err) };
+    const timeLimitReached = deadline.signal.aborted;
+    return {
+      status: isOutage(err, { timeLimitReached }) ? 'error' : 'invalid',
+      // At the deadline: the SDK's own words for its timeout, so both time limits read alike.
+      error: timeLimitReached ? 'Request timed out.' : (err?.message ?? String(err)),
+      logDetail: timeLimitReached ? 'time limit reached (MODERATION_TIMEOUT_MS)' : describeError(err),
+    };
+  } finally {
+    clearTimeout(timer);
   }
 
   // Die Sicherheits-Klassifikatoren koennen die Anfrage ablehnen – dann gibt es

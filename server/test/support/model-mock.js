@@ -15,8 +15,14 @@
  *                           a fixed test text)
  *   { refusal: true }       200 with stop_reason 'refusal' and no text
  *   { hang: true }          no answer at all (the SDK's time limit ends the call)
+ *   { stall: true }         200 headers and the start of a reply, then nothing more (only a time
+ *                           limit that covers the reply's body ends the call)
+ *   { drop: true }          200 headers and the start of a reply, then the connection is closed
+ *
+ * closedLoopbackUrl() gives a loopback address where nothing listens, for a refused connection.
  */
 import http from 'node:http';
+import net from 'node:net';
 
 /** Accepted moderation addresses in tests: the loopback interface, with a port. */
 const LOOPBACK_URL = /^http:\/\/(127\.0\.0\.1|\[::1\]):\d+\/?$/;
@@ -28,6 +34,21 @@ export function assertLoopbackBaseUrl(url) {
   }
   return url;
 }
+
+/**
+ * A loopback address where nothing listens: a free port is taken and given back at once, so a
+ * request to it is refused (ECONNREFUSED) and never leaves the machine.
+ */
+export async function closedLoopbackUrl() {
+  const probe = net.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+  return assertLoopbackBaseUrl(`http://127.0.0.1:${port}`);
+}
+
+/** The first bytes of a reply, as the stall and drop answers send them before they stop. */
+const REPLY_START = '{"id":"msg_test_partial","type":"message","role":"assistant","content":[';
 
 /** A verdict as the provider returns it inside the reply text. */
 export function verdict({ severity = 0, fields = [], categories = [], reason = 'Unbedenklich.' } = {}) {
@@ -56,6 +77,18 @@ export async function startModelMock() {
       if (next.hang) {
         hanging.add(res);
         res.on('close', () => hanging.delete(res));
+        return;
+      }
+      if (next.stall || next.drop) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.write(REPLY_START);
+        if (next.drop) {
+          // Once the start has gone out: the connection breaks in the middle of the reply.
+          setTimeout(() => res.socket?.destroy(), 50);
+        } else {
+          hanging.add(res);
+          res.on('close', () => hanging.delete(res));
+        }
         return;
       }
       if (next.status) {
