@@ -42,6 +42,7 @@ const EXPECTED_CALLS = {
   'routes/profile.js notifyFollowers post': 'fan-out per new post; each post is new, moderated content',
   'routes/stories.js notifyFollowers story': 'fan-out per new story; each story is new, moderated content',
   'routes/activities.js notifyFollowers activity': 'fan-out per new event; each event is new, moderated content',
+  'routes/activities.js notifyQuietly activity_comment': 'one row per event comment; each comment is new, moderated text',
 };
 
 /** The statements that insert notification rows: notify() (via insertOne) and notifyMany(). */
