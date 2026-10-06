@@ -20,6 +20,23 @@ import {
 } from './lib.mjs';
 
 const composeText = () => readText(path.join(DEPLOY_DIR, COMPOSE_FILE));
+/**
+ * The text of one service of the production compose, from its `  name:` line to the next service or
+ * top-level key, with LF line ends (a Windows checkout has CRLF). For what the compose file itself
+ * says, where the rendered configuration depends on the docker compose version.
+ */
+function serviceText(name) {
+  const lines = composeText().split(/\r?\n/);
+  const from = lines.indexOf('services:');
+  assert.ok(from >= 0, `no services: in deploy/${COMPOSE_FILE}`);
+  const start = lines.indexOf(`  ${name}:`, from);
+  assert.ok(start >= 0, `no service ${name} in deploy/${COMPOSE_FILE}`);
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^ {0,2}[^\s#]/.test(lines[i])) { end = i; break; }
+  }
+  return lines.slice(start, end).join('\n');
+}
 const base = () => renderConfig({ profiles: ['tools'] });
 // With the stack test's probe (profile test), so its image and settings are checked as well.
 const ci = () => renderConfig({ files: [COMPOSE_FILE, CI_OVERRIDE], profiles: ['tools', 'test'] });
@@ -135,15 +152,23 @@ test('required settings: the production compose requires exactly the documented 
   assert.deepEqual(found, REQUIRED_NAMES);
 });
 
-test('required settings: rendering without any env file value fails and names every required setting', async () => {
+// How many missing settings one `docker compose config` names depends on its version: v5.5.1
+// reports all of them in one error, v2.38.2 (on GitHub's ubuntu-24.04 runner) stops at the first
+// one it meets. So this test proves that an empty env file does not render and that the error
+// names a required setting, and only a documented one. That each of the settings is required, and
+// named, is proven one at a time by "dropping any single required setting blocks rendering" (every
+// setting removed, and every setting emptied; same result on both versions), and that these are
+// all of them by "the production compose requires exactly the documented settings".
+test('required settings: rendering without any env file value fails and names a required setting', async () => {
   const empty = variantEnvFile(CI_ENV, { drop: Object.keys(ciValues()) });
   try {
     assert.deepEqual(parseEnvFile(readText(empty)), [], 'the env file must be empty');
     const r = await composeAsync(['config', '--quiet'], { envFile: empty, profiles: ['tools'] });
     assert.notEqual(r.status, 0, 'docker compose config succeeded without any setting');
-    const missing = REQUIRED_NAMES.filter((name) => !r.stderr.includes(`required variable ${name} is missing`));
-    console.log(`empty env file: ${REQUIRED_NAMES.length - missing.length} of ${REQUIRED_NAMES.length} required settings named`);
-    assert.deepEqual(missing, [], 'not named in the error');
+    const named = [...new Set([...r.stderr.matchAll(/required variable (\S+) is missing/g)].map((m) => m[1]))];
+    console.log(`empty env file: ${named.length} of ${REQUIRED_NAMES.length} required settings named (how many depends on the docker compose version)`);
+    assert.ok(named.length >= 1, `the error names no required setting: ${r.stderr.trim().slice(0, 300)}`);
+    assert.deepEqual(named.filter((name) => !REQUIRED_NAMES.includes(name)), [], 'the error names a setting that is not documented as required');
   } finally {
     removeTemp(empty);
   }
@@ -711,7 +736,18 @@ test('F-17: backups go to the required BACKUP_DIR bind, never created implicitly
   const bind = backup.volumes.find((v) => v.target === '/backups');
   assert.equal(bind.type, 'bind');
   assert.equal(posix(bind.source).replace(/^[A-Za-z]:/, ''), ciValues().BACKUP_DIR);
-  assert.equal(bind.bind?.create_host_path, false);
+  // What the rendered configuration says about creating the source depends on the docker compose
+  // version: v5.5.1 prints `create_host_path: false` for an explicit false and leaves the key out
+  // for true (and for the short syntax, which implies true); v2.38.2 (on GitHub's runner) leaves
+  // it out whatever the file says. So a rendered configuration can only refuse a version that
+  // prints `true`; it cannot show on its own that the source is not created.
+  assert.ok([undefined, false].includes(bind.bind?.create_host_path), `the BACKUP_DIR bind renders create_host_path: ${JSON.stringify(bind.bind?.create_host_path)}; it must be false (or left out by a compose that omits it)`);
+  // The compose file itself must say it, in the long syntax: the check that holds on every version.
+  assert.match(
+    serviceText('backup'),
+    /^ *- type: bind\n *source: \$\{BACKUP_DIR:\?[^\n]*\}\n *target: \/backups\n *bind:\n *create_host_path: false *$/m,
+    `deploy/${COMPOSE_FILE}: the backup service's /backups bind must be written in the long syntax with create_host_path: false (the short syntax implies true)`,
+  );
   assert.equal(backup.environment.BACKUP_RETENTION_DAYS, ciValues().BACKUP_RETENTION_DAYS);
   assert.deepEqual(backup.healthcheck.test, ['CMD', 'bash', '/opt/deploy/backup.sh', '--check']);
   assert.ok(backup.restart, 'the backup service is long-running');

@@ -130,7 +130,7 @@ if docker compose --project-directory "$deploy_dir" --env-file "$env_file" \
   -f "$deploy_dir/docker-compose.yml" config --quiet; then
   pass 'docker compose renders the production compose with the env file'
 else
-  flunk 'docker compose renders the production compose with the env file (its message above names what is missing)'
+  flunk 'docker compose renders the production compose with the env file (its message above names the missing setting, only the first one with an older docker compose: run the preflight again until it passes)'
 fi
 
 finish
