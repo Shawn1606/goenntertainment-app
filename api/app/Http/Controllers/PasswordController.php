@@ -10,7 +10,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
@@ -64,9 +63,8 @@ class PasswordController extends Controller
                 [$email, Hash::make($token)],
             );
 
-            // TODO(eigenes Ticket): echten Mail-Versand anbinden (SMTP). Bis dahin
-            // steht der Token im Log, damit sich der Ablauf pruefen laesst.
-            Log::info("[forgot-password] Reset-Token fuer {$email}: {$token}");
+            // TODO: deliver the reset by mail. Until then the token goes nowhere: it is never
+            // written to a log, because whoever can read the log could take over the account.
         }
 
         return response()->json([

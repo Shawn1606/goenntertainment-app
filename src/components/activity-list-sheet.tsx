@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Animated,
   BackHandler,
@@ -104,8 +104,9 @@ export function ActivityListSheet<T extends Activity>({
   // Eigener Sichtbar-Zustand, damit das Blatt beim Schließen noch ausfahren
   // kann: `title === null` allein würde es sofort aus dem Baum nehmen.
   const [visible, setVisible] = useState(Boolean(title));
-  const appear = useRef(new Animated.Value(0)).current;
+  const [appear] = useState(() => new Animated.Value(0));
   const drag = useSheetDrag({ onDismiss: onClose, open: Boolean(title) });
+  const resetDrag = drag.reset;
 
   /**
    * Die Liste noch einmal unterteilt.
@@ -118,10 +119,14 @@ export function ActivityListSheet<T extends Activity>({
    */
   const { axis, sections } = useMemo(() => listSections(activities), [activities]);
 
+  // Opening shows the sheet while rendering, not in an effect (react.dev:
+  // "Adjusting some state when a prop changes"). Closing still waits for the
+  // fade-out below.
+  if (title && !visible) setVisible(true);
+
   useEffect(() => {
     if (title) {
-      setVisible(true);
-      drag.reset();
+      resetDrag();
       Animated.timing(appear, { toValue: 1, duration: 220, useNativeDriver: NATIVE }).start();
       return;
     }
@@ -130,7 +135,7 @@ export function ActivityListSheet<T extends Activity>({
         if (finished) setVisible(false);
       },
     );
-  }, [title, appear, drag]);
+  }, [title, appear, resetDrag]);
 
   /**
    * Die Zurück-Taste auf Android schließt das Blatt.

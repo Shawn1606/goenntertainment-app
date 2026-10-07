@@ -1442,14 +1442,20 @@ Untere Leiste wie bei Instagram/TikTok: **Home · Karte · ＋ Erstellen · Freu
 
 ### Autostart
 
-Beim Windows-Login und beim Start von Claude Code läuft `scripts/dev-up.ps1`: wartet aufs
-Internet, trägt die WLAN-IP in `.env.local` ein und startet Laravel, Node und Expo in
-eigenen Fenstern. Abschalten: `scripts/install-autostart.ps1 -Uninstall`.
+Beim Start von Claude Code läuft `scripts/dev-up.ps1` (persönlicher SessionStart-Hook): wartet
+aufs Internet, trägt die WLAN-IP in `.env.local` ein und startet Laravel, Node und Expo in
+eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angelegte Verknüpfung
+„GOE4Fun Dev-Umgebung" im Autostart-Ordner kann gelöscht werden.
 
 ### Was du noch tun musst
 
-- Mail-Zugang (SMTP) in `api/.env` eintragen – sonst stehen die 2FA-Codes nur in
-  `api/storage/logs/laravel.log`.
+- Mail-Zugang (SMTP) für den Server in `deploy/.env` eintragen. Am PC fängt Mailpit alle
+  Mails ab (`docker compose -f dev/docker-compose.yml up -d`, dann http://127.0.0.1:8025;
+  ohne Docker geht das Mailpit-Programm, siehe README). Ein vorhandenes `api/.env`, das noch
+  den Log-Mailer nutzt (`MAIL_MAILER` steht dort auf `log`), schreibt Codes weiter ins Log:
+  dort die `MAIL_*`-Zeilen aus `api/.env.example` übernehmen (`MAIL_MAILER=smtp`,
+  `MAIL_HOST=127.0.0.1`, `MAIL_PORT=1025`). Danach die alte `api/storage/logs/laravel.log`
+  löschen (sie kann Codes enthalten). Ab dann stehen Codes nie mehr in einem Log.
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.

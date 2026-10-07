@@ -1,0 +1,6 @@
+{
+  "$comment": "Advisories accepted for now, one section per lock file (read by scripts/ci/audit.mjs). Each entry maps an advisory id (GHSA-... or abandoned:<package>) to the reason it is accepted. Entries may only be removed: the audit fails on an advisory that is not listed and on an entry that no longer matches one.",
+  "npm:.": {},
+  "npm:server": {},
+  "composer:api": {}
+}

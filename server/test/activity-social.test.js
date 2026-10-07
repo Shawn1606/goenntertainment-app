@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
+import { TEST_PASSWORD, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
 
 let base;
 let server;
@@ -27,7 +28,7 @@ const createdActivityIds = [];
  * Kontostufen gerade eingeschaltet sind (server/src/features.js).
  */
 async function registerUser(prefix, accountType = 'creator') {
-  const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const stamp = uniqueStamp();
   const res = await fetch(`${base}/api/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -35,7 +36,7 @@ async function registerUser(prefix, accountType = 'creator') {
       name: `${prefix} Test`,
       username: `${prefix}${stamp}`.slice(0, 28),
       email: `${prefix}${stamp}@example.com`,
-      password: 'geheim1234',
+      password: TEST_PASSWORD,
       account_type: 'standard',
       device_name: 'test',
     }),
@@ -107,20 +108,19 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdActivityIds.length) {
-    await pool.query(
-      `DELETE FROM activities WHERE id IN (${createdActivityIds.map(() => '?').join(',')})`,
-      createdActivityIds,
-    );
+  // Closed even when the cleanup throws; open handles would keep `npm test` from exiting.
+  try {
+    if (createdActivityIds.length) {
+      await pool.query(
+        `DELETE FROM activities WHERE id IN (${createdActivityIds.map(() => '?').join(',')})`,
+        createdActivityIds,
+      );
+    }
+    await deleteTestUsers(pool, createdUserIds);
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  if (createdUserIds.length) {
-    await pool.query(
-      `DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`,
-      createdUserIds,
-    );
-  }
-  await pool.end();
-  server.close();
 });
 
 /* ------------------------------------------------------------ Gefaellt mir */

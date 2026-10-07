@@ -35,6 +35,16 @@ const TIMEOUTS: { label: string; minutes: number }[] = [
   { label: '7 Tage', minutes: 60 * 24 * 7 },
 ];
 
+/** One request for the user list, answered as a value instead of an exception. */
+async function fetchUsers(token: string): Promise<{ users: AdminUser[] } | { error: string }> {
+  try {
+    const res = await api.adminUsers(token);
+    return { users: res.data };
+  } catch {
+    return { error: 'Nutzer konnten nicht geladen werden.' };
+  }
+}
+
 /** Sperr-Status als kurzer Text, oder null wenn aktiv. */
 function banLabel(u: AdminUser): string | null {
   if (!u.banned) return null;
@@ -64,22 +74,41 @@ export default function AdminUsersScreen() {
   const [busy, setBusy] = useState(false);
   const [sheetError, setSheetError] = useState<string | null>(null);
 
+  /** Puts the answer of `fetchUsers` on screen. */
+  const applyUsers = useCallback((result: { users: AdminUser[] } | { error: string }) => {
+    if ('users' in result) {
+      setUsers(result.users);
+      setError(null);
+    } else {
+      setError(result.error);
+    }
+    setLoading(false);
+  }, []);
+
+  // First load, and again when the token changes. The answer is applied in the
+  // promise callback - no state is set synchronously inside the effect - and an
+  // answer for an outdated token is dropped.
+  useEffect(() => {
+    if (!token) return;
+    let ignore = false;
+    fetchUsers(token).then((result) => {
+      if (!ignore) applyUsers(result);
+    });
+    return () => {
+      ignore = true;
+    };
+  }, [token, applyUsers]);
+
+  /**
+   * Reload after an action (see `run`); resolves once the list is updated.
+   * Not called from an effect, so the old error text is cleared right away, as
+   * before.
+   */
   const load = useCallback(async () => {
     if (!token) return;
     setError(null);
-    try {
-      const res = await api.adminUsers(token);
-      setUsers(res.data);
-    } catch {
-      setError('Nutzer konnten nicht geladen werden.');
-    } finally {
-      setLoading(false);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
+    applyUsers(await fetchUsers(token));
+  }, [token, applyUsers]);
 
   function openSheet(u: AdminUser) {
     setSelected(u);

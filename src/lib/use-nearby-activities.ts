@@ -3,6 +3,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { distanceKm } from '@/domain/distance';
 import { RADIUS_STEPS_KM, chooseRadius } from '@/domain/nearby';
+import {
+  type RunState,
+  completeRun,
+  initialRunState,
+  isResolving,
+  startRun,
+} from '@/domain/nearby-run';
 import { type Activity } from '@/lib/api';
 import { type Coords, geocode } from '@/lib/geocode';
 
@@ -42,19 +49,25 @@ export function useNearbyActivities(
   enabled = true,
 ): NearbyState {
   const [userCoords, setUserCoords] = useState<Coords | null>(null);
-  const [hasLocation, setHasLocation] = useState(true);
+  // Starts as `enabled`: switched off from the start means no location.
+  const [hasLocation, setHasLocation] = useState(enabled);
   const [distanceById, setDistanceById] = useState<Map<number, number>>(new Map());
-  const [resolving, setResolving] = useState(false);
 
-  // Standort einmalig anfragen.
-  useEffect(() => {
+  // Abschalten heißt auch: alte Entfernungen verwerfen. Done while rendering,
+  // not in the effect (react.dev: "Adjusting some state when a prop changes").
+  const [wasEnabled, setWasEnabled] = useState(enabled);
+  if (enabled !== wasEnabled) {
+    setWasEnabled(enabled);
     if (!enabled) {
-      // Abschalten heißt auch: alte Entfernungen verwerfen.
       setUserCoords(null);
       setDistanceById(new Map());
       setHasLocation(false);
-      return;
     }
+  }
+
+  // Standort einmalig anfragen.
+  useEffect(() => {
+    if (!enabled) return;
 
     let active = true;
     (async () => {
@@ -86,11 +99,22 @@ export function useNearbyActivities(
   const signature = activities.map((a) => `${a.id}:${a.location ?? ''}`).join('|');
   const signatureRef = useRef('');
 
+  /**
+   * For which position and list the current geocoding run is, and for which one a run
+   * completed. Adjusted while rendering like `wasEnabled` above: a new position or list
+   * resets the earlier result before the effect starts the new run, so `resolving` stays
+   * true while any run is in flight, also when the list returns to an earlier one.
+   */
+  const runKey = { coords: userCoords, signature };
+  const [run, setRun] = useState<RunState<Coords>>(() => initialRunState(runKey));
+  const currentRun = startRun(run, runKey);
+  if (currentRun !== run) setRun(currentRun);
+  const resolving = isResolving(currentRun, runKey);
+
   useEffect(() => {
     if (!userCoords) return;
     signatureRef.current = signature;
     let cancelled = false;
-    setResolving(true);
 
     (async () => {
       const found = new Map<number, number>();
@@ -107,7 +131,7 @@ export function useNearbyActivities(
       }
       if (!cancelled) {
         setDistanceById(found);
-        setResolving(false);
+        setRun((current) => completeRun(current, { coords: userCoords, signature }));
       }
     })();
 

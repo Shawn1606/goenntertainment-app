@@ -14,7 +14,7 @@
  *   1. mindestens 8 Zeichen, Buchstaben UND Zahlen (die alte Grundregel, Text
  *      unveraendert – die App kennt ihn seit Monaten);
  *   2. nicht in shared/common-passwords.json (Vergleich kleingeschrieben, als
- *      GANZES Passwort – „geheim" ist verboten, „geheim1234" nicht; die App
+ *      GANZES Passwort – „geheim" ist verboten, „geheimtipp42" nicht; die App
  *      nutzt dieselbe Datei fuer ihre Staerkeanzeige und rechnet genauso);
  *   3. enthaelt weder den Benutzernamen noch den Teil der E-Mail vor dem @
  *      (ohne Ruecksicht auf Gross/klein, erst ab 4 Zeichen – bei „max" oder

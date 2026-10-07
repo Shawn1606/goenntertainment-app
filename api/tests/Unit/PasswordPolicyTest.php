@@ -31,8 +31,9 @@ class PasswordPolicyTest extends TestCase
             $this->assertContains($must, $list);
         }
 
-        // Die Bestandstests (server/test/api.test.js) registrieren damit.
-        $this->assertNotContains('geheim1234', $list);
+        // The server tests register with this password: a mirror of TEST_PASSWORD in
+        // server/test/support/fixtures.js, lower-cased like the list.
+        $this->assertNotContains('fixture-only-pass-2468', $list);
     }
 
     public function test_grundregel_mit_unveraenderter_meldung(): void
@@ -57,7 +58,7 @@ class PasswordPolicyTest extends TestCase
         $this->assertSame(PasswordPolicy::MSG_COMMON, PasswordPolicy::problem('qwertz123'));
 
         // Nur der GANZE Eintrag zaehlt - kein Wortstamm, kein Leetspeak.
-        $this->assertNull(PasswordPolicy::problem('geheim1234'));
+        $this->assertNull(PasswordPolicy::problem('geheimtipp42'));
         $this->assertNull(PasswordPolicy::problem('passwort1x'));
         $this->assertNull(PasswordPolicy::problem('p4ssw0rt1'));
     }

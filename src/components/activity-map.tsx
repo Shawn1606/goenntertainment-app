@@ -161,11 +161,11 @@ export default function MapScreen() {
   }, [places, userCoords]);
 
   // Falls die ausgewählte Activity aus der Liste fällt: Karte schließen.
-  useEffect(() => {
-    if (selected && !items.some((a) => a.id === selected.id)) {
-      setSelected(null);
-    }
-  }, [items, selected]);
+  // While rendering, not in an effect (react.dev: "Adjusting some state when a
+  // prop changes"); converges because `items` is memoised.
+  if (selected && !items.some((a) => a.id === selected.id)) {
+    setSelected(null);
+  }
 
   /**
    * Das offene Orts-Blatt am frischen Stand halten.
@@ -177,13 +177,15 @@ export default function MapScreen() {
    *
    * Verglichen wird über den Schlüssel und nicht über die Objektgleichheit: Die
    * Gruppen werden bei jedem Lauf neu gebaut und sind nie dasselbe Objekt.
+   *
+   * While rendering, not in an effect (react.dev: "Adjusting some state when a
+   * prop changes"); converges because `places` is memoised.
    */
-  useEffect(() => {
-    if (!place) return;
+  if (place) {
     const fresh = places.find((candidate) => candidate.key === place.key);
     if (!fresh) setPlace(null);
     else if (fresh !== place) setPlace(fresh);
-  }, [places, place]);
+  }
 
   return (
     <ThemedView style={styles.container}>

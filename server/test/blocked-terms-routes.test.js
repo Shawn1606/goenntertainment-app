@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { blockedTermMessageFor } from '../src/blocked-terms.js';
+import { deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
 
 process.env.FEATURE_ACCOUNT_TIERS = 'true';
 
@@ -26,8 +27,6 @@ const MSG_TEXT = blockedTermMessageFor('text');
 let base;
 let server;
 const createdUserIds = [];
-
-const stamp = () => `${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
 function registerBody(overrides = {}) {
   const s = stamp();
@@ -94,11 +93,13 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
+  // Closed even when the cleanup throws; open handles would keep `npm test` from exiting.
+  try {
+    await deleteTestUsers(pool, createdUserIds);
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  await pool.end();
-  server.close();
 });
 
 test('POST /api/register (Node): gesperrter Benutzername und Name werden abgelehnt', async () => {

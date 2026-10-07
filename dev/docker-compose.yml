@@ -1,0 +1,18 @@
+# Development only: a local mail catcher. Laravel (api/) sends every mail here instead of writing
+# it to a log - 2FA codes and password-reset codes must never land in a log.
+#
+#   docker compose -f dev/docker-compose.yml up -d    -> inbox http://127.0.0.1:8025, SMTP 127.0.0.1:1025
+#   docker compose -f dev/docker-compose.yml down
+#
+# Ports are bound to 127.0.0.1 only, so the codes are not reachable from the Wi-Fi. No restart
+# policy: it runs only when started. Without Docker, the Mailpit binary does the same (README).
+# deploy/docker-compose.ci.yml reuses this service (extends, without the host ports), so the image
+# is pinned in one place.
+name: goenn-dev
+
+services:
+  mailpit:
+    image: axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d
+    ports:
+      - '127.0.0.1:1025:1025'
+      - '127.0.0.1:8025:8025'

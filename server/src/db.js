@@ -572,6 +572,15 @@ export async function ensureSchema() {
     );
   }
 
+  // Nachtraeglich: bis wann ein Event hervorgehoben ist. Business-Stufen setzen
+  // das (siehe routes/business.js), die Empfehlungen der App sortieren danach.
+  // Must run before is_permanent, which is added AFTER boosted_until.
+  if (!(await hasColumn('activities', 'boosted_until'))) {
+    await pool.query(
+      'ALTER TABLE activities ADD COLUMN boosted_until DATETIME NULL AFTER max_participants',
+    );
+  }
+
   /**
    * Nachtraeglich: Dauerangebot ohne festen Termin.
    *
@@ -613,14 +622,6 @@ export async function ensureSchema() {
   if (!(await hasColumn('activity_interest', 'rank'))) {
     await pool.query(
       'ALTER TABLE activity_interest ADD COLUMN `rank` TINYINT UNSIGNED NOT NULL DEFAULT 0',
-    );
-  }
-
-  // Nachtraeglich: bis wann ein Event hervorgehoben ist. Business-Stufen setzen
-  // das (siehe routes/business.js), die Empfehlungen der App sortieren danach.
-  if (!(await hasColumn('activities', 'boosted_until'))) {
-    await pool.query(
-      'ALTER TABLE activities ADD COLUMN boosted_until DATETIME NULL AFTER max_participants',
     );
   }
 

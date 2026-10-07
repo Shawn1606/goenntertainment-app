@@ -16,21 +16,18 @@ import { createApp } from '../src/app.js';
 import { ensureSchema, pool, first } from '../src/db.js';
 import { hashPassword } from '../src/auth.js';
 import { MSG_PASSWORD_COMMON, MSG_PASSWORD_PERSONAL } from '../src/password-policy.js';
+import { TEST_PASSWORD as PASSWORD, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
 
 let base;
 let server;
 const createdUserIds = [];
 const createdFiles = [];
 
-const PASSWORD = 'geheim1234';
-
 /** 1x1-PNG, reicht fuer jeden Upload. */
 const PNG_1X1 = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
   'base64',
 );
-
-const stamp = () => `${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
 async function tryRegister(prefix, overrides = {}) {
   const s = stamp();
@@ -149,18 +146,21 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
-  }
-  for (const file of createdFiles) {
-    try {
-      fs.unlinkSync(storagePath(file));
-    } catch {
-      /* schon weg – genau das pruefen die Tests */
+  // The pool and the server are closed even when the cleanup throws; otherwise their open
+  // handles keep this test process alive and `npm test` never exits.
+  try {
+    await deleteTestUsers(pool, createdUserIds);
+    for (const file of createdFiles) {
+      try {
+        fs.unlinkSync(storagePath(file));
+      } catch {
+        /* schon weg – genau das pruefen die Tests */
+      }
     }
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  await pool.end();
-  server.close();
 });
 
 /* ------------------------------------------------ Zwei-Faktor-Sperre (Node) */
@@ -447,7 +447,10 @@ test('DELETE /api/me: bei aktiver 2FA nur mit Freigabe von Laravel', async () =>
 
 test('DELETE /api/me: ein Admin, der nicht der letzte ist, darf gehen', async () => {
   const { token, user } = await registerUser('zfadeladmin', 'standard');
-  await pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [user.id]);
+  // The second admin this test relies on is created here, so the result no longer depends on
+  // what other test files (or earlier runs) left in the database.
+  const other = await registerUser('zfadeladmintwo', 'standard');
+  await pool.query('UPDATE users SET is_admin = 1 WHERE id IN (?, ?)', [user.id, other.user.id]);
   // Es gibt ausser diesem Wegwerf-Admin mindestens einen echten – sonst waere das hier 409.
   const [[{ c }]] = await pool.query('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1 AND id <> ?', [user.id]);
   assert.ok(Number(c) > 0, 'Test setzt einen weiteren Admin voraus');

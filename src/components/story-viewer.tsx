@@ -103,15 +103,20 @@ export function StoryViewer({
    * Story. Ohne das stünde nach dem zweiten Öffnen noch die Stelle vom letzten
    * Mal – und man begänne mitten in etwas, das man schon kennt.
    */
-  useEffect(() => {
-    if (startGroup === null) return;
-    const target = groups[startGroup];
-    setAt({ group: startGroup, story: target ? firstUnseenIndex(target) : 0 });
-    // `groups` bewusst NICHT in den Abhängigkeiten: Die Liste ändert sich bei
-    // jedem „gesehen"-Update, und der Betrachter spränge dann mitten im Ansehen
-    // zurück an den Anfang.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [startGroup]);
+  // Done while rendering, not in an effect (react.dev: "Adjusting some state when
+  // a prop changes"), so the first committed frame already shows the right
+  // story. Only a change of `startGroup` triggers it; `groups` is read but is
+  // deliberately not part of the condition:
+  // Die Liste ändert sich bei jedem „gesehen"-Update, und der Betrachter
+  // spränge dann mitten im Ansehen zurück an den Anfang.
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  if (startGroup !== openedAt) {
+    setOpenedAt(startGroup);
+    if (startGroup !== null) {
+      const target = groups[startGroup];
+      setAt({ group: startGroup, story: target ? firstUnseenIndex(target) : 0 });
+    }
+  }
 
   const goTo = useCallback(
     (direction: 1 | -1) => {

@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, pool } from '../src/db.js';
+import { TEST_PASSWORD, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
 
 // Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
 // ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
@@ -31,7 +32,7 @@ const createdActivityIds = [];
  * nicht. Wer die Sperre selbst pruefen will, uebergibt 'standard'.
  */
 async function registerUser(prefix, accountType = 'creator') {
-  const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const stamp = uniqueStamp();
   const res = await fetch(`${base}/api/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -39,7 +40,7 @@ async function registerUser(prefix, accountType = 'creator') {
       name: `${prefix} Test`,
       username: `${prefix}${stamp}`.slice(0, 28),
       email: `${prefix}${stamp}@example.com`,
-      password: 'geheim1234',
+      password: TEST_PASSWORD,
       account_type: 'standard',
       device_name: 'test',
     }),
@@ -58,7 +59,7 @@ async function registerUser(prefix, accountType = 'creator') {
 
 /** Registriert ohne Erwartung an den Status – fuer die Pruefung der Kontostufen. */
 async function tryRegister(prefix, accountType) {
-  const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const stamp = uniqueStamp();
   const res = await fetch(`${base}/api/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -66,7 +67,7 @@ async function tryRegister(prefix, accountType) {
       name: `${prefix} Test`,
       username: `${prefix}${stamp}`.slice(0, 28),
       email: `${prefix}${stamp}@example.com`,
-      password: 'geheim1234',
+      password: TEST_PASSWORD,
       account_type: accountType,
       device_name: 'test',
     }),
@@ -130,17 +131,19 @@ before(async () => {
 });
 
 after(async () => {
-  if (createdActivityIds.length) {
-    await pool.query(
-      `DELETE FROM activities WHERE id IN (${createdActivityIds.map(() => '?').join(',')})`,
-      createdActivityIds,
-    );
+  // Closed even when the cleanup throws; open handles would keep `npm test` from exiting.
+  try {
+    if (createdActivityIds.length) {
+      await pool.query(
+        `DELETE FROM activities WHERE id IN (${createdActivityIds.map(() => '?').join(',')})`,
+        createdActivityIds,
+      );
+    }
+    await deleteTestUsers(pool, createdUserIds);
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
-  }
-  await pool.end();
-  server.close();
 });
 
 test('GET /api/me/progress: frischer Account startet bei 0 XP und Level 1', async () => {
