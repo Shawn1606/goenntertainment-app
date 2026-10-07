@@ -28,6 +28,7 @@ import {
   areFriends,
   blockExistsBetween,
   loadUser,
+  notBlockedWith,
   transformUser,
 } from '../people.js';
 
@@ -53,12 +54,18 @@ function rejectGroupName(v, name) {
   rejectBlockedTerms(v, 'name', name, 'name');
 }
 
-/** Mitglieder einer Gruppe (Anlegende:r zuerst). */
-async function membersOf(req, groupId, ownerId) {
+/**
+ * Mitglieder einer Gruppe (Anlegende:r zuerst), as `viewerId` sees them: someone in a block
+ * relation with the viewer is left out (F-13). A block between two members of someone else's
+ * group does not remove either of them (the room belongs to its owner), so it hides them from
+ * each other here and in the chat (routes/chat.js).
+ */
+async function membersOf(req, groupId, ownerId, viewerId) {
   const [rows] = await pool.query(
     `SELECT ${USER_COLUMNS} FROM group_members gm JOIN users u ON u.id = gm.user_id
-      WHERE gm.group_id = ? ORDER BY (u.id = ?) DESC, u.name ASC`,
-    [groupId, ownerId],
+      WHERE gm.group_id = ? AND ${notBlockedWith('u.id')}
+      ORDER BY (u.id = ?) DESC, u.name ASC`,
+    [groupId, viewerId, viewerId, ownerId],
   );
   return rows.map((row) => transformUser(req, row));
 }
@@ -96,10 +103,9 @@ async function unreadByGroup(groupIds, userId) {
       WHERE r.group_id IN (${ph})
         AND m.user_id <> ?
         AND m.id > COALESCE(cr.last_read_id, 0)
-        AND NOT EXISTS (SELECT 1 FROM user_blocks b
-                         WHERE b.blocker_id = ? AND b.blocked_id = m.user_id)
+        AND ${notBlockedWith('m.user_id')}
       GROUP BY r.group_id`,
-    [userId, ...groupIds, userId, userId],
+    [userId, ...groupIds, userId, userId, userId],
   );
   return new Map(rows.map((row) => [row.group_id, Number(row.c)]));
 }
@@ -111,7 +117,7 @@ async function transformGroup(req, group, userId, unread = 0) {
     description: group.description,
     created_at: toIso(group.created_at),
     is_owner: group.owner_id === userId,
-    members: await membersOf(req, group.id, group.owner_id),
+    members: await membersOf(req, group.id, group.owner_id, userId),
     /** Ungelesene Nachrichten im Gruppen-Chat – der Punkt am Eintrag. */
     unread,
   };
@@ -148,13 +154,14 @@ router.post('/groups', requireAuth, rateLimit('content'), async (req, res, next)
     const description = String(req.body?.description ?? '').trim();
     const v = new Validator(req.body ?? {});
 
+    // The word filter gets the values as they came, any JSON type (F-06).
     if (!name) v.add('name', 'Gib der Gruppe einen Namen.');
     else if (name.length > MAX_GROUP_NAME) {
       v.add('name', `Der Name fasst hoechstens ${MAX_GROUP_NAME} Zeichen.`);
-    } else rejectGroupName(v, name);
+    } else rejectGroupName(v, req.body?.name);
     if (description.length > MAX_GROUP_DESCRIPTION) {
       v.add('description', `Die Beschreibung fasst hoechstens ${MAX_GROUP_DESCRIPTION} Zeichen.`);
-    } else rejectBlockedTerms(v, 'description', description, 'text');
+    } else rejectBlockedTerms(v, 'description', req.body?.description, 'text');
     v.throwIfFails();
 
     // Mitglieder, die direkt mit angelegt werden – nur bestaetigte Freunde.
@@ -190,6 +197,9 @@ router.post('/groups', requireAuth, rateLimit('content'), async (req, res, next)
     for (const id of wanted.slice(0, MAX_GROUP_MEMBERS - 1)) {
       if (id === req.user.id) continue;
       if (!(await areFriends(req.user.id, id))) continue;
+      // The same second lock as POST /groups/:id/members: a block ends the friendship, but a
+      // friendship row must never be the only thing that keeps a blocked person out (F-13).
+      if (await blockExistsBetween(req.user.id, id)) continue;
       await pool.query(
         `INSERT IGNORE INTO group_members (group_id, user_id, created_at) VALUES (?, ?, NOW())`,
         [groupId, id],
@@ -227,14 +237,14 @@ router.patch('/groups/:id', requireAuth, rateLimit('content'), async (req, res, 
       if (!name) v.add('name', 'Gib der Gruppe einen Namen.');
       else if (name.length > MAX_GROUP_NAME) {
         v.add('name', `Der Name fasst hoechstens ${MAX_GROUP_NAME} Zeichen.`);
-      } else if (name !== group.name) rejectGroupName(v, name);
+      } else if (name !== group.name) rejectGroupName(v, req.body.name);
     }
     // Nur NEUE Werte pruefen (wie beim Profil): Ein Altname, den die Liste heute
     // traefe, soll das Aendern der Beschreibung nicht blockieren – und umgekehrt.
     if (hasDescription && description.length > MAX_GROUP_DESCRIPTION) {
       v.add('description', `Die Beschreibung fasst hoechstens ${MAX_GROUP_DESCRIPTION} Zeichen.`);
     } else if (hasDescription && description !== (group.description ?? '')) {
-      rejectBlockedTerms(v, 'description', description, 'text');
+      rejectBlockedTerms(v, 'description', req.body.description, 'text');
     }
     v.throwIfFails();
 

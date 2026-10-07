@@ -54,9 +54,10 @@ You can start developing by editing the files inside the **app** directory. This
 
 ### Mail in development
 
-Laravel (`api/`) sends 2FA codes and other mail over SMTP. In development a local
-mail catcher, [Mailpit](https://github.com/axllent/mailpit), receives every mail, so
-no code is ever written to a log:
+Laravel (`api/`) sends 2FA codes, password reset codes, the codes that confirm a new e-mail
+address or a first password, and other mail over SMTP. In
+development a local mail catcher, [Mailpit](https://github.com/axllent/mailpit),
+receives every mail, so no code is ever written to a log:
 
 ```bash
 docker compose -f dev/docker-compose.yml up -d
@@ -65,7 +66,10 @@ docker compose -f dev/docker-compose.yml up -d
 The inbox is at http://127.0.0.1:8025 (SMTP on 127.0.0.1:1025, both reachable only
 from this PC). `api/.env.example` already points there. An older `api/.env` that
 still uses the log mailer must take the `MAIL_*` lines from `api/.env.example`, and
-an old `api/storage/logs/laravel.log` should be deleted: it can contain codes.
+an old `api/storage/logs/laravel.log` should be deleted: it can contain codes. Mails
+with a code refuse the log mailer ([`api/app/Support/CodeMail.php`](api/app/Support/CodeMail.php)):
+when `MAIL_MAILER` names it, or names a failover chain that contains it, they are not sent at
+all.
 
 Without Docker, the Mailpit binary does the same: download it from the
 [Mailpit releases](https://github.com/axllent/mailpit/releases) and run
@@ -84,7 +88,7 @@ CI together.
 | Typecheck | all `*.ts`/`*.tsx` in `tsconfig.json` | `npx tsc --noEmit` | `expo-env.d.ts` (see below) |
 | Lint | `src/`, `app/`, `components/` (expo lint's default inputs; tooling under `scripts/` is not linted) | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npm run lint` | |
 | Expo SDK versions | | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo install --check` | |
-| Server tests | `server/test/*.test.js` | `npm --prefix server test` | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
+| Server tests | `server/test/*.test.js` | `npm --prefix server test` (loads the test-only `server/test/test.env` and runs the files one at a time: they share one database, and in parallel one file's cleanup could deadlock with another file's writes and load could break time bounds; one file: `node --env-file=test/test.env --test test/<file>.test.js` in `server/`) | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
 | `composer.lock` matches `composer.json` | | `cd api && composer validate --no-check-publish --strict` | PHP 8.4, Composer 2 |
 | API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` (see [API tests and MySQL](#api-tests-and-mysql)) | PHP 8.4 with `pdo_mysql`, `composer install`, `api/.env` with a key; MySQL 8.4 with `server/schema.sql` loaded and `DB_CONNECTION=mysql` plus `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` in the environment |
 | CI tooling tests | `scripts/ci/*.test.mjs` | `npm run test:tooling` | |

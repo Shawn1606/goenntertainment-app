@@ -1,6 +1,13 @@
 import { API_URL } from '@/constants/config';
 import type { AccountType } from '@/domain/account';
+import {
+  type ActivityListQuery,
+  type ActivityPage,
+  activityListPath,
+  collectPages,
+} from '@/domain/activity-pages';
 import type { BillingPeriod } from '@/domain/billing-period';
+import type { ReportTarget } from '@/domain/report-reason';
 import { createSessionWatch } from '@/domain/session';
 
 /**
@@ -609,8 +616,8 @@ export type ChatOverviewEntry = {
 /** Ein blockiertes Konto (GET /api/blocks). */
 export type BlockedPerson = PersonCard & { since?: string | null };
 
-/** Was gemeldet werden kann – Schlüssel wie in server/src/reports.js. */
-export type ReportTarget = 'activity' | 'message' | 'user' | 'post' | 'story';
+/** Was gemeldet werden kann – Schlüssel wie in server/src/reports.js (the one list: src/domain/report-reason.ts). */
+export type { ReportTarget };
 
 /** Eine Meldung in der Admin-Liste (GET /api/admin/reports). */
 export type AdminReport = {
@@ -632,6 +639,8 @@ export type AdminReport = {
     author: string | null;
     detail: string | null;
     image_url: string | null;
+    /** For a comment: the event or post it stands under; null for everything else. */
+    context_id: number | null;
   } | null;
 };
 
@@ -762,7 +771,7 @@ export type PublicProfile = {
  * Bewusst als String-Union UND mit Rückfall im Symbol-Mapping: Ein neuerer
  * Server darf eine Sorte mehr schicken, ohne dass die Liste hier leer bleibt.
  */
-export type NotificationType = 'story' | 'activity' | 'post' | 'like' | 'comment' | 'follow';
+export type NotificationType = 'story' | 'activity' | 'post' | 'like' | 'comment' | 'follow' | 'activity_comment';
 
 /** Eine Benachrichtigung (GET /api/notifications). */
 export type AppNotification = {
@@ -861,8 +870,12 @@ export type RegisterInput = {
    * Die Version und nicht bloß ein `true`: Nur damit lässt sich nach einer
    * Änderung erkennen, wer noch dem alten Text zugestimmt hat. Der Server
    * schreibt sie mit dem Zeitpunkt ins Konto.
+   *
+   * Required (F-14): the server refuses a sign-up without the current version.
    */
-  terms_version?: string;
+  terms_version: string;
+  /** The minimum age the person confirmed (`MIN_AGE`); required, see `registrationConsent()`. */
+  confirmed_min_age: number;
 };
 
 /**
@@ -1123,17 +1136,44 @@ export const api = {
     }),
 
   /**
-   * Change the e-mail address (signed in): with the current password, and with two-factor sign-in
-   * also a current code. Signs out every other device; a notice goes to the previous address.
+   * Change the e-mail address (signed in), step 1: with the current password, and with two-factor
+   * sign-in also a current code. Changes nothing yet: the server mails a one-time code to the NEW
+   * address (at most one mail a minute).
    */
   changeEmail: (token: string, input: { email: string; current_password: string; code?: string }) =>
-    request<{ user: User; profile_complete: boolean }>('/user/email', { method: 'PUT', body: input, token }),
+    request<{ message: string; destination: string; expires_in: number }>('/user/email', { method: 'PUT', body: input, token }),
+
+  /**
+   * Change the e-mail address, step 2: the code from the mail to the new address, with that same
+   * address. Only now does it take effect; every other device is signed out and a notice goes to
+   * the previous address.
+   */
+  confirmEmailChange: (token: string, input: { email: string; code: string }) =>
+    request<{ user: User; profile_complete: boolean }>('/user/email/confirm', { method: 'POST', body: input, token }),
 
   /** Passwort ändern (angemeldet). Meldet alle anderen Geräte ab. */
   changePassword: (token: string, currentPassword: string, password: string) =>
     request<{ message: string }>('/user/password', {
       method: 'PUT',
       body: { current_password: currentPassword, password },
+      token,
+    }),
+
+  /**
+   * An account without a password (former Google sign-in), step 1: a one-time code to the
+   * account's own address (at most one mail a minute).
+   */
+  requestFirstPasswordCode: (token: string) =>
+    request<{ message: string; destination: string; expires_in: number }>('/user/password/code', {
+      method: 'POST',
+      token,
+    }),
+
+  /** An account without a password, step 2: the first password, with the mailed code. */
+  setFirstPassword: (token: string, code: string, password: string) =>
+    request<{ message: string }>('/user/password', {
+      method: 'PUT',
+      body: { code, password },
       token,
     }),
 
@@ -1157,9 +1197,10 @@ export const api = {
     }),
 
   /**
-   * Fordert eine „Passwort vergessen"-Mail an. Antwortet immer neutral (die API
-   * verrät nicht, ob die Adresse registriert ist) – ein 422 kommt nur bei einer
-   * ungültigen E-Mail-Eingabe.
+   * Fordert eine „Passwort vergessen"-Mail an. It carries a 6-digit code, no link (F-09).
+   * Antwortet immer neutral (die API verrät nicht, ob die Adresse registriert ist) – ein 422
+   * kommt nur bei einer ungültigen E-Mail-Eingabe. Also the way to get a new code; the server
+   * sends at most one mail a minute per account.
    */
   forgotPassword: (email: string) =>
     request<{ status: string; message: string }>('/forgot-password', {
@@ -1167,9 +1208,28 @@ export const api = {
       body: { email },
     }),
 
+  /**
+   * Sets a new password with the code from the "Passwort vergessen" mail (signed out). Signs out
+   * every device. A wrong, expired or used code and an unknown address get the same 422 on `code`.
+   */
+  resetPassword: (input: { email: string; code: string; password: string; password_confirmation: string }) =>
+    request<{ status: string; message: string }>('/reset-password', {
+      method: 'POST',
+      body: input,
+    }),
+
   interests: () => request<{ data: Interest[] }>('/interests'),
 
-  activities: (token: string) => request<{ data: Activity[] }>('/activities', { token }),
+  /**
+   * Events, every page (F-12; logic and tests: src/domain/activity-pages.ts). Without `query`
+   * the upcoming ones; `{ mine: true }` only the ones you host or joined; `{ past: true }` your
+   * own events that are over, latest first.
+   */
+  activities: async (token: string, query: ActivityListQuery = {}): Promise<{ data: Activity[] }> => ({
+    data: await collectPages((cursor) =>
+      request<ActivityPage<Activity>>(activityListPath(query, cursor), { token }),
+    ),
+  }),
 
   /**
    * Ein einzelnes Event.

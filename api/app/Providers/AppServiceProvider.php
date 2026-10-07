@@ -124,7 +124,8 @@ class AppServiceProvider extends ServiceProvider
 
         // Passwort aendern, E-Mail-Adresse aendern und Konto loeschen: Alle pruefen
         // das Passwort, und ein gestohlener Token soll es nicht in Ruhe
-        // durchprobieren koennen. One budget for all three.
+        // durchprobieren koennen. The second steps of an e-mail change (the code from the new
+        // address) and of a first password (its code mail) share the budget: one for all five.
         RateLimiter::for('account-sensitive', static fn (Request $request) => $limits('account-sensitive', [
             'user' => RateLimitKeys::user($request),
         ]));

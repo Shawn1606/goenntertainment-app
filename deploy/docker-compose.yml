@@ -51,9 +51,11 @@ services:
     command:
       - sh
       - -c
-      - mkdir -p /storage/avatars /storage/banners /storage/evidence /storage/posts /storage/stories /storage/user-banners && chown -R 1000:1000 /storage
+      - mkdir -p /storage/avatars /storage/banners /storage/posts /storage/user-banners /storage-private/evidence /storage-private/stories && chown -R 1000:1000 /storage /storage-private
     volumes:
       - ./storage:/storage
+      # Evidence and story images (F-11, server/src/storage.js): node only, never a web server.
+      - ./storage-private:/storage-private
 
   node:
     build:
@@ -83,14 +85,31 @@ services:
       # Access-token lifetime in minutes, the same setting as api's: Node refuses a token issued
       # longer ago too (src/auth.js). Empty = the default in code (30 days).
       SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
+      # Retention in days (F-16, server/src/retention.js): how long evidence images, AI moderation
+      # reports, expired tokens and usage rows are kept. An operator decision: no defaults, and
+      # node does not start without them.
+      EVIDENCE_RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:?EVIDENCE_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      MODERATION_REPORT_RETENTION_DAYS: ${MODERATION_REPORT_RETENTION_DAYS:?MODERATION_REPORT_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      TOKEN_RETENTION_DAYS: ${TOKEN_RETENTION_DAYS:?TOKEN_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      USAGE_RETENTION_DAYS: ${USAGE_RETENTION_DAYS:?USAGE_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # AI moderation (F-06): required; who owns the provider account and key is the operator's
+      # decision (deploy/.env.example). Node refuses to start without it and refuses
+      # MODERATION_ENABLED=false (server/src/config.js).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is missing in deploy/.env (see deploy/.env.example)}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       MODERATION_MODEL: ${MODERATION_MODEL:-claude-opus-5}
       MODERATION_BLOCK_SEVERITY: ${MODERATION_BLOCK_SEVERITY:-2}
       MODERATION_TIMEOUT_SEVERITY: ${MODERATION_TIMEOUT_SEVERITY:-2}
       MODERATION_TIMEOUT_DAYS: ${MODERATION_TIMEOUT_DAYS:-7}
-      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-true}
+      # Fail closed: content the model cannot check is refused. 'true' is an explicit emergency
+      # switch only.
+      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-false}
+      # Global budget of AI moderation calls per UTC day across all accounts (F-07,
+      # server/src/moderation.js). How much is spent on the provider is the operator's decision:
+      # no default, and node does not start without it. Beyond it every moderated write is refused
+      # until the next UTC day, whatever MODERATION_FAIL_OPEN says.
+      MODERATION_DAILY_CALL_LIMIT: ${MODERATION_DAILY_CALL_LIMIT:?MODERATION_DAILY_CALL_LIMIT is missing in deploy/.env (the most AI moderation calls per UTC day, a whole number of at least 1; an operator decision, no default)}
       ADMIN_EMAIL: ${ADMIN_EMAIL:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
@@ -112,6 +131,9 @@ services:
       WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
       - ./storage:/app/storage
+      # Private uploads (ban evidence, AI moderation evidence, story images): served only by
+      # Node's checked routes. Never mount this folder into api or any other web server.
+      - ./storage-private:/app/storage-private
     healthcheck:
       # Node's own health route; /api/health belongs to Laravel.
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']

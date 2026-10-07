@@ -38,6 +38,7 @@ yarn-error.*
 # Server-Deployment: echte Zugangsdaten und Nutzer-Uploads
 deploy/.env
 deploy/storage/
+deploy/storage-private/
 
 # Database dumps and logs never belong in the repository. The schema is source.
 *.sql

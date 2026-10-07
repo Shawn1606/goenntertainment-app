@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS users (
   -- Stand zugestimmt hat. NULL = Bestandskonto von vor der Zustimmung.
   terms_version     VARCHAR(20)     NULL,
   terms_accepted_at DATETIME        NULL,
+  -- The minimum age confirmed at sign-up and when (F-14; the age comes from shared/legal.json,
+  -- Laravel's sign-up refuses a registration without it). How age is verified beyond this
+  -- confirmation is an operator decision. NULL = an account from before the confirmation.
+  min_age_confirmed    TINYINT UNSIGNED NULL,
+  min_age_confirmed_at DATETIME         NULL,
   -- Zwei-Faktor-Anmeldung (bedient von Laravel, api/app/Support/TwoFactor.php).
   -- `two_factor_method` ist der EINZIGE Schalter: NULL = aus, 'email' | 'totp' =
   -- an. Ein gesetztes Secret bei NULL-Methode ist eine angefangene, noch nicht
@@ -73,6 +78,9 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Passwort-Zuruecksetzen (E-Mail -> Token)
+-- No longer written: the reset works by a mailed code (purpose 'reset' in
+-- two_factor_challenges, F-09). The table stays until its removal from every
+-- schema copy (backlog).
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   email      VARCHAR(255) NOT NULL,
   token      VARCHAR(255) NOT NULL,
@@ -131,6 +139,14 @@ CREATE TABLE IF NOT EXISTS cache_locks (
 --   'delete'  – Freigabe von Laravel an Node: „diese Person hat das Loeschen
 --               vollstaendig bestaetigt" (siehe server/src/routes/internal.js).
 --               Kein Code, nur der Token; lebt zwei Minuten.
+--   'reset'   – a password reset code (POST /forgot-password, signed out); its token is
+--               never handed out (api/app/Support/PasswordReset.php). The former link
+--               tokens table, password_reset_tokens, is no longer written.
+--   'new_email' – a code mailed to the NEW address of an e-mail change; the address takes
+--               effect only with it. The address is not stored: the code's HMAC covers it
+--               (api/app/Support/AddressCode.php).
+--   'first_pw' – a code mailed to the account's own address before an account without a
+--               password sets its first one (same file).
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App
 -- in der Hand haelt; `code_hash` = HMAC des Codes (Schluessel APP_KEY). Wer die
@@ -317,7 +333,11 @@ CREATE TABLE IF NOT EXISTS ban_evidence (
 --   verdict: 'ok' | 'auffaellig' | 'abgelehnt' | 'refusal' | 'error'
 --   severity: 0 unbedenklich · 1 grenzwertig · 2 nicht jugendfrei · 3 schwer
 --   action: 'none' (durchgelassen) | 'blocked' (abgelehnt) | 'timeout' (+ Sperre)
--- user_id -> SET NULL, damit Berichte eine Konto-Loeschung ueberdauern.
+-- user_id -> SET NULL only as a fallback: deleting an account (server/src/account-deletion.js,
+-- F-16) deletes the person's rows and their images with it. server/src/retention.js deletes every
+-- row older than MODERATION_REPORT_RETENTION_DAYS, which covers rows left without an account by
+-- earlier deletions, and clears images older than EVIDENCE_RETENTION_DAYS. Both settings are
+-- required in production; where they are unset, nothing is pruned.
 CREATE TABLE IF NOT EXISTS moderation_reports (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id     BIGINT UNSIGNED NULL,
@@ -340,6 +360,16 @@ CREATE TABLE IF NOT EXISTS moderation_reports (
   KEY moderation_reports_created_at_idx (created_at),
   CONSTRAINT moderation_reports_user_id_fk
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- AI moderation calls per UTC day (F-07): the counter of the global budget
+-- MODERATION_DAILY_CALL_LIMIT (server/src/moderation.js). One row per day; every call to the model
+-- first reserves one unit here, and a reservation beyond the limit is refused. Counts only, no user
+-- data. server/src/retention.js deletes the rows of past days.
+CREATE TABLE IF NOT EXISTS moderation_call_counts (
+  day   DATE         NOT NULL,                       -- UTC
+  calls INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (day)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Aktive Tage je Nutzer:in – Grundlage der Serie ("Streak").
@@ -674,7 +704,7 @@ CREATE TABLE IF NOT EXISTS user_blocks (
 CREATE TABLE IF NOT EXISTS content_reports (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   reporter_id BIGINT UNSIGNED NULL,                 -- SET NULL: Meldung ueberdauert das Konto
-  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story
+  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story|post_comment|activity_comment
   target_id   BIGINT UNSIGNED NOT NULL,
   reason      VARCHAR(30)     NOT NULL,             -- Schluessel aus src/reports.js
   note        VARCHAR(500)    NULL,                 -- freie Schilderung (freiwillig)

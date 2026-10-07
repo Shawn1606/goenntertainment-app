@@ -18,9 +18,22 @@ import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
-import { NOTIFICATION_LIMIT, transformNotification } from '../notifications.js';
+import { NOTIFICATION_LIMIT, VISIBLE_NOTIFICATION, transformNotification } from '../notifications.js';
 
 const router = createRouter();
+
+/**
+ * Unread notifications the recipient may see: the counter must not count what the list leaves
+ * out (VISIBLE_NOTIFICATION, a block in either direction with the actor).
+ */
+async function unreadCount(userId) {
+  const row = await first(
+    `SELECT COUNT(*) AS c FROM notifications n
+      WHERE n.user_id = ? AND n.read_at IS NULL AND ${VISIBLE_NOTIFICATION}`,
+    [userId, userId, userId],
+  );
+  return Number(row?.c ?? 0);
+}
 
 // GET /api/notifications  (geschuetzt) – neueste zuerst, dazu der Ungelesen-Zaehler.
 router.get('/notifications', requireAuth, async (req, res, next) => {
@@ -32,22 +45,17 @@ router.get('/notifications', requireAuth, async (req, res, next) => {
               a.avatar AS actor_avatar, a.account_type AS actor_account_type
          FROM notifications n
     LEFT JOIN users a ON a.id = n.actor_id
-        WHERE n.user_id = ?
+        WHERE n.user_id = ? AND ${VISIBLE_NOTIFICATION}
         ORDER BY n.id DESC
         LIMIT ${NOTIFICATION_LIMIT}`,
-      [req.user.id],
+      [req.user.id, req.user.id, req.user.id],
     );
 
     // Der Zaehler zaehlt ALLE ungelesenen, nicht nur die auf dieser Seite: Sonst
     // stuende bei 80 ungelesenen eine 60 an der Glocke.
-    const unread = await first(
-      'SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL',
-      [req.user.id],
-    );
-
     res.json({
       data: rows.map((row) => transformNotification(req, row)),
-      unread: Number(unread?.n ?? 0),
+      unread: await unreadCount(req.user.id),
     });
   } catch (err) {
     next(err);
@@ -80,11 +88,7 @@ router.post('/notifications/:id/read', requireAuth, rateLimit('state'), async (r
       row.id,
     ]);
 
-    const unread = await first(
-      'SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL',
-      [req.user.id],
-    );
-    res.json({ unread: Number(unread?.n ?? 0) });
+    res.json({ unread: await unreadCount(req.user.id) });
   } catch (err) {
     next(err);
   }

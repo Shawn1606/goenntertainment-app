@@ -13,7 +13,8 @@ import {
 } from '@/lib/api';
 import { notifyUser } from '@/lib/confirm';
 import { migrateSavedLogin } from '@/lib/credential-store';
-import { clearToken, loadToken, saveToken } from '@/lib/token-store';
+import { clearSearchHistory } from '@/lib/search-history-store';
+import { clearToken, loadSessionUserId, loadToken, saveSessionUserId, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
   /** true, solange beim App-Start der gespeicherte Token geprüft wird. */
@@ -70,33 +71,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokenRef.current = token;
   }, [token]);
 
+  /** The signed-in account's id, for the search history a sign-out removes (F-44). */
+  const userIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    userIdRef.current = user?.id ?? null;
+  }, [user]);
+
   /**
    * The one way this device signs out (F-20): deliberate logout and a 401 during a session both
    * end here, so whatever else must leave the device at sign-out is added in this one place.
    * `notify` marks the 401 case and tells the person why. The order and the handling of a
    * storage error are in signOutLocally (src/domain/session.ts): memory first, then storage; a
-   * storage error rejects only a deliberate logout.
+   * storage error rejects only a deliberate logout. The search history goes too (F-44), on every
+   * path - logout, the 401, and the logout after deleting the account - and never fails it.
    */
-  const endLocalSession = useCallback(
-    (notify: boolean) =>
-      signOutLocally(
-        {
-          forget: () => {
-            tokenRef.current = null;
-            setToken(null);
-            setUser(null);
-          },
-          clearStorage: clearToken,
-          notice: () =>
-            notifyUser(
-              'Abgemeldet',
-              'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
-            ),
+  const endLocalSession = useCallback((notify: boolean) => {
+    // Taken before forget() ends the session: whose search history to remove.
+    const signedOutId = userIdRef.current;
+    return signOutLocally(
+      {
+        forget: () => {
+          tokenRef.current = null;
+          setToken(null);
+          setUser(null);
         },
-        notify,
-      ),
-    [],
-  );
+        clearStorage: clearToken,
+        clearHistory: () => clearSearchHistory(signedOutId),
+        notice: () =>
+          notifyUser(
+            'Abgemeldet',
+            'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
+          ),
+      },
+      notify,
+    );
+  }, []);
 
   // A 401 to a request with the current token: the server no longer accepts this session.
   // Nothing to report if the notice fails: the session is already gone on this device.
@@ -119,8 +128,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const stored = await loadToken();
       if (stored) {
+        // Whose session this is, read before the server is asked (clearToken removes it).
+        const storedUserId = await loadSessionUserId();
         try {
           const { user: me } = await api.me(stored);
+          // Kept beside the token, also for a session from before this version (F-44).
+          await saveSessionUserId(me.id);
           if (active) {
             setToken(stored);
             setUser(me);
@@ -129,6 +142,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Token ungültig (401) → verwerfen. Bei reinem Netzfehler behalten.
           if (error instanceof ApiError && error.status === 401) {
             await clearToken();
+            // The session ended while the app was closed (the account deleted, the token
+            // revoked): the stored account id says whose search history goes, on phones too;
+            // a listable storage (web) also gives up every other history left (F-44).
+            await clearSearchHistory(storedUserId);
           } else if (active && stored) {
             setToken(stored);
           }
@@ -144,6 +161,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function applyAuth(result: { token: string; user: User }) {
     await saveToken(result.token);
+    await saveSessionUserId(result.user.id);
     setToken(result.token);
     setUser(result.user);
   }

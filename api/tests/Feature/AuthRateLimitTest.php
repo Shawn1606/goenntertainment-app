@@ -106,8 +106,9 @@ class AuthRateLimitTest extends AppFeatureTestCase
         config(['ratelimits.password-reset' => ['ip' => self::WIDE, 'account' => '2/3600']]);
         $user = $this->makeUser();
 
+        // The code flow (F-09): no code was mailed, so the code is wrong and the answer neutral.
         $statuses = $this->fromAddresses(3, fn () => $this->postJson('/api/reset-password', [
-            'token' => 'fixture-reset-token-not-a-secret',
+            'code' => '123456',
             'email' => $user->email,
             'password' => 'Fixture-New-Pass-8642',
         ]));

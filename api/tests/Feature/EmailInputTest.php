@@ -42,11 +42,13 @@ class EmailInputTest extends AppFeatureTestCase
                 'email' => $email,
                 'password' => $password,
                 'account_type' => 'standard',
+                ...self::consent(),
             ]],
             'login' => ['/api/login', ['email' => $email, 'password' => $password]],
             'forgot' => ['/api/forgot-password', ['email' => $email]],
+            // The code flow (F-09): a well-formed code, so only the address can be wrong.
             'reset' => ['/api/reset-password', [
-                'token' => 'fixture-reset-token-not-a-secret',
+                'code' => '123456',
                 'email' => $email,
                 'password' => $password,
             ]],

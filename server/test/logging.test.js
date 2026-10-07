@@ -18,11 +18,16 @@ const LOGGER = 'log.js';
 
 /**
  * Operator-run command-line tools, not part of the request path: they print progress for the
- * person running them (npm run seed, npm run import). Checked below: no server module imports them.
+ * person running them (npm run seed, npm run import, npm run prune). Checked below: no server
+ * module imports them.
  */
 const CLI_EXCLUDED = [
   { path: 'seed.js', reason: 'npm run seed: operator CLI, prints its own progress' },
   { path: 'import', reason: 'npm run import (src/import/run.js and its modules): operator CLI' },
+  {
+    path: 'prune.js',
+    reason: 'npm run prune: operator CLI (retention prune on demand); it logs through log.js, and importing it would run a prune and close the pool',
+  },
 ];
 
 const OUTPUT = /\bconsole\s*(?:\.\s*\w+|\[)|\bprocess\s*\.\s*(?:stdout|stderr)\s*\.\s*write\b/g;

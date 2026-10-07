@@ -76,11 +76,16 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::get('/leaderboard', [ProgressController::class, 'leaderboard']);
 
     // Passwort aendern, Konto loeschen. DELETE /me prueft hier und loescht in
-    // Node (AccountController::destroy erklaert, warum). One shared budget: each checks the password.
+    // Node (AccountController::destroy erklaert, warum). One shared budget: each checks the
+    // password, or a code that only a password-checked request or the account's mailbox gets.
     Route::middleware('throttle:account-sensitive')->group(function () {
         Route::put('/user/password', [AccountController::class, 'updatePassword']);
-        // E-Mail-Adresse aendern: only here, with the password (and code); F-04.
+        // An account without a password: a code to its address before its first one (F-04).
+        Route::post('/user/password/code', [AccountController::class, 'sendFirstPasswordCode']);
+        // E-Mail-Adresse aendern: only here, with the password (and code); F-04. The new address
+        // takes effect only with the code mailed to it.
         Route::put('/user/email', [AccountController::class, 'updateEmail']);
+        Route::post('/user/email/confirm', [AccountController::class, 'confirmEmail']);
         Route::delete('/me', [AccountController::class, 'destroy']);
     });
 

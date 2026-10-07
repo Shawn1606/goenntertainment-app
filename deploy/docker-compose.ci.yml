@@ -21,6 +21,15 @@ services:
       mailpit:
         condition: service_healthy
 
+  node:
+    environment:
+      # The CI stack never talks to the moderation provider. Written out here, not taken from
+      # ci.env: Compose prefers a variable of the calling shell over the env file, so a shell that
+      # exports its own ANTHROPIC_BASE_URL would otherwise point the stack at the real provider.
+      # Nothing listens on this address; with MODERATION_FAIL_OPEN=true (ci.env) the smoke
+      # test's event still goes through.
+      ANTHROPIC_BASE_URL: http://127.0.0.1:9
+
   # The development mail catcher (pinned image), reused so the pin lives in one place. Its host
   # ports are dropped (!reset needs Compose >= 2.24.4): api reaches Mailpit over the compose
   # network, so the CI stack publishes no Mailpit port at all.

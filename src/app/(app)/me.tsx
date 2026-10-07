@@ -12,6 +12,7 @@ import { CategoryIcon } from '@/components/ui/category-icon';
 import { Icon } from '@/components/ui/icon';
 import { IconButton } from '@/components/ui/icon-button';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
+import { mergeById } from '@/domain/activity-pages';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
 import { type Activity, api, ApiError } from '@/lib/api';
@@ -80,12 +81,15 @@ export default function MeScreen() {
   const load = useCallback(async () => {
     if (!token) return;
     try {
-      const [list, marks, friends] = await Promise.all([
-        api.activities(token),
+      // Your own events only (F-12): the upcoming ones and those that are over. The server lists
+      // past events only to the people who hosted or joined them.
+      const [upcoming, past, marks, friends] = await Promise.all([
+        api.activities(token, { mine: true }),
+        api.activities(token, { past: true }),
         api.savedActivities(token).catch(() => null),
         api.friends(token).catch(() => null),
       ]);
-      setActivities(list.data);
+      setActivities(mergeById(upcoming.data, past.data));
       if (marks) setSaved(marks.data);
       if (friends) setFriendCount(friends.friends.length);
       setNow(Date.now());

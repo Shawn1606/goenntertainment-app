@@ -1,0 +1,11 @@
+{
+  "about": [
+    "The current version of the terms of use and the minimum age for an account (F-14).",
+    "Laravel reads this file at sign-up (api/app/Support/Legal.php): a registration is accepted only with exactly this terms version and a confirmation of exactly this minimum age, and the account stores both with the time of the confirmation.",
+    "The container smoke (.github/workflows/docker.yml) reads it for its sign-up payloads.",
+    "Named mirrors in the app, which cannot import JSON in its unit tests: LEGAL_VERSION in src/domain/legal.ts and MIN_AGE in src/constants/operator.ts. src/domain/legal.test.ts fails when either differs from this file.",
+    "A new terms version is a change to the legal texts in src/domain/legal.ts: change both places in the same commit. How age is verified beyond this confirmation is an operator decision and not made here."
+  ],
+  "terms_version": "2026-09-29",
+  "min_age": 16
+}

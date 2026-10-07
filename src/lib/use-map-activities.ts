@@ -20,6 +20,8 @@ const initial: State = { items: [], unlocated: [], loading: true, error: null };
 /**
  * Lädt Activities und wandelt ihre Orts-Texte in Koordinaten um.
  * Pins erscheinen nach und nach, sobald ein Ort aufgelöst wurde.
+ *
+ * The upcoming events, every page (F-12): an event that is over gets no pin.
  */
 export function useMapActivities(token: string | null): State {
   const [state, setState] = useState<State>(initial);

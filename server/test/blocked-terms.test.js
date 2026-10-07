@@ -19,6 +19,9 @@ import {
   analyseText,
   blockedTermMessageFor,
   findBlockedTerm,
+  findBlockedTermInValue,
+  MAX_VALUE_DEPTH,
+  MAX_VALUE_PARTS,
   rejectBlockedTerms,
 } from '../src/blocked-terms.js';
 import { Validator } from '../src/validate.js';
@@ -85,6 +88,51 @@ test('rejectBlockedTerms: traegt die Meldung am Feld ein und uebergeht Leeres', 
 
   assert.equal(rejectBlockedTerms(v, 'description', 'Du Hurensohn', 'text'), true);
   assert.deepEqual(v.errors, { description: [blockedTermMessageFor('text')] });
+});
+
+test('rejectBlockedTerms checks a value of any JSON type (F-06)', () => {
+  const blocked = 'Du Hurensohn';
+  for (const value of [[blocked], ['ok', [blocked]], { text: blocked }, { a: { b: [blocked] } }]) {
+    const v = new Validator({});
+    assert.equal(rejectBlockedTerms(v, 'body', value, 'text'), true, JSON.stringify(value));
+    assert.deepEqual(v.errors, { body: [blockedTermMessageFor('text')] });
+  }
+  for (const value of [null, undefined, [], {}, ['Hallo', 'Welt'], { a: 'Hallo' }, 42, true]) {
+    const v = new Validator({});
+    assert.equal(rejectBlockedTerms(v, 'body', value, 'text'), false, JSON.stringify(value));
+  }
+});
+
+test('findBlockedTermInValue: a string as before, numbers and booleans as their text', () => {
+  for (const text of ['Du Hurensohn', 'Hallo', '', 'Nazis raus!']) {
+    for (const mode of BLOCKED_TERM_MODES) {
+      assert.deepEqual(findBlockedTermInValue(text, BLOCKED_TERMS, mode), findBlockedTerm(text, BLOCKED_TERMS, mode), text);
+    }
+  }
+  for (const n of [0, 18, 88, 1488, 2026, 3.5, -7, true, false]) {
+    for (const mode of BLOCKED_TERM_MODES) {
+      assert.deepEqual(findBlockedTermInValue(n, BLOCKED_TERMS, mode), findBlockedTerm(String(n), BLOCKED_TERMS, mode), `${n} ${mode}`);
+    }
+  }
+});
+
+test('findBlockedTermInValue: an array is also read as the text String() makes of it', () => {
+  // The two halves of a term in two parts: each part alone is harmless, the joined text is not.
+  const halves = ['Hu', 'rensohn'];
+  assert.equal(findBlockedTerm(halves[0], BLOCKED_TERMS, 'text'), null);
+  assert.equal(findBlockedTerm(halves[1], BLOCKED_TERMS, 'text'), null);
+  assert.notEqual(findBlockedTerm(String(halves), BLOCKED_TERMS, 'text'), null, 'precondition: String() joins them into a term');
+  assert.notEqual(findBlockedTermInValue(halves, BLOCKED_TERMS, 'text'), null);
+});
+
+test('findBlockedTermInValue fails closed on values too deep or too large to check', () => {
+  let deep = 'Hallo';
+  for (let i = 0; i <= MAX_VALUE_DEPTH; i += 1) deep = [deep];
+  assert.equal(findBlockedTermInValue(deep, BLOCKED_TERMS, 'text')?.kind, 'structure', 'too deep');
+
+  const wide = Array.from({ length: MAX_VALUE_PARTS + 1 }, () => 'Hallo');
+  assert.equal(findBlockedTermInValue(wide, BLOCKED_TERMS, 'text')?.kind, 'structure', 'too many parts');
+  assert.equal(findBlockedTermInValue(wide.slice(1), BLOCKED_TERMS, 'text'), null, 'at the limit it is checked');
 });
 
 test('ein unbekannter Modus ist ein Programmierfehler, kein „erlaubt"', () => {

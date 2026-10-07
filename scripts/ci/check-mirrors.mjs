@@ -15,6 +15,11 @@
 //   - the upload size limit: server/src/uploads.js and Laravel's NodeFallbackController;
 //   - the 429 message: server/src/rate-limit.js and api/app/Providers/AppServiceProvider.php;
 //   - the interests per event: the app's create-activity screen and server/src/routes/activities.js;
+//   - the hours after its start from which an event is over: server/src/activity-pages.js (the
+//                  event list leaves it out) and the app (urgency.ts, the feed and the search);
+//   - the page size of the event list: the server's largest page and the one the app asks for;
+//   - the streak window (active days the app shows): server/src/streak.js and api/app/Support/
+//                  Streak.php, and the smallest USAGE_RETENTION_DAYS in server/src/config.js;
 //   - the request body limits (JSON, webhook JSON with its path, urlencoded) and their 413 message:
 //                  server/src/app.js and server/src/client-errors.js against Laravel's
 //                  LimitRequestBody, which applies them before Laravel parses a body.
@@ -163,6 +168,38 @@ export const MIRRORS = [
     sources: [
       { file: 'src/app/create-activity.tsx', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
       { file: 'server/src/routes/activities.js', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
+    ],
+  },
+  {
+    // A dated event is over this many hours after its start (the database stores no end). The
+    // server leaves it out of the event list from then on (F-12); the app shows "Vorbei" and hides
+    // it from the feed and the search. A smaller server value would drop events the app still
+    // shows as running.
+    name: 'Event over after (hours)',
+    sources: [
+      { file: 'server/src/activity-pages.js', what: 'PAST_AFTER_HOURS', extract: all(/^export const PAST_AFTER_HOURS = (\d+);/gm) },
+      { file: 'src/domain/urgency.ts', what: 'LIVE_MS', extract: all(/^export const LIVE_MS = (\d+) \* HOUR;/gm) },
+      { file: 'src/app/(app)/index.tsx', what: 'the feed cutoff', extract: all(/const cutoff = now\.getTime\(\) - (\d+) \* 60 \* 60 \* 1000;/g) },
+      { file: 'src/app/search.tsx', what: 'PAST_CUTOFF_MS', extract: all(/^const PAST_CUTOFF_MS = (\d+) \* 60 \* 60 \* 1000;/gm) },
+    ],
+  },
+  {
+    // The app asks for the server's largest page of the event list (F-12); a smaller server value
+    // would only cost requests, a larger one would leave it unused.
+    name: 'Event list page size',
+    sources: [
+      { file: 'server/src/activity-pages.js', what: 'PAGE_SIZE_MAX', extract: all(/^export const PAGE_SIZE_MAX = (\d+);/gm) },
+      { file: 'src/domain/activity-pages.ts', what: 'ACTIVITY_PAGE_SIZE', extract: all(/^export const ACTIVITY_PAGE_SIZE = (\d+);/gm) },
+    ],
+  },
+  {
+    // Both backends read the active days of this many days back; the retention prune must keep at
+    // least as many (USAGE_RETENTION_DAYS), or it would cut streaks.
+    name: 'Streak window (days)',
+    sources: [
+      { file: 'server/src/streak.js', what: 'ACTIVE_DAYS_WINDOW', extract: all(/^export const ACTIVE_DAYS_WINDOW = (\d+);/gm) },
+      { file: 'api/app/Support/Streak.php', what: 'ACTIVE_DAYS_WINDOW', extract: all(/\bconst ACTIVE_DAYS_WINDOW = (\d+);/g) },
+      { file: 'server/src/config.js', what: 'USAGE_RETENTION_MIN_DAYS', extract: all(/^export const USAGE_RETENTION_MIN_DAYS = (\d+);/gm) },
     ],
   },
   {

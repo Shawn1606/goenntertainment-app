@@ -29,7 +29,7 @@ class RegisterTest extends AppFeatureTestCase
             'password' => self::TEST_PASSWORD,
             'account_type' => 'standard',
             'device_name' => 'test',
-        ], $overrides));
+        ], self::consent(), $overrides));
     }
 
     public function test_common_passwords_are_rejected_case_insensitively(): void

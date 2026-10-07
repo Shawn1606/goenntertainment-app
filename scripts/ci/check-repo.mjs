@@ -5,7 +5,8 @@
  *   node scripts/ci/check-repo.mjs     exit 0 = no findings, 1 = findings, 2 = a check could not run
  *
  * Checks: ignore-rules (F-46), autostart and agent-permissions (F-24), secrets (F-35), log-mailer
- * (development mail goes to the local mail catcher, never to a log).
+ * (development mail goes to the local mail catcher, never to a log), deploy-settings (every
+ * setting the production compose requires is named in the deploy runbook).
  *
  * Output: first one line with what the text checks could not read (`check-repo: tracked N,
  * text T, not scanned: binary B, missing M`, then each missing path as
@@ -463,10 +464,66 @@ export function checkLogMailer(ctx) {
   return report('log-mailer', examined, findings);
 }
 
+/* --------------------------------------------------------------- deploy settings (runbook) */
+
+/** The production compose, and the runbook an operator follows to fill in deploy/.env. */
+export const DEPLOY_COMPOSE = 'deploy/docker-compose.yml';
+export const DEPLOY_RUNBOOK = 'deploy/README.md';
+
+/**
+ * The settings a compose file requires: every `${NAME:?message}` or `${NAME?message}` outside a
+ * comment line (compose refuses to start while such a setting is unset, or with `:?` empty).
+ * `$${...}` is compose's escape for a literal `$` and does not count. Each name once, with the
+ * line it first appears on.
+ */
+export function requiredComposeSettings(text) {
+  const first = new Map();
+  text.split(/\r?\n/).forEach((line, i) => {
+    if (/^\s*#/.test(line)) return;
+    for (const m of line.matchAll(/(?<!\$)\$\{([A-Za-z_][A-Za-z0-9_]*):?\?/g)) {
+      if (!first.has(m[1])) first.set(m[1], i + 1);
+    }
+  });
+  return [...first].map(([name, line]) => ({ name, line }));
+}
+
+/** The setting names a runbook spells out as code: `NAME`, or `NAME=value`, in backticks. */
+export function runbookSettingNames(text) {
+  return new Set([...text.matchAll(/`([A-Za-z_][A-Za-z0-9_]*)(?:=[^`\r\n]*)?`/g)].map((m) => m[1]));
+}
+
+/**
+ * Every setting the production compose requires is named in the runbook: deploy/README.md is
+ * where an operator learns what deploy/.env needs, and a required setting it leaves out turns
+ * the first start into one interpolation error after another. A finding is the compose line of
+ * a required setting the runbook does not name. Examined: the required settings, so a compose
+ * without any (or a missing file) gets no verdict.
+ */
+export function checkDeploySettings(ctx) {
+  const text = (p) => {
+    const file = ctx.files.find((f) => f.path === p);
+    if (!file) throw new Error(`deploy-settings: ${p} is not a tracked text file`);
+    return file.text;
+  };
+  const required = requiredComposeSettings(text(DEPLOY_COMPOSE));
+  const named = runbookSettingNames(text(DEPLOY_RUNBOOK));
+  const findings = required
+    .filter((s) => !named.has(s.name))
+    .map((s) => ({ cls: 'deploy-setting-not-in-runbook', location: `${DEPLOY_COMPOSE}:${s.line}` }));
+  return report('deploy-settings', required.length, findings);
+}
+
 /* ------------------------------------------------------------------------------ checks */
 
 /** The checks the CLI runs, in order. Each takes a context and returns report(...). */
-export const CHECKS = [checkIgnoreRules, checkAutostart, checkAgentPermissions, checkSecrets, checkLogMailer];
+export const CHECKS = [
+  checkIgnoreRules,
+  checkAutostart,
+  checkAgentPermissions,
+  checkSecrets,
+  checkLogMailer,
+  checkDeploySettings,
+];
 
 export function formatReport(r) {
   const head = `${r.check}\texamined ${r.examined}\tfindings ${r.findings.length}`;

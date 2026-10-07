@@ -23,6 +23,14 @@ class ProgressController extends Controller
     private const LEADERBOARD_LIMIT = 50;
 
     /**
+     * Accounts in a block relation with the viewer, in either direction, do not appear in the
+     * viewer's ranking (F-13), the same rule as every list in the Node backend (notBlockedWith in
+     * server/src/people.js). Two bindings, both the viewer's id.
+     */
+    private const NOT_BLOCKED_WITH_VIEWER = 'NOT EXISTS (SELECT 1 FROM user_blocks b
+        WHERE (b.blocker_id = u.id AND b.blocked_id = ?) OR (b.blocker_id = ? AND b.blocked_id = u.id))';
+
+    /**
      * Kennzahlen je Konto als Unterabfrage:
      *  hosted  = selbst erstellte Events
      *  joined  = Events, bei denen man dabei ist (das eigene zaehlt mit)
@@ -32,9 +40,14 @@ class ProgressController extends Controller
      * drei zusammenhaengende Unterabfragen, und in dieser Form ist nachlesbar,
      * was gezaehlt wird. Der Platzhalter nimmt zusaetzliche Nutzerspalten auf
      * (fuer die Rangliste).
+     *
+     * $visibleToViewer: only accounts the viewer may see (NOT_BLOCKED_WITH_VIEWER); the query
+     * then takes the viewer's id twice as its first bindings.
      */
-    private function statsQuery(string $columns = ''): string
+    private function statsQuery(string $columns = '', bool $visibleToViewer = false): string
     {
+        $where = $visibleToViewer ? ' WHERE '.self::NOT_BLOCKED_WITH_VIEWER : '';
+
         return "
             SELECT {$columns}
                    (SELECT COUNT(*) FROM activities a WHERE a.user_id = u.id) AS hosted,
@@ -43,7 +56,7 @@ class ProgressController extends Controller
                       FROM activity_user au2
                       JOIN activity_interest ai ON ai.activity_id = au2.activity_id
                      WHERE au2.user_id = u.id) AS variety
-              FROM users u
+              FROM users u{$where}
         ";
     }
 
@@ -108,7 +121,12 @@ class ProgressController extends Controller
         ]);
     }
 
-    /** GET /api/leaderboard (geschuetzt) - Top-Liste nach XP + eigene Position. */
+    /**
+     * GET /api/leaderboard (geschuetzt) - Top-Liste nach XP + eigene Position.
+     *
+     * Both the list and the own rank count only accounts the viewer may see (F-13): ranks are
+     * positions in the viewer's own list, so no gap in the numbering points at a hidden account.
+     */
     public function leaderboard(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -116,10 +134,10 @@ class ProgressController extends Controller
 
         $rows = DB::select(
             "SELECT id, name, username, avatar, hosted, joined, variety, {$xp} AS xp
-               FROM ({$this->statsQuery('u.id, u.name, u.username, u.avatar,')}) AS s
+               FROM ({$this->statsQuery('u.id, u.name, u.username, u.avatar,', true)}) AS s
               ORDER BY xp DESC, id ASC
               LIMIT ?",
-            [self::LEADERBOARD_LIMIT],
+            [$user->id, $user->id, self::LEADERBOARD_LIMIT],
         );
 
         $data = [];
@@ -151,8 +169,8 @@ class ProgressController extends Controller
             $ownXp = Gamification::xpFromStats($stats);
 
             $ahead = DB::selectOne(
-                "SELECT COUNT(*) AS c FROM ({$this->statsQuery('u.id,')}) AS s WHERE {$xp} > ?",
-                [$ownXp],
+                "SELECT COUNT(*) AS c FROM ({$this->statsQuery('u.id,', true)}) AS s WHERE {$xp} > ?",
+                [$user->id, $user->id, $ownXp],
             );
 
             $me = [

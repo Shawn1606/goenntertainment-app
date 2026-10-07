@@ -24,7 +24,7 @@ import { requireAuth, requireAdmin } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { parseReportInput } from '../reports.js';
-import { mediaUrl, publicBase } from '../media.js';
+import { mediaUrl } from '../media.js';
 
 const router = createRouter();
 
@@ -40,6 +40,8 @@ const TARGET_TABLES = {
   user: 'users',
   post: 'posts',
   story: 'stories',
+  post_comment: 'post_comments',
+  activity_comment: 'activity_comments',
 };
 
 async function targetExists(targetType, targetId) {
@@ -92,8 +94,8 @@ router.post('/reports', requireAuth, rateLimit('report'), async (req, res, next)
 /**
  * Laedt zu jeder Meldung eine kurze Beschreibung des Gegenstands.
  *
- * Gruppiert nach Art, damit daraus fuenf Abfragen werden und nicht eine je
- * Meldung. Fehlt der Gegenstand (geloescht), bleibt der Platz leer – die Meldung
+ * Grouped by kind, so that this takes one query per kind and not one per report.
+ * Fehlt der Gegenstand (geloescht), bleibt der Platz leer – die Meldung
  * bleibt trotzdem sichtbar, denn genau der geloeschte Inhalt ist manchmal der,
  * um den es hinterher geht.
  */
@@ -105,7 +107,9 @@ async function loadTargets(req, reports) {
   });
 
   const found = new Map();
-  const remember = (type, id, value) => found.set(`${type}:${id}`, value);
+  // `context_id`: where a comment stands (the event or the post), so the admin screen can remove
+  // it through the same route as the comment row; null for every other kind.
+  const remember = (type, id, value) => found.set(`${type}:${id}`, { context_id: null, ...value });
 
   for (const [type, idSet] of byType) {
     const ids = [...idSet];
@@ -168,7 +172,7 @@ async function loadTargets(req, reports) {
           label: row.body,
           author: row.author,
           detail: null,
-          image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+          image_url: mediaUrl(req, row.image_path),
         }),
       );
     } else if (type === 'story') {
@@ -183,7 +187,28 @@ async function loadTargets(req, reports) {
           label: row.caption ?? '(ohne Text)',
           author: row.author,
           detail: null,
-          image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+          image_url: mediaUrl(req, row.image_path),
+        }),
+      );
+    } else if (type === 'post_comment' || type === 'activity_comment') {
+      // Comments under a post or an event (F-08): the text, its author, when it was written,
+      // and where it stands. Table and context column come from this fixed choice, never from
+      // the request.
+      const [table, contextColumn] =
+        type === 'post_comment' ? ['post_comments', 'post_id'] : ['activity_comments', 'activity_id'];
+      const [rows] = await pool.query(
+        `SELECT c.id, c.body, c.created_at, c.${contextColumn} AS context_id, u.name AS author
+           FROM ${table} c LEFT JOIN users u ON u.id = c.user_id
+          WHERE c.id IN (${ph})`,
+        ids,
+      );
+      rows.forEach((row) =>
+        remember(type, row.id, {
+          label: row.body,
+          author: row.author,
+          detail: toIso(row.created_at),
+          image_url: null,
+          context_id: Number(row.context_id),
         }),
       );
     }

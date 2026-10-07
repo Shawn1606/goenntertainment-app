@@ -31,9 +31,23 @@ import { pool, toIso } from './db.js';
 import { mediaUrl } from './media.js';
 import { followerIdsOf } from './follows.js';
 import { logError } from './log.js';
+import { notBlockedWith } from './people.js';
 
-/** Sorten, die es gibt. Neue Sorte = Zeile hier und ein Symbol in der App. */
-export const NOTIFICATION_TYPES = ['story', 'activity', 'post', 'like', 'comment', 'follow'];
+/**
+ * SQL condition: a notification the recipient may see (alias `n`). Notifications caused by
+ * someone in a block relation with the recipient, in either direction, are left out of the list
+ * and of every unread counter (F-13, F-08): they carry the other person's name and, for comments,
+ * their text. Notifications without an actor (system messages) always count. Takes TWO bound
+ * values, both the recipient's id.
+ */
+export const VISIBLE_NOTIFICATION = `(n.actor_id IS NULL OR ${notBlockedWith('n.actor_id')})`;
+
+/**
+ * Sorten, die es gibt. Neue Sorte = Zeile hier und ein Symbol in der App. `activity_comment`: a
+ * comment on the recipient's event (F-08). Keys fit notifications.type (VARCHAR(20)). Named
+ * mirror: NOTIFICATION_TYPES in src/domain/notification.ts (test/comment-reports.test.js).
+ */
+export const NOTIFICATION_TYPES = ['story', 'activity', 'post', 'like', 'comment', 'follow', 'activity_comment'];
 
 /** So viele Empfaenger pro INSERT. */
 const CHUNK = 200;
@@ -183,6 +197,34 @@ export async function notifyQuietly(input) {
     await notify(input);
   } catch (err) {
     logError('Benachrichtigung konnte nicht zugestellt werden', err);
+  }
+}
+
+/**
+ * Removes the notification a comment left (types 'comment' and 'activity_comment') once the
+ * comment is deleted (F-08): the row copies the comment's text (see the head of this file), and a
+ * comment removed by its author, the host or a moderator must not stay readable there.
+ *
+ * The row has no comment id (`ref_id` is the post or event the app opens), so it is found by
+ * recipient, author, type, target and the exact stored text (clamped as notify() stored it, compared
+ * byte for byte). Exactly one row goes: of two comments with the same text the other one still
+ * exists, so its notification stays; the one written closest to the comment's own time is taken.
+ * Never throws, like notifyQuietly: the comment is deleted either way.
+ */
+export async function forgetCommentNotification({ userId, actorId, type, refId, body, createdAt = null }) {
+  if (!userId || Number(userId) === Number(actorId)) return; // notify() wrote nothing then
+  const stored = clamp(body, MAX_BODY);
+  if (stored === null) return;
+  try {
+    await pool.query(
+      `DELETE FROM notifications
+        WHERE user_id = ? AND actor_id = ? AND type = ? AND ref_id = ? AND body COLLATE utf8mb4_bin = ?
+        ORDER BY ABS(TIMESTAMPDIFF(SECOND, created_at, COALESCE(?, created_at))), id
+        LIMIT 1`,
+      [userId, actorId, type, refId, stored, createdAt],
+    );
+  } catch (err) {
+    logError("Could not remove a deleted comment's notification", err);
   }
 }
 

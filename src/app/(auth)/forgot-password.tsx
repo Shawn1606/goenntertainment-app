@@ -12,11 +12,16 @@ import { MailIcon } from '@/components/ui/icons';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
 import { isEmailAddress } from '@/domain/email';
 import { api, ApiError } from '@/lib/api';
+import { rememberResetEmail } from '@/lib/password-reset-draft';
 
 /**
- * „Passwort vergessen": schickt die E-Mail ans Backend (/api/forgot-password) und
- * bestätigt den Versand neutral. Die API verrät nicht, ob die Adresse existiert;
- * der eigentliche Mail-Versand (SMTP) ist im Backend noch ein eigenes Ticket.
+ * „Passwort vergessen": schickt die E-Mail ans Backend (/api/forgot-password). The server mails a
+ * 6-digit code to the account's address (F-09; no reset link, no deep link), and the next screen,
+ * (auth)/reset-password, takes the code and the new password. Die API verrät nicht, ob die
+ * Adresse existiert: the next screen opens either way and says so neutrally.
+ *
+ * The address goes to the next screen in memory (src/lib/password-reset-draft.ts), not as a route
+ * parameter: on the web that would put it into the URL.
  */
 export default function ForgotPasswordScreen() {
   const insets = useSafeAreaInsets();
@@ -24,7 +29,6 @@ export default function ForgotPasswordScreen() {
 
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function onSubmit() {
@@ -36,7 +40,8 @@ export default function ForgotPasswordScreen() {
     setLoading(true);
     try {
       await api.forgotPassword(email.trim());
-      setSent(true);
+      rememberResetEmail(email, true);
+      router.push('/reset-password');
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -72,37 +77,34 @@ export default function ForgotPasswordScreen() {
             <Text style={styles.subheading}>Kein Problem</Text>
             <BrandGradientText style={styles.heading}>Passwort vergessen?</BrandGradientText>
             <Text style={styles.lead}>
-              Gib deine E-Mail-Adresse ein. Wir schicken dir einen Link zum Zurücksetzen.
+              Gib deine E-Mail-Adresse ein. Wir schicken dir einen Code zum Zurücksetzen.
             </Text>
           </View>
 
           <View style={styles.card}>
-            {sent ? (
-              <View style={styles.sentBox}>
-                <Text style={styles.sentTitle}>E-Mail unterwegs</Text>
-                <Text style={styles.sentText}>
-                  Falls ein Konto zu {email.trim()} existiert, findest du gleich einen Link zum
-                  Zurücksetzen in deinem Postfach.
-                </Text>
-                <BrandButton title="Zurück" onPress={() => router.replace('/')} />
-              </View>
-            ) : (
-              <>
-                <TextField
-                  label="E-Mail"
-                  value={email}
-                  onChangeText={setEmail}
-                  placeholder="beispiel@email.com"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                  leftIcon={<MailIcon />}
-                  error={error ?? undefined}
-                />
-                <BrandButton title="Link senden" onPress={onSubmit} loading={loading} />
-              </>
-            )}
+            <TextField
+              label="E-Mail"
+              value={email}
+              onChangeText={setEmail}
+              placeholder="beispiel@email.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+              leftIcon={<MailIcon />}
+              error={error ?? undefined}
+            />
+            <BrandButton title="Code senden" onPress={onSubmit} loading={loading} />
           </View>
+
+          <Pressable
+            onPress={() => {
+              rememberResetEmail(email);
+              router.push('/reset-password');
+            }}
+            style={styles.loginRow}>
+            <Text style={styles.muted}>Du hast schon einen Code? </Text>
+            <Text style={styles.link}>Code eingeben</Text>
+          </Pressable>
 
           <Pressable onPress={() => router.replace('/')} style={styles.loginRow}>
             <Text style={styles.muted}>Doch wieder eingefallen? </Text>
@@ -153,22 +155,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.6)',
     padding: Spacing.four,
     gap: Spacing.three,
-  },
-  sentBox: {
-    gap: Spacing.three,
-    alignItems: 'center',
-  },
-  sentTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Brand.text,
-    fontFamily: FontFamily.bold,
-  },
-  sentText: {
-    fontSize: 14,
-    color: Brand.textMuted,
-    textAlign: 'center',
-    fontFamily: FontFamily.regular,
   },
   loginRow: {
     flexDirection: 'row',

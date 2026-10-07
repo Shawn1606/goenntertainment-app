@@ -221,7 +221,10 @@ class NodeFallbackController extends Controller
         // CORS-Kopfzeilen setzt Laravel selbst (config/cors.php) - kaemen sie
         // zusaetzlich vom alten Server, staenden sie doppelt in der Antwort, und
         // der Browser lehnt eine doppelte Access-Control-Allow-Origin ab.
-        foreach (['Content-Type', 'Cache-Control', 'ETag', 'Last-Modified', 'Location'] as $name) {
+        // X-Content-Type-Options and Content-Security-Policy belong to the payload too: Node sends
+        // them with stored files (F-11, server/src/storage.js), so the browser never takes an image
+        // for another type and a file opened on its own runs nothing.
+        foreach (['Content-Type', 'Cache-Control', 'ETag', 'Last-Modified', 'Location', 'X-Content-Type-Options', 'Content-Security-Policy'] as $name) {
             $value = $upstream->header($name);
             if ($value !== '') {
                 $response->header($name, $value);

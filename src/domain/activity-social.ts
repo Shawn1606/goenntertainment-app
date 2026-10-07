@@ -37,6 +37,16 @@ export function commentsLabel(count: number | undefined): string | null {
 }
 
 /**
+ * Whether a comment is gone although deleting it answered with an error. A 404 means either that
+ * the comment no longer exists or that the post is hidden from the viewer by a block: the server
+ * deletes one's own comment first and only then refuses to show the post (F-13). Either way the
+ * comment leaves the list and no error is shown.
+ */
+export function commentGoneAfterDeleteError(status: number | undefined): boolean {
+  return status === 404;
+}
+
+/**
  * Kurze Zahl: 999 → „999", 1200 → „1,2 Tsd.", 25000 → „25 Tsd.".
  * Deutsch gerundet, weil die ganze Oberfläche deutsch ist.
  */

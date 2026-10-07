@@ -10,8 +10,10 @@ import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { listedActivities } from './support/activity-list.js';
 import { ensureSchema, first, pool } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
+import { PNG_1X1 } from './support/images.js';
 
 // Diese Tests pruefen die Kontostufen-Regeln. In der App sind die Stufen gerade
 // ausgeblendet (server/src/features.js) – hier werden sie ausdruecklich wieder
@@ -142,8 +144,7 @@ test('GET /api/activities liefert views_count mit', async () => {
     method: 'POST',
     headers: { Authorization: `Bearer ${visitor.token}` },
   });
-  const body = await (await get('/api/activities', host.token)).json();
-  const found = body.data.find((a) => a.id === activity.id);
+  const found = (await listedActivities(base, host.token)).find((a) => a.id === activity.id);
   assert.equal(found.views_count, 1);
 });
 
@@ -250,8 +251,8 @@ test('Hervorheben: Business hat einen Platz, der zweite wird abgelehnt', async (
 
   // Das Event traegt die Hervorhebung auch in der normalen Liste – daran haengt
   // die Sortierung in der App.
-  const list = await (await get('/api/activities', host.token)).json();
-  assert.ok(list.data.find((a) => a.id === first.id).boosted_until);
+  const list = await listedActivities(base, host.token);
+  assert.ok(list.find((a) => a.id === first.id).boosted_until);
 
   const tooMany = await boost(host.token, second.id);
   assert.equal(tooMany.status, 422);
@@ -296,9 +297,9 @@ test('Hervorheben: unbekanntes Event ergibt 404', async () => {
 
 // --- Oeffentliches Profil, Beitraege und Social-Links ------------------------
 //
-// Die KI-Verifizierung ist in der Testumgebung aus (kein ANTHROPIC_API_KEY),
-// Beitraege laufen also ohne Modell-Aufruf durch – geprueft wird hier die
-// Zugriffslogik, nicht das Urteil der KI.
+// AI moderation is switched off for these suites (test/test.env, MODERATION_ENABLED=false), so
+// posts go through without a model call: this tests the access logic, not the AI's verdict
+// (that is test/moderation.test.js).
 
 /** Schreibt einen Beitrag (multipart, wie die App). */
 const createPost = (token, body) => {
@@ -544,14 +545,7 @@ test('PUT /api/me/links: eine abgelehnte Liste laesst die alten Links stehen', a
 
 /* ------------------------------------- Profilbild und Karten-Hintergrund */
 
-/**
- * Ein winziges, gueltiges PNG (1x1). Reicht als Bild fuer einen Upload und
- * haelt den Test unabhaengig von einer Datei auf der Platte.
- */
-const PNG_1X1 = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==',
-  'base64',
-);
+// PNG_1X1: a valid 1x1 PNG from test/support/images.js (the one written here before was malformed).
 
 /** Setzt Profilbild ('avatar') oder Karten-Hintergrund ('banner') – multipart, wie die App. */
 const putProfileImage = (token, kind, { mime = 'image/png', name = 'bild.png', withFile = true } = {}) => {
@@ -688,8 +682,7 @@ test('GET /api/activities: der Host bringt seine Stufe mit', async () => {
   const { token, user } = await registerUser('hosttier', 'creator');
   await createActivity(token, 'Stufen-Event');
 
-  const body = await (await get('/api/activities', token)).json();
-  const mine = body.data.find((a) => a.host?.id === user.id);
+  const mine = (await listedActivities(base, token)).find((a) => a.host?.id === user.id);
   assert.equal(mine.host.account_type, 'creator');
 });
 

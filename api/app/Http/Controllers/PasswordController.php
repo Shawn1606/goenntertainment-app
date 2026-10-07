@@ -2,45 +2,58 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Responses\LengthDelimitedJsonResponse;
 use App\Models\User;
 use App\Rules\ValidEmail;
-use App\Support\Passwords;
 use App\Support\PasswordPolicy;
-use App\Support\Sessions;
+use App\Support\PasswordReset;
+use App\Support\TwoFactor;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Passwort vergessen und zuruecksetzen.
+ * Passwort vergessen und zuruecksetzen - by a one-time code sent by e-mail and typed into the app
+ * (F-09). No reset link, no deep link. The code's rules (6 digits, 10 minutes, 5 attempts, a
+ * minute between mails) and why: App\Support\PasswordReset.
  *
  * ## Warum nicht Laravels Password-Broker
  *
  * Laravel bringt das fertig mit - aber mit eigenen Meldungen, eigenen Status-Namen
- * ('passwords.sent') und einem Mail-Versand, den es hier noch nicht gibt. Die App
- * liest `status` und zeigt `message` woertlich an. Also dieselbe Logik wie zuvor,
- * mit denselben Texten; der Broker kann kommen, wenn der Mail-Versand kommt.
+ * ('passwords.sent'). Its broker also resets by a link token, while here the reset is a code
+ * typed into the app. Die App liest `status` und zeigt `message` woertlich an, so the answers
+ * keep the form they had before.
  *
- * Der Token wird GEHASHT gespeichert - er ist ein Passwort auf Zeit. In der
- * Tabelle steht deshalb nie der Wert, den die Nutzer:in bekommt.
+ * password_reset_tokens (the former link tokens) is no longer read or written; the table stays
+ * in the schema until its removal (backlog).
  */
 class PasswordController extends Controller
 {
-    /** Wie Laravel: Reset-Links laufen nach 60 Minuten ab. */
-    private const EXPIRE_MINUTES = 60;
-
     private const MSG_EMAIL = ValidEmail::MESSAGE;
 
+    /** The neutral answer to /forgot-password, whether or not the address has an account. */
+    public const MSG_SENT = 'Falls ein Konto zu dieser Adresse existiert, haben wir dir einen Code geschickt.';
+
+    /** A code that is not six digits (or missing); said before anything is looked up. */
+    public const MSG_CODE_SHAPE = 'Bitte gib den 6-stelligen Code aus der E-Mail ein.';
+
+    /** Wrong, expired, used up, no code requested, or no such account: one answer for all. */
+    public const MSG_CODE_INVALID = 'Der Code ist ungültig oder abgelaufen. Fordere bei Bedarf einen neuen an.';
+
     /**
-     * POST /api/forgot-password
+     * POST /api/forgot-password {email}
      *
      * Antwortet IMMER neutral - so verraet die API nicht, ob eine E-Mail
      * registriert ist. Das ist der ganze Zweck der Gleichbehandlung: Wer hier
-     * Adressen durchprobiert, lernt nichts.
+     * Adressen durchprobiert, lernt nichts. The same answer within a minute of the last
+     * code mail, when no new mail goes out. How many requests an account gets is the route
+     * throttle's (password-forgot).
+     *
+     * Nor does the timing tell (F-21): up to the answer a known address costs what an unknown
+     * one costs, the lookup below; the code is made and mailed after the answer, which the
+     * client has completely before that (PasswordReset::issue, LengthDelimitedJsonResponse).
      */
     public function forgot(Request $request): JsonResponse
     {
@@ -50,69 +63,46 @@ class PasswordController extends Controller
             'email.required' => self::MSG_EMAIL,
         ])->validate();
 
-        $email = (string) $request->input('email');
+        $user = User::where('email', (string) $request->input('email'))->first();
 
-        if (User::where('email', $email)->exists()) {
-            $token = $this->makeResetToken();
-
-            DB::statement(
-                'INSERT INTO password_reset_tokens (email, token, created_at)
-                   VALUES (?, ?, NOW())
-                 ON DUPLICATE KEY UPDATE token = VALUES(token), created_at = NOW()',
-                [$email, Hash::make($token)],
-            );
-
-            // TODO: deliver the reset by mail. Until then the token goes nowhere: it is never
-            // written to a log, because whoever can read the log could take over the account.
+        if ($user !== null) {
+            PasswordReset::issue($user);
         }
 
-        return response()->json([
+        return new LengthDelimitedJsonResponse([
             'status' => 'sent',
-            'message' => 'Falls ein Konto existiert, ist eine E-Mail zum Zuruecksetzen unterwegs.',
+            'message' => self::MSG_SENT,
         ]);
     }
 
     /**
-     * POST /api/reset-password
+     * POST /api/reset-password {email, code, password, password_confirmation?}
      *
-     * Setzt mit gueltigem Token ein neues Passwort und verbraucht den Token
-     * (Einmal-Nutzung).
+     * Sets a new password with the right code and uses the code up (single use); every session of
+     * the account ends. A request with the former link `token` and no `code` fails on `code`.
      */
     public function reset(Request $request): JsonResponse
     {
         Validator::make($request->all(), [
-            'token' => ['required'],
             'email' => ['bail', 'required', new ValidEmail],
+            'code' => ['bail', 'required', $this->codeRule()],
             'password' => ['bail', 'required', $this->passwordRule($request), $this->confirmationRule($request)],
         ], [
-            'token.required' => 'Der Token fehlt.',
             'email.required' => self::MSG_EMAIL,
+            'code.required' => self::MSG_CODE_SHAPE,
             'password.required' => 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.',
         ])->validate();
 
-        $email = (string) $request->input('email');
+        $user = User::where('email', (string) $request->input('email'))->first();
+        $code = (string) TwoFactor::normalizeOtp((string) $request->input('code'));
 
-        $row = DB::selectOne(
-            'SELECT email, token, created_at FROM password_reset_tokens WHERE email = ?',
-            [$email],
-        );
-
-        // Passwords::check statt Hash::check: Auch die Reset-Tokens des vorigen
-        // Backends sind mit bcryptjs gehasht und tragen dessen Praefix.
-        if ($row === null || ! Passwords::check((string) $request->input('token'), $row->token)) {
-            throw $this->invalidLink();
-        }
-
-        $ageSeconds = now()->diffInSeconds(\Carbon\CarbonImmutable::parse($row->created_at), absolute: true);
-
-        if ($ageSeconds > self::EXPIRE_MINUTES * 60) {
-            DB::delete('DELETE FROM password_reset_tokens WHERE email = ?', [$email]);
-
-            throw $this->invalidLink();
-        }
+        $result = $user === null
+            ? PasswordReset::INVALID
+            : PasswordReset::reset($user, $code, (string) $request->input('password'));
 
         /**
-         * Benutzername im Passwort? Erst JETZT, mit gueltigem Token.
+         * The username in the password is checked only NOW, with a valid code
+         * (PasswordReset::reset checks it after the code matched, and the code stays valid).
          *
          * In der Validierung oben waere die Meldung ein Orakel: Wer zu einer
          * fremden Adresse Passwoerter durchprobiert, erfuehre aus „darf deinen
@@ -121,64 +111,30 @@ class PasswordController extends Controller
          * forgot() verhindern. Grundregel, Liste und E-Mail-Teil haengen an
          * nichts Geheimem und stehen deshalb schon oben.
          */
-        $username = User::where('email', $email)->value('username');
-        if (PasswordPolicy::problem((string) $request->input('password'), is_string($username) ? $username : null) !== null) {
-            throw ValidationException::withMessages(['password' => [PasswordPolicy::MSG_PERSONAL]]);
-        }
-
-        /**
-         * Neues Passwort setzen und die Reset-Zeile verbrauchen.
-         *
-         * Every access token of the account is revoked (F-20): whoever resets a password may be
-         * locking someone out who knew the old one, and that someone must not stay signed in.
-         * App\Support\Sessions::revokeAll is the hook PR 3's reset by code reuses.
-         */
-        $user = User::where('email', $email)->first();
-        if ($user === null) {
-            throw $this->invalidLink();
-        }
-
-        $user->forceFill([
-            'password' => Hash::make((string) $request->input('password')),
-            'remember_token' => null,
-            'updated_at' => now(),
-        ])->save();
-
-        Sessions::revokeAll($user);
-
-        DB::delete('DELETE FROM password_reset_tokens WHERE email = ?', [$email]);
-
-        return response()->json([
-            'status' => 'reset',
-            'message' => 'Dein Passwort wurde zurueckgesetzt.',
-        ]);
+        return match ($result) {
+            PasswordReset::OK => response()->json([
+                'status' => 'reset',
+                'message' => 'Dein Passwort wurde zurueckgesetzt.',
+            ]),
+            PasswordReset::PERSONAL => throw ValidationException::withMessages(['password' => [PasswordPolicy::MSG_PERSONAL]]),
+            default => throw ValidationException::withMessages(['code' => [self::MSG_CODE_INVALID]]),
+        };
     }
 
-    /**
-     * Gleiche neutrale Meldung fuer „Token falsch" UND „Token abgelaufen".
-     *
-     * Der Unterschied waere eine Auskunft, die nur jemandem hilft, der fremde
-     * Tokens durchprobiert.
-     */
-    private function invalidLink(): ValidationException
+    /** Six digits, spaces allowed ("123 456"); checked before anything is looked up. */
+    private function codeRule(): Closure
     {
-        return ValidationException::withMessages([
-            'email' => ['Dieser Link zum Zuruecksetzen ist ungueltig.'],
-        ]);
-    }
-
-    /** Zufaelliger 64-Zeichen-Token (Klartext an die Nutzer:in, gehasht in die DB). */
-    private function makeResetToken(): string
-    {
-        $raw = rtrim(strtr(base64_encode(random_bytes(48)), '+/', '-_'), '=');
-
-        return substr($raw, 0, 64);
+        return static function (string $attribute, mixed $value, Closure $fail): void {
+            if (! is_string($value) || strlen($value) > 20 || TwoFactor::normalizeOtp($value) === null) {
+                $fail(self::MSG_CODE_SHAPE);
+            }
+        };
     }
 
     /**
      * Dieselbe Regel wie bei der Registrierung (App\Support\PasswordPolicy) -
-     * hier zunaechst nur mit dem E-Mail-Teil; der Benutzername kommt erst nach
-     * der Token-Pruefung dazu (Begruendung in reset()).
+     * hier zunaechst nur mit dem E-Mail-Teil; the username is added only after the code check
+     * (reason in reset()).
      */
     private function passwordRule(Request $request): Closure
     {

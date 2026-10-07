@@ -98,7 +98,7 @@ jobs:
   server:
     name: Server tests (MySQL 8.4)
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       mysql:
         # Same tag as deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs). Dependabot does
@@ -125,7 +125,8 @@ jobs:
       DB_USERNAME: goenn
       # Must equal MYSQL_PASSWORD above; a mismatch fails loudly (access denied).
       DB_PASSWORD: ci-only-not-a-secret-db
-      # No key: AI moderation stays off and nothing contacts Anthropic.
+      # No key, and server/test/test.env switches AI moderation off for the suites (loaded by
+      # `npm test`); test/moderation.test.js uses a local stand-in. Nothing contacts the provider.
       ANTHROPIC_API_KEY: ''
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,7 +156,7 @@ jobs:
         if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.schema.outcome == 'success' }}
         # A test file that leaks a handle never exits; this limit turns that into a red run
         # (the report below then says the run was cut off).
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           DB_PORT: ${{ job.services.mysql.ports['3306'] }}
           NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/server.tap

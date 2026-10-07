@@ -104,6 +104,31 @@ routes (generate it once with `openssl rand -hex 32`), and `APP_NET_PREFIX`, the
 private /24 network (see the comment in `.env.example`). Without them `docker compose` refuses
 to start.
 
+Also required: `ANTHROPIC_API_KEY`, the key of the AI moderation that checks every new event,
+post, comment, profile image and story before it is stored. Node does not start without it, and
+in production it also refuses `MODERATION_ENABLED=false`. The operator decides whose provider
+account and key this is.
+
+Also required: `MODERATION_DAILY_CALL_LIMIT`, the most AI moderation calls per UTC day across all
+accounts, a whole number of at least 1. Each check of a new event, post, comment, profile image
+or story is one call; once the day's limit is used up, node refuses them until the next UTC day,
+whatever `MODERATION_FAIL_OPEN` says. How much is spent on the provider is the operator's
+decision, so there is no default, and node does not start without it.
+
+And four retention settings, each a number of whole days. How long data that is no longer needed
+is kept is the operator's decision, so there are no defaults; node deletes what is older every
+hour (more in the comments in `.env.example`):
+
+- `EVIDENCE_RETENTION_DAYS`: evidence images of bans and of AI moderation reports (the image
+  goes, the record stays); at least 1.
+- `MODERATION_REPORT_RETENTION_DAYS`: the AI moderation log, which copies every checked text and
+  image; at least 1.
+- `TOKEN_RETENTION_DAYS`: sign-in tokens and two-factor and password-reset codes that are no
+  longer valid, counted from when they stopped being valid; at least 1.
+- `USAGE_RETENTION_DAYS`: event views and active days; at least 120 (the streak window).
+
+Without these six settings, too, `docker compose` refuses to start.
+
 Passwörter erzeugen:
 
 ```bash
@@ -121,8 +146,9 @@ echo "base64:$(openssl rand -base64 32)"
 > niemand mit eingeschalteter 2FA mehr in sein Konto. Heb ihn zusätzlich
 > außerhalb des Servers auf (z. B. im Passwort-Manager).
 
-Für 2FA-Codes per E-Mail außerdem `MAIL_HOST`, `MAIL_USERNAME` und
-`MAIL_PASSWORD` eintragen. Ohne sie läuft alles, nur E-Mail-Codes kommen nicht an.
+Für 2FA-Codes per E-Mail und die Codes von „Passwort vergessen" außerdem
+`MAIL_HOST`, `MAIL_USERNAME` und `MAIL_PASSWORD` eintragen. Ohne sie läuft alles,
+nur E-Mail-Codes kommen nicht an – auch niemand kann dann sein Passwort zurücksetzen.
 
 ## Schritt 5 – Starten
 
@@ -205,7 +231,11 @@ git pull && docker compose up -d --build
 
 Docker baut nur neu, was sich geändert hat, und tauscht die Container aus. Die
 Datenbank und die Uploads bleiben dabei erhalten (sie liegen in `db-data` bzw.
-`deploy/storage/`).
+`deploy/storage/` und `deploy/storage-private/`).
+
+Coming from a version without the AI moderation key, its daily call limit and the retention
+settings: add `ANTHROPIC_API_KEY`, `MODERATION_DAILY_CALL_LIMIT` and the four `*_RETENTION_DAYS`
+settings to `deploy/.env` first (step 4), or the new version does not start.
 
 **Logs mitlesen:**
 
@@ -221,6 +251,12 @@ docker compose exec db sh -c 'mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" goennter
 
 Die Nutzer-Uploads liegen in `deploy/storage/` und gehören ins selbe Backup. Am
 besten als täglicher Cronjob plus Hetzner-Snapshot (~1 €/Monat).
+
+Ban evidence, the AI moderation's evidence and story images lie in `deploy/storage-private/`
+(F-11): only the node service mounts it, and Node serves those files only to who may see them.
+It belongs in the backup too, and it must never be mounted into a web server. Files an older
+version left in `deploy/storage/evidence` or `deploy/storage/stories` are moved there when node
+starts.
 
 **Firewall:** Nur 22 (SSH), 80 und 443 müssen offen sein. MySQL, Laravel und
 Node haben absichtlich **keine** Ports nach außen – erreichbar ist nur Caddy.

@@ -61,8 +61,11 @@ const FILES = {
     'export const INTERNAL_SECRET_MIN_LENGTH = 32;',
     'export const DEFAULT_TOKEN_LIFETIME_MINUTES = 43200;',
     'export const TOKEN_LIFETIME_PATTERN = /^[1-9]\\d{0,6}$/;',
+    'export const USAGE_RETENTION_MIN_DAYS = 120;',
     '',
   ].join('\n'),
+  'server/src/streak.js': "import { pool } from './db.js';\nexport const ACTIVE_DAYS_WINDOW = 120;\n",
+  'api/app/Support/Streak.php': '<?php\nfinal class Streak\n{\n    public const ACTIVE_DAYS_WINDOW = 120;\n}\n',
   'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 32;\n}\n',
   'api/docker/entrypoint.sh': 'if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then\n  exit 1\nfi\n',
   'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n# SANCTUM_EXPIRATION=43200\n',
@@ -73,6 +76,11 @@ const FILES = {
   'api/app/Providers/AppServiceProvider.php': "<?php\n        fn () => response()->json(['message' => 'Zu viele Versuche – bitte warte kurz.'], 429);\n",
   'src/app/create-activity.tsx': "import x from 'y';\nconst MAX_INTERESTS = 5;\n",
   'server/src/routes/activities.js': '/** Interests. */\nconst MAX_INTERESTS = 5;\n',
+  'server/src/activity-pages.js': 'export const PAST_AFTER_HOURS = 3;\nexport const PAGE_SIZE_DEFAULT = 50;\nexport const PAGE_SIZE_MAX = 100;\n',
+  'src/domain/urgency.ts': 'const HOUR = 60 * MINUTE;\nexport const SOON_MS = 3 * HOUR;\nexport const LIVE_MS = 3 * HOUR;\n',
+  'src/app/(app)/index.tsx': '  const feed = useMemo(() => {\n    const cutoff = now.getTime() - 3 * 60 * 60 * 1000;\n',
+  'src/app/search.tsx': '/** Vergangenes nicht. */\nconst PAST_CUTOFF_MS = 3 * 60 * 60 * 1000;\n',
+  'src/domain/activity-pages.ts': 'export const ACTIVITY_PAGE_SIZE = 100;\nexport const MAX_ACTIVITY_PAGES = 1000;\n',
   'server/src/app.js': [
     "export const JSON_LIMIT = '32kb';",
     "export const WEBHOOK_JSON_LIMIT = '128kb';",
@@ -116,9 +124,9 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 16);
-    assert.equal(r.places, 37);
-    assert.equal(r.occurrences, 38, 'two mysql services in ci.yml count separately');
+    assert.equal(r.values, 19);
+    assert.equal(r.places, 46);
+    assert.equal(r.occurrences, 47, 'two mysql services in ci.yml count separately');
   });
 });
 
@@ -224,6 +232,51 @@ test('detects an interests-per-event maximum that differs between the app and th
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
     assert.match(r.problems[0], /^Interests per event differs: 5 \(src\/app\/create-activity\.tsx MAX_INTERESTS\), 6 /);
+  });
+});
+
+test('detects an event-over time that differs between the server and the app', () => {
+  const cases = [
+    ['server/src/activity-pages.js', FILES['server/src/activity-pages.js'].replace('PAST_AFTER_HOURS = 3', 'PAST_AFTER_HOURS = 2'), /^Event over after \(hours\) differs: 2 \(server\/src\/activity-pages\.js PAST_AFTER_HOURS\), 3 /],
+    ['src/domain/urgency.ts', FILES['src/domain/urgency.ts'].replace('LIVE_MS = 3 * HOUR', 'LIVE_MS = 4 * HOUR'), /4 \(src\/domain\/urgency\.ts LIVE_MS\)/],
+    ['src/app/(app)/index.tsx', FILES['src/app/(app)/index.tsx'].replace('- 3 * 60', '- 6 * 60'), /6 \(src\/app\/\(app\)\/index\.tsx the feed cutoff\)/],
+    ['src/app/search.tsx', FILES['src/app/search.tsx'].replace('= 3 * 60', '= 1 * 60'), /1 \(src\/app\/search\.tsx PAST_CUTOFF_MS\)/],
+  ];
+  for (const [file, text, message] of cases) {
+    withTree({ [file]: text }, (root) => {
+      const r = checkMirrors(root);
+      assert.equal(r.problems.length, 1, file);
+      assert.match(r.problems[0], message);
+    });
+  }
+  // Written in milliseconds instead of hours: not found, never a pass.
+  withTree({ 'src/domain/urgency.ts': 'export const LIVE_MS = 10800000;\n' }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, ['Event over after (hours): cannot find LIVE_MS in src/domain/urgency.ts']);
+  });
+});
+
+test('detects an event-list page size the app asks for that is not the server maximum', () => {
+  withTree({ 'src/domain/activity-pages.ts': 'export const ACTIVITY_PAGE_SIZE = 50;\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Event list page size differs: 100 \(server\/src\/activity-pages\.js PAGE_SIZE_MAX\), 50 /);
+  });
+});
+
+test('detects a smallest usage retention that is not the streak window of both backends', () => {
+  const config = FILES['server/src/config.js'].replace('USAGE_RETENTION_MIN_DAYS = 120', 'USAGE_RETENTION_MIN_DAYS = 90');
+  withTree({ 'server/src/config.js': config }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(
+      r.problems[0],
+      /^Streak window \(days\) differs: 120 \(server\/src\/streak\.js ACTIVE_DAYS_WINDOW\), 120 \(api\/app\/Support\/Streak\.php ACTIVE_DAYS_WINDOW\), 90 /,
+    );
+  });
+  withTree({ 'api/app/Support/Streak.php': '<?php\nfinal class Streak\n{\n    public const ACTIVE_DAYS_WINDOW = 90;\n}\n' }, (root) => {
+    const r = checkMirrors(root);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0], /^Streak window \(days\) differs: /);
   });
 });
 

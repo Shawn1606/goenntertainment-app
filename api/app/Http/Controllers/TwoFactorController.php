@@ -62,10 +62,16 @@ class TwoFactorController extends Controller
         }
 
         $code = (string) $request->input('code');
+        $token = null;
 
         $result = TwoFactor::attempt(
             $challenge,
             fn (TwoFactorChallenge $locked) => TwoFactor::challengeCodeMatches($locked, $user, $code, true),
+            // The token in the transaction that uses the challenge up (F-09, F-20): a password
+            // reset or another credential change cannot commit in between (TwoFactor::attempt).
+            function (User $account) use ($request, &$token): void {
+                $token = Sessions::issue($account, $request->input('device_name'));
+            },
         );
 
         match ($result) {
@@ -77,7 +83,7 @@ class TwoFactorController extends Controller
             default => throw ValidationException::withMessages(['challenge' => [TwoFactor::MSG_EXPIRED_LOGIN]]),
         };
 
-        return $this->tokenResponse($request, $user->refresh());
+        return $this->tokenPayload($request, $user->refresh(), (string) $token);
     }
 
     /** POST /api/login/two-factor/resend {challenge} - nur fuer die E-Mail-Methode. */
@@ -416,13 +422,12 @@ class TwoFactorController extends Controller
     }
 
     /**
-     * Dasselbe Format wie nach POST /login (AuthController::tokenResponse):
-     * `user` mit Kategorien, `token`, `profile_complete`.
+     * Dasselbe Format wie nach POST /login (AuthController::tokenPayload):
+     * `user` mit Kategorien, `token`, `profile_complete`. The token is already issued
+     * (verifyLogin, inside TwoFactor::attempt).
      */
-    private function tokenResponse(Request $request, User $user): JsonResponse
+    private function tokenPayload(Request $request, User $user, string $token): JsonResponse
     {
-        $token = Sessions::issue($user, $request->input('device_name'));
-
         return response()->json([
             'user' => $this->userPayload($request, $user),
             'token' => $token,

@@ -5,13 +5,13 @@
  * ein Test die App auf einem freien Port hochziehen, ohne einen zweiten Prozess
  * zu starten (siehe server/test/api.test.js).
  */
-import path from 'node:path';
 import express from 'express';
 import { HttpError } from './validate.js';
 import { clientErrorFor } from './client-errors.js';
 import { logError } from './log.js';
 import { createLimitStore, resolveWriteLimits } from './rate-limit.js';
 import { internalSecret as internalSecretSetting, trustProxySetting } from './config.js';
+import { isPrivateStoragePath, PUBLIC_ROOT, setStoredFileHeaders } from './storage.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
 import businessRouter from './routes/business.js';
@@ -118,7 +118,14 @@ export function createApp({
   app.use(express.urlencoded({ extended: false, limit: URLENCODED_LIMIT, parameterLimit: PARAMETER_LIMIT }));
 
   // Banner-Bilder oeffentlich ausliefern (wie Laravels /storage)
-  app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
+  // Only the public tree (storage.js). Evidence and story images are private: their folders are
+  // refused here in every spelling, even if an old file is still on disk (F-11).
+  app.use('/storage', (req, res, next) =>
+    isPrivateStoragePath(req.path) ? res.status(404).json({ message: 'Nicht gefunden.' }) : next(),
+  );
+  // nosniff and a restrictive CSP on every stored file (storage.js setStoredFileHeaders): the browser
+  // takes the type as sent, and a file opened on its own runs nothing (F-11).
+  app.use('/storage', express.static(PUBLIC_ROOT, { setHeaders: setStoredFileHeaders }));
 
   // Internal routes for Laravel and the container health check (GET /internal/health); never
   // forwarded from outside (Laravel forwards only /api paths). Unknown internal paths get the

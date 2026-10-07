@@ -15,7 +15,6 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
@@ -28,7 +27,11 @@ use RuntimeException;
  * `users.two_factor_method` ist der einzige Schalter (NULL | 'email' | 'totp').
  * Alles, was auf einen Code wartet, ist ein „Vorgang" in two_factor_challenges -
  * die Anmeldung nach dem Passwort ('login'), das Einschalten per E-Mail
- * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm').
+ * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm'). The password reset
+ * code ('reset') lives there too, with its own rules (App\Support\PasswordReset), and so do the
+ * codes that prove control of an address while signed in: the new address of an e-mail change
+ * ('new_email') and the account's own address before its first password ('first_pw';
+ * App\Support\AddressCode).
  *
  * Die App haelt fuer einen Vorgang nur einen zufaelligen Token in der Hand, in
  * der Tabelle steht sein sha256. Er ist das, was „Passwort war richtig" von
@@ -58,7 +61,7 @@ use RuntimeException;
  * Whoever knows the password can start a new challenge as often as the limiters allow, so the
  * per-challenge cap alone still adds up. Every wrong code also counts per ACCOUNT, across all
  * challenges and step-ups (sign-in, switching on and off, recovery codes, e-mail change, account
- * deletion): at the cap (config ratelimits.two-factor-failures, default 10 in 15 minutes) no
+ * deletion, and the codes of App\Support\AddressCode): at the cap (config ratelimits.two-factor-failures, default 10 in 15 minutes) no
  * code is checked, no sign-in challenge is started and no code is mailed until the window has
  * passed. The count lives in the cache store (the database in the deploy) and is not reset by a
  * right code. A known password can therefore lock the second factor for the window: that is
@@ -82,6 +85,24 @@ final class TwoFactor
 
     /** Freigabe an Node fuer DELETE /api/me - siehe server/src/routes/internal.js. */
     public const PURPOSE_DELETE = 'delete';
+
+    /**
+     * A password reset code (F-09), signed out: App\Support\PasswordReset. It has its own counting
+     * and never goes through attempt(), so wrong reset codes do not feed the account's cap below.
+     */
+    public const PURPOSE_RESET = 'reset';
+
+    /**
+     * A code mailed to the NEW address of an e-mail change (F-04), signed in: the address takes
+     * effect only with it (App\Support\AddressCode, AccountController::confirmEmail).
+     */
+    public const PURPOSE_NEW_EMAIL = 'new_email';
+
+    /**
+     * A code mailed to the account's own address before an account without a password sets its
+     * first one (App\Support\AddressCode, AccountController::updatePassword).
+     */
+    public const PURPOSE_FIRST_PASSWORD = 'first_pw';
 
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
     public const CODE_TTL = 600;
@@ -170,11 +191,17 @@ final class TwoFactor
      * Der Klartext verlaesst diese Methode genau einmal - in die Antwort an die
      * App. Danach kennt ihn der Server nicht mehr.
      *
+     * `$prune` false skips the clean-up of expired challenges, for a caller that runs this inside
+     * a transaction and prunes before it (PasswordReset::issue): the clean-up touches every
+     * account's rows and should not hold their locks for a whole transaction.
+     *
      * @return array{0: TwoFactorChallenge, 1: string}
      */
-    public static function createChallenge(User $user, string $purpose, ?string $method): array
+    public static function createChallenge(User $user, string $purpose, ?string $method, bool $prune = true): array
     {
-        self::pruneExpired();
+        if ($prune) {
+            self::pruneExpired();
+        }
 
         $token = self::newToken();
 
@@ -215,18 +242,34 @@ final class TwoFactor
      * Der fuenfte Fehlversuch liefert schon TOO_MANY (nicht erst der sechste):
      * Die App soll in dem Moment sagen koennen „neu anmelden", in dem es
      * stimmt - nicht einen Versuch spaeter.
+     *
+     * `$onSuccess` (the sign-in: it writes the token) runs in the same transaction, right after
+     * the challenge is deleted, with the account's row as its argument. That row is then locked
+     * first, before the challenge, in the order of every other lock on both (password reset,
+     * e-mail change). A credential change that revokes sessions thus either ends the challenge
+     * before this transaction, or waits for it and revokes the token written here
+     * (App\Support\Sessions, "Sign-ins under way"). Without it, a reset could commit between
+     * the deletion of the challenge and a token written afterwards, and the token survived it.
      */
-    public static function attempt(TwoFactorChallenge $challenge, Closure $verify): string
+    public static function attempt(TwoFactorChallenge $challenge, Closure $verify, ?Closure $onSuccess = null): string
     {
         // Cap, check and count as one step per account (see withAccountLock).
-        return self::withAccountLock($challenge->user_id, function () use ($challenge, $verify): string {
+        return self::withAccountLock($challenge->user_id, function () use ($challenge, $verify, $onSuccess): string {
             // The account's cap first: at the cap no code is even looked at.
             if (self::accountLocked($challenge->user_id)) {
                 return self::LOCKED;
             }
 
             $guessed = false;
-            $result = DB::transaction(function () use ($challenge, $verify, &$guessed) {
+            $result = DB::transaction(function () use ($challenge, $verify, $onSuccess, &$guessed) {
+                $account = null;
+                if ($onSuccess !== null) {
+                    $account = User::whereKey($challenge->user_id)->lockForUpdate()->first();
+                    if ($account === null) {
+                        return self::EXPIRED;
+                    }
+                }
+
                 $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
 
                 if ($locked === null) {
@@ -241,6 +284,9 @@ final class TwoFactor
 
                 if ($verify($locked) === true) {
                     $locked->delete();
+                    if ($onSuccess !== null) {
+                        $onSuccess($account);
+                    }
 
                     return self::OK;
                 }
@@ -386,14 +432,15 @@ final class TwoFactor
      * die zum erneuten Versuchen einlaedt - und `last_sent_at` blockiert ihn
      * nicht, denn es wurde ja nichts gesendet.
      *
-     * Der Code selbst taucht in KEINER Antwort auf, nur in der Mail.
+     * Der Code selbst taucht in KEINER Antwort auf, nur in der Mail - and never in a log: CodeMail
+     * refuses the log mailer, which then counts as a failed mail.
      */
     public static function sendCode(TwoFactorChallenge $challenge, User $user): void
     {
         $code = sprintf('%06d', random_int(0, 999999));
 
         try {
-            Mail::to($user->email)->send(new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
+            CodeMail::send((string) $user->email, new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
         } catch (\Throwable $e) {
             // The exception class only (F-38): a transport message can name the recipient.
             Log::error('[two-factor] Code-Mail nicht versendet', [
@@ -836,10 +883,23 @@ final class TwoFactor
         return hash('sha256', $token);
     }
 
-    /** Der Code haengt am Vorgang: Derselbe Code in einem anderen Vorgang ist ein anderer Hash. */
-    private static function hashCode(string $tokenHash, string $code): string
+    /**
+     * Der Code haengt am Vorgang: Derselbe Code in einem anderen Vorgang ist ein anderer Hash.
+     * Public for the password reset code (PasswordReset), which is stored the same way.
+     */
+    public static function hashCode(string $tokenHash, string $code): string
     {
         return hash_hmac('sha256', 'code|'.$tokenHash.'|'.$code, self::key());
+    }
+
+    /**
+     * A code that proves control of $address (App\Support\AddressCode): the HMAC covers the
+     * challenge AND the address the code was mailed to, so the code confirms that address and no
+     * other, and the address itself is not stored.
+     */
+    public static function hashAddressCode(string $tokenHash, string $code, string $address): string
+    {
+        return hash_hmac('sha256', 'address|'.$tokenHash.'|'.$code.'|'.$address, self::key());
     }
 
     private static function hashRecoveryCode(string $normalized): string

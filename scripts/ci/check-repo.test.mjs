@@ -18,11 +18,14 @@ import { fileURLToPath } from 'node:url';
 import {
   AUTOSTART_CLASSES,
   CHECKS,
+  DEPLOY_COMPOSE,
+  DEPLOY_RUNBOOK,
   LOG_MAILER_CLASSES,
   MUST_IGNORE,
   SECRET_CLASSES,
   checkAgentPermissions,
   checkAutostart,
+  checkDeploySettings,
   checkIgnoreRules,
   checkLogMailer,
   checkSecrets,
@@ -32,6 +35,8 @@ import {
   readTracked,
   repoContext,
   report,
+  requiredComposeSettings,
+  runbookSettingNames,
   scanAgentPermissions,
   scanLines,
   splitRules,
@@ -381,6 +386,59 @@ test('log-mailer classes fire on planted env, YAML, compose and PHP lines', () =
   ]);
 });
 
+/* --------------------------------------------------------------- deploy settings (runbook) */
+
+test('deploy runbook: every setting the production compose requires is named in deploy/README.md', () => {
+  const r = checkDeploySettings(ctx());
+  // The production compose requires more than the six settings it required before the content
+  // and privacy changes (the moderation key and four retention settings came with them).
+  assert.ok(r.examined > 6, `only ${r.examined} required settings found in ${DEPLOY_COMPOSE}`);
+  assert.deepEqual(listed(r.findings), []);
+});
+
+test('required compose settings: `:?` and `?` count, defaults, escapes and comment lines do not', () => {
+  const $ = '$';
+  const compose = [
+    'services:',
+    '  app:',
+    '    environment:',
+    `      A: ${$}{PLANTED_ONE:?set it}`,
+    `      B: ${$}{PLANTED_TWO?set it}`,
+    `      C: ${$}{PLANTED_DEFAULT:-x} ${$}{PLANTED_PLAIN} ${$}${$}{PLANTED_ESCAPED:?literal}`,
+    `      # D: ${$}{PLANTED_COMMENTED:?not interpolated}`,
+    `      E: "${$}{PLANTED_ONE:?again}/${$}{PLANTED_THREE:?x}"`,
+  ].join('\r\n');
+  assert.deepEqual(requiredComposeSettings(compose), [
+    { name: 'PLANTED_ONE', line: 4 },
+    { name: 'PLANTED_TWO', line: 5 },
+    { name: 'PLANTED_THREE', line: 8 },
+  ]);
+});
+
+test('runbook setting names: only names spelled out as code count', () => {
+  const names = runbookSettingNames('Set `PLANTED_ONE` and `PLANTED_TWO=1`; PLANTED_THREE in prose; `two words`.');
+  assert.deepEqual([...names].sort(), ['PLANTED_ONE', 'PLANTED_TWO']);
+});
+
+test('deploy-settings fires on a required setting the runbook leaves out, and refuses to judge nothing', () => {
+  const $ = '$';
+  const planted = (compose, runbook) => ({
+    files: [
+      { path: DEPLOY_COMPOSE, text: compose },
+      ...(runbook === null ? [] : [{ path: DEPLOY_RUNBOOK, text: runbook }]),
+    ],
+  });
+  const compose = `services:\n  app:\n    environment:\n      A: ${$}{PLANTED_ONE:?x}\n      B: ${$}{PLANTED_TWO:?x}\n`;
+
+  const r = checkDeploySettings(planted(compose, 'Step 4: set `PLANTED_ONE`.\n'));
+  assert.equal(r.examined, 2);
+  assert.deepEqual(listed(r.findings), [`deploy-setting-not-in-runbook\t${DEPLOY_COMPOSE}:5`]);
+
+  assert.deepEqual(listed(checkDeploySettings(planted(compose, 'Set `PLANTED_ONE` and `PLANTED_TWO`.')).findings), []);
+  assert.throws(() => checkDeploySettings(planted('services: {}\n', 'nothing')), /refusing to report a verdict/);
+  assert.throws(() => checkDeploySettings(planted(compose, null)), /deploy-settings: deploy\/README\.md is not a tracked text file/);
+});
+
 /* ------------------------------------------------------------ files the reader does not scan */
 
 /** Writes `{ relativePath: content }` into a new temporary directory; the caller removes it. */
@@ -455,22 +513,37 @@ test('main prints what it did not scan before the per-check reports, missing fil
     'assets/planted.png': binaryBytes(),
     'notes/plain.md': 'plain text\n',
     'notes/gone.md': 'removed from the working tree after staging\n',
+    // The deploy-settings check needs a compose with a required setting and a runbook.
+    [DEPLOY_COMPOSE]: `services:\n  app:\n    environment:\n      A: ${'$'}{PLANTED_SETTING:?x}\n`,
+    [DEPLOY_RUNBOOK]: 'Set `PLANTED_SETTING`.\n',
   });
   try {
     // core.longpaths: the temporary directory can be deep on Windows (git's object paths pass 260).
     const git = (...args) => execFileSync('git', ['-c', 'core.longpaths=true', '-C', dir, ...args], { stdio: 'pipe' });
     git('init', '-q');
     // -f: a global excludes file of the machine running the tests must not change what is tracked.
-    git('add', '-f', '--', '.claude/settings.json', 'scripts/planted.ps1', 'assets/planted.png', 'notes/plain.md', 'notes/gone.md');
+    git(
+      'add',
+      '-f',
+      '--',
+      '.claude/settings.json',
+      'scripts/planted.ps1',
+      'assets/planted.png',
+      'notes/plain.md',
+      'notes/gone.md',
+      DEPLOY_COMPOSE,
+      DEPLOY_RUNBOOK,
+    );
     fs.rmSync(path.join(dir, 'notes', 'gone.md'));
 
     const out = [];
     const code = main(dir, { log: (s) => out.push(s), error: (s) => out.push(`error: ${s}`) });
     const lines = out.join('\n').split('\n');
     assert.deepEqual(lines.slice(0, 2), [
-      'check-repo: tracked 5, text 3, not scanned: binary 1, missing 1',
+      'check-repo: tracked 7, text 5, not scanned: binary 1, missing 1',
       '  not-scanned-missing\tnotes/gone.md',
     ]);
+    assert.ok(lines.includes('deploy-settings\texamined 1\tfindings 0'), 'the deploy-settings check did not run');
     assert.match(lines[2], /^ignore-rules\texamined \d+\tfindings \d+$/);
     assert.ok(lines.includes('  autostart-scheduled-task\tscripts/planted.ps1:1'), 'the UTF-16 script was not scanned');
     assert.ok(lines.includes('  aws-access-key-id\tscripts/planted.ps1:2'), 'the UTF-16 script was not scanned');

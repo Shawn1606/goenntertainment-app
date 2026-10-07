@@ -18,6 +18,8 @@ import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { blockedTermMessageFor } from '../src/blocked-terms.js';
 import { createUser, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
+// Kleinstes gueltiges PNG (1×1) – fuer Storys, die ohne Bild gar nicht gehen.
+import { PNG_1X1 } from './support/images.js';
 
 process.env.FEATURE_ACCOUNT_TIERS = 'true';
 
@@ -55,12 +57,6 @@ async function assertBlocked(res, field, message) {
   assert.equal(body.message, message);
   assert.deepEqual(body.errors[field], [message]);
 }
-
-/** Kleinstes gueltiges PNG (1×1) – fuer Storys, die ohne Bild gar nicht gehen. */
-const PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-  'base64',
-);
 
 before(async () => {
   await ensureSchema();
@@ -173,7 +169,7 @@ test('Beitraege und Kommentare: Anlegen, Bearbeiten, Kommentieren', async () => 
 test('Storys: die Bildunterschrift wird geprueft, bevor das Bild gespeichert wird', async () => {
   const { token } = await registerUser('creator');
   const form = new FormData();
-  form.append('image', new Blob([PNG], { type: 'image/png' }), 'story.png');
+  form.append('image', new Blob([PNG_1X1], { type: 'image/png' }), 'story.png');
   form.append('caption', 'H E I L  H I T L E R');
   await assertBlocked(await sendForm('/api/stories', token, form), 'caption', MSG_TEXT);
 });

@@ -80,7 +80,8 @@ export default function SearchScreen() {
 
   const trimmed = query.trim();
 
-  // Die Aktivitäten einmal holen – gefiltert wird dann ohne Server.
+  // Die Aktivitäten einmal holen – gefiltert wird dann ohne Server. (The upcoming ones, every
+  // page: F-12.)
   useEffect(() => {
     if (!token) return;
     let alive = true;

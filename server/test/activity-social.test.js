@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
 import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { listedActivities } from './support/activity-list.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { createUser, deleteTestUsers } from './support/fixtures.js';
 
@@ -161,7 +162,7 @@ test('die Zahlen stehen auch in Liste, Merkliste und Beitritts-Antwort', async (
   await like(fan.token, activity.id);
   await addComment(host.token, activity.id, 'Wer bringt Getraenke mit?');
 
-  const list = (await (await get('/api/activities', fan.token)).json()).data;
+  const list = await listedActivities(base, fan.token);
   const inList = list.find((a) => a.id === activity.id);
   assert.ok(inList, 'Event steht in der Liste');
   assert.equal(inList.likes_count, 1);

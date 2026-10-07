@@ -1,7 +1,4 @@
 import { createRouter } from '../router.js';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import fs from 'node:fs';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEvidence } from '../auth.js';
 import { rateLimit } from '../rate-limit.js';
@@ -10,30 +7,36 @@ import { rejectBlockedTerms } from '../blocked-terms.js';
 import { MSG_RESERVED_USERNAME, isReservedUsernameInDatabase } from '../reserved-accounts.js';
 import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
 import { transformRequest } from './upgrades.js';
-import { mediaUrl, publicBase } from '../media.js';
+import { mediaUrl } from '../media.js';
 import { deleteUserAccount } from '../account-deletion.js';
 import { singleUpload } from '../uploads.js';
+import { ALLOWED_MIME, ImageRejected, processImageUpload } from '../images.js';
+import { sendPrivateFile, storeImage } from '../storage.js';
 
 const router = createRouter();
 
-// Beweis-Bilder (Screenshots) landen unter storage/evidence und werden wie die
-// Banner ueber /storage ausgeliefert.
-const EVIDENCE_DIR = path.join(process.cwd(), 'storage', 'evidence');
-const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 // Evidence image (5 MB, uploads.js) plus the fields `reason` and `minutes`, with some headroom.
 const uploadEvidence = singleUpload('evidence', { maxFields: 4 });
 
-/** Speichert ein hochgeladenes Beweis-Bild und gibt den relativen Pfad zurueck (oder null). */
-function saveEvidenceImage(file) {
+const MSG_EVIDENCE_TYPE = 'Der Beweis muss ein Bild sein (jpeg, png, webp).';
+
+/**
+ * Speichert ein hochgeladenes Beweis-Bild und gibt den relativen Pfad zurueck (oder null).
+ * Like every upload: only a real image, stored as a fresh encoding without metadata (F-11).
+ */
+async function saveEvidenceImage(file) {
   if (!file) return null;
   if (!ALLOWED_MIME.includes(file.mimetype)) {
-    throw new HttpError(422, 'Der Beweis muss ein Bild sein (jpeg, png, webp).');
+    throw new HttpError(422, MSG_EVIDENCE_TYPE);
   }
-  fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
-  const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[file.mimetype]}`;
-  fs.writeFileSync(path.join(EVIDENCE_DIR, name), file.buffer);
-  return `evidence/${name}`;
+  let image;
+  try {
+    image = await processImageUpload(file);
+  } catch (err) {
+    if (err instanceof ImageRejected) throw new HttpError(422, MSG_EVIDENCE_TYPE);
+    throw err;
+  }
+  return storeImage('evidence', image);
 }
 
 // Wie viele Tage der Verlaufs-Graph zurueckreicht.
@@ -240,7 +243,7 @@ router.post('/users/:id/ban', requireAuth, rateLimit('admin'), requireAdmin, upl
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);
-    const imagePath = saveEvidenceImage(req.file);
+    const imagePath = await saveEvidenceImage(req.file);
     await setBan(user.id, PERMANENT_BAN_UNTIL, reason);
     await recordBanEvidence({ userId: user.id, adminId: req.user.id, action: 'ban', reason, until: null, imagePath });
     res.json({ message: 'Nutzer gebannt.' });
@@ -260,7 +263,7 @@ router.post('/users/:id/timeout', requireAuth, rateLimit('admin'), requireAdmin,
       throw new HttpError(422, 'Ungueltige Timeout-Dauer (1 Minute bis 1 Jahr).');
     }
     const until = new Date(Date.now() + minutes * 60000).toISOString().slice(0, 19).replace('T', ' ');
-    const imagePath = saveEvidenceImage(req.file);
+    const imagePath = await saveEvidenceImage(req.file);
     await setBan(user.id, until, reason);
     await recordBanEvidence({ userId: user.id, adminId: req.user.id, action: 'timeout', reason, until, imagePath });
     res.json({ message: 'Timeout gesetzt.', banned_until: `${until.replace(' ', 'T')}Z` });
@@ -316,7 +319,8 @@ router.get('/evidence', requireAuth, requireAdmin, async (req, res, next) => {
       action: r.action,
       reason: r.reason,
       banned_until: toIso(r.banned_until),
-      image_url: r.image_path ? `${publicBase(req)}/storage/${r.image_path}` : null,
+      // Private (storage.js): served only to admins through GET /evidence-files/:file below.
+      image_url: mediaUrl(req, r.image_path),
       created_at: toIso(r.created_at),
       user: { id: r.user_id, name: r.user_name, username: r.user_username },
       admin_name: r.admin_name ?? null,
@@ -328,6 +332,17 @@ router.get('/evidence', requireAuth, requireAdmin, async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+/**
+ * GET /api/admin/evidence-files/:file  (nur Admin) – an evidence image (F-11).
+ *
+ * Ban and timeout evidence (an admin's screenshot or the image the AI moderation refused) lies in
+ * private storage (storage.js), never under the public /storage. Only admins get it, with their
+ * bearer token (the admin screens send it, src/domain/auth-image.ts), and no cache keeps it.
+ */
+router.get('/evidence-files/:file', requireAuth, requireAdmin, (req, res, next) => {
+  sendPrivateFile(res, next, 'evidence', String(req.params.file));
 });
 
 // GET /api/admin/moderation  (nur Admin) – Berichte der KI-Verifizierung.
@@ -377,7 +392,8 @@ router.get('/moderation', requireAuth, requireAdmin, async (req, res, next) => {
         title: r.title ?? null,
         body: r.body ?? null,
         interests: r.interests ?? null,
-        image_url: r.image_path ? `${publicBase(req)}/storage/${r.image_path}` : null,
+        // The AI's evidence image: private, like the admins' (GET /evidence-files/:file below).
+        image_url: mediaUrl(req, r.image_path),
         model: r.model ?? null,
         latency_ms: r.latency_ms ?? null,
         created_at: toIso(r.created_at),
@@ -418,7 +434,8 @@ router.get('/stories', requireAuth, requireAdmin, async (req, res, next) => {
       data: rows.map((r) => ({
         id: r.id,
         caption: r.caption ?? null,
-        image_url: r.image_path ? `${publicBase(req)}/storage/${r.image_path}` : null,
+        // Private (storage.js): GET /api/media/stories/:file shows it to admins while it runs.
+        image_url: mediaUrl(req, r.image_path),
         created_at: toIso(r.created_at),
         expires_at: toIso(r.expires_at),
         // Restzeit rechnet die Datenbank – die Zeitstempel tragen ein 'Z', sind

@@ -50,6 +50,7 @@ class NameInputTest extends AppFeatureTestCase
             'email' => $username.'@example.invalid',
             'password' => self::TEST_PASSWORD,
             'account_type' => 'standard',
+            ...self::consent(),
         ];
 
         return $asForm

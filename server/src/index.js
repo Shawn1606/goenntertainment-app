@@ -1,10 +1,13 @@
 import 'dotenv/config';
 import { ensureSchema } from './db.js';
 import { createApp } from './app.js';
-import { startupProblems } from './config.js';
+import { retentionConfig, startupProblems, tokenLifetimeMinutes } from './config.js';
 import { moderationStatus } from './moderation.js';
+import { runRetentionPrune } from './retention.js';
 import { backfillActiveDays } from './streak.js';
 import { pruneHistory } from './routes/activities.js';
+import { migrateLegacyPrivateFiles } from './storage.js';
+import { sweepExpiredStories } from './stories.js';
 import { logError, logInfo } from './log.js';
 
 // The one startup gate (config.js): names of missing or invalid settings, never their values.
@@ -18,8 +21,22 @@ if (problems.length > 0) {
   start();
 }
 
-function start() {
+async function start() {
+  // Evidence and story images an older version wrote into the public tree move to private
+  // storage before anything is served (F-11, storage.js). A failure is logged, not fatal: the
+  // public /storage route refuses those folders by path in any case.
+  try {
+    const moved = await migrateLegacyPrivateFiles();
+    if (moved > 0) logInfo(`Moved ${moved} private file(s) out of public storage`);
+  } catch (err) {
+    logError('Moving private files out of public storage failed', err);
+  }
+
   const app = createApp();
+  // Retention (F-16): the gate above checked the settings. Null = none set (only allowed outside
+  // production): then nothing is pruned.
+  const retention = retentionConfig(process.env);
+  const prune = retention ? { ...retention, tokenLifetimeMinutes: tokenLifetimeMinutes(process.env) } : null;
 
   const port = Number(process.env.PORT ?? 8000);
   // Auf '::' lauschen (Dual-Stack: IPv6 + IPv4). Wichtig unter Windows: `localhost`
@@ -34,6 +51,7 @@ function start() {
     try {
       await ensureSchema();
       await pruneHistory();
+      await sweepExpiredStories();
       // Konten, die es vor der Serie schon gab, bekommen ihre aktiven Tage
       // einmalig aus den vorhandenen Spuren nachgetragen – sonst startet jede:r
       // bei 0, obwohl die App seit Wochen benutzt wird.
@@ -42,8 +60,13 @@ function start() {
     } catch (err) {
       logError('Schema/Verlauf-Setup fehlgeschlagen', err);
     }
+    if (prune) await runRetentionPrune(prune);
+    else logInfo('Retention prune off: no retention settings (outside production only)');
     setInterval(() => {
       pruneHistory().catch((err) => logError('Verlauf-Aufraeumen fehlgeschlagen', err));
+      // Expired stories and their files (stories.js; never throws).
+      sweepExpiredStories();
+      if (prune) runRetentionPrune(prune);
     }, 60 * 60 * 1000).unref();
   });
 }
