@@ -8,8 +8,7 @@
  * einen Fingerabdruck des Inhalts (beides in normalize.js).
  */
 import { pool, first } from '../db.js';
-import { hashPassword } from '../auth.js';
-import { findSystemAccount } from '../system-accounts.js';
+import { findSystemAccount, systemAccountPasswordHash } from '../system-accounts.js';
 
 /**
  * Merkzettel: welches Event der Quelle wurde zu welcher Aktivitaet.
@@ -76,10 +75,9 @@ export async function ensureVenueHost(source) {
     return existingId;
   }
 
-  const password = await hashPassword(
-    // Kein festes Passwort im Quelltext: Das Konto soll nicht anmeldbar sein.
-    `${source.slug}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
-  );
+  // Kein festes Passwort im Quelltext: Das Konto soll nicht anmeldbar sein.
+  // The bcrypt hash of a secret from node:crypto that is never printed or kept (src/system-accounts.js).
+  const password = await systemAccountPasswordHash();
 
   const [result] = await pool.query(
     `INSERT INTO users (name, username, email, password, account_type, granted_account_type, created_at, updated_at)

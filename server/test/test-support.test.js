@@ -16,7 +16,9 @@ import { BLOCKED_TERMS, findBlockedTerm, termTokens } from '../src/blocked-terms
 import { SAFE_DIGITS, STAMP_LENGTH, testIdentity, uniqueStamp } from './support/fixtures.js';
 
 const TEST_DIR = new URL('./', import.meta.url);
-const SMOKE_WORKFLOW = new URL('../../.github/workflows/docker.yml', import.meta.url);
+/** The deploy tests: the stack test registers accounts through the running stack. */
+const DEPLOY_TEST_DIR = new URL('../../deploy/test/', import.meta.url);
+const STACK_TEST = new URL('stack.test.mjs', DEPLOY_TEST_DIR);
 
 /** The server test files and their text. */
 function testFiles() {
@@ -39,23 +41,18 @@ function usernamePrefixes() {
 }
 
 /**
- * The container smoke (.github/workflows/docker.yml) builds its own stamp in shell and registers
- * `<prefix>$STAMP`. Returns the digit class of its STAMP guard (a named mirror of SAFE_DIGITS),
- * the `tr` mapping in front of it, and every username prefix it puts before the stamp. A missing
- * line is null, so a test cannot pass on nothing.
+ * The deploy tests (deploy/test/*.mjs; the stack test registers accounts through the running
+ * stack): their text, and every username prefix they hand to testIdentity(). They take their
+ * stamps from these fixtures, so there is no second stamp rule to compare.
  */
-function smokeStamp() {
-  const text = fs.readFileSync(SMOKE_WORKFLOW, 'utf8');
-  const guard = text.match(/\[\[ "\$STAMP" =~ \^\[([0-9]+)\]\{[0-9]+\}\$ \]\]/);
-  const tr = text.match(/STAMP=\$\(date \+%s%N \| tr ([0-9]+) ([0-9]+) \|/);
-  return {
-    guardDigits: guard ? guard[1] : null,
-    tr: tr ? { from: tr[1], to: tr[2] } : null,
-    prefixes: [...text.matchAll(/\\"username\\":\\"([A-Za-z0-9]+)\$STAMP\\"/g)].map((m) => m[1]),
-  };
+function deployTests() {
+  const files = fs
+    .readdirSync(DEPLOY_TEST_DIR)
+    .filter((name) => name.endsWith('.mjs'))
+    .map((name) => ({ name, text: fs.readFileSync(new URL(name, DEPLOY_TEST_DIR), 'utf8') }));
+  const prefixes = files.flatMap(({ text }) => [...text.matchAll(/\btestIdentity\('([a-z0-9]+)'/g)].map((m) => m[1]));
+  return { files, prefixes };
 }
-
-const sortedDigits = (digits) => [...digits].sort().join('');
 
 /**
  * Usernames `<prefix><digits>` that could start a username built from a stamp over `digits` and
@@ -136,31 +133,32 @@ test('control: the same check finds blocked usernames when stamps may use every 
   assert.ok(blocked.some((b) => b.startsWith('zfadel2fa + ')), 'a leet completion after a test prefix');
 });
 
-test('container smoke: the STAMP guard in docker.yml allows exactly SAFE_DIGITS, and its tr mapping passes it', () => {
-  const { guardDigits, tr } = smokeStamp();
-  assert.ok(guardDigits, 'STAMP guard [[ "$STAMP" =~ ^[<digits>]{n}$ ]] not found in .github/workflows/docker.yml');
-  assert.equal(sortedDigits(guardDigits), sortedDigits(SAFE_DIGITS), 'docker.yml STAMP guard digits differ from SAFE_DIGITS');
-  assert.ok(tr, 'STAMP=$(date +%s%N | tr <from> <to> | ...) not found in .github/workflows/docker.yml');
-  // Every digit date can print must come out of tr inside the guard's class, or the smoke fails on
-  // its own stamp. GNU tr: the last mapping of a repeated character wins, a short <to> repeats its
-  // last digit.
-  const mapped = [...'0123456789'].map((d) => {
-    const i = tr.from.lastIndexOf(d);
-    return i === -1 ? d : (tr.to[i] ?? tr.to.at(-1));
-  });
-  assert.deepEqual(mapped.filter((d) => !guardDigits.includes(d)), [], 'tr leaves digits the guard rejects');
+test('stack test: takes its usernames and stamps from these fixtures, with no stamp rule of its own', () => {
+  const { files } = deployTests();
+  assert.ok(files.length > 0, 'no deploy test file found in deploy/test/');
+  const stack = fs.readFileSync(STACK_TEST, 'utf8');
+  assert.match(stack, /import \{[^}]*\btestIdentity\b[^}]*\} from '\.\.\/\.\.\/server\/test\/support\/fixtures\.js';/,
+    'deploy/test/stack.test.mjs must import testIdentity from server/test/support/fixtures.js');
+  // A stamp of its own (the clock, Math.random, a shell date) could form a blocked code again.
+  const sites = [];
+  for (const { name, text } of files) {
+    text.split(/\r?\n/).forEach((line, i) => {
+      if (/Date\.now\(\)\}|Math\.random\(\)|date \+%s/.test(line) && /user(name)?|stamp/i.test(line)) sites.push(`${name}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(sites, [], 'use testIdentity() or uniqueStamp() from test/support/fixtures.js');
 });
 
-test('container smoke: no stamp can make the word filter block the username it registers', () => {
-  const { guardDigits, prefixes } = smokeStamp();
-  assert.ok(guardDigits, 'STAMP guard not found in .github/workflows/docker.yml');
-  // The smoke also registers one username that is blocked by itself, to see the filter answer 422:
-  // that one is the filter probe, not an account, and is left out here.
-  const accounts = prefixes.filter((p) => findBlockedTerm(p, BLOCKED_TERMS, 'username') === null);
-  assert.ok(accounts.length > 0, `no account username prefix found in docker.yml (${prefixes.length} prefixes, all blocked)`);
-  const { blocked, checked, tails } = stampRisks(accounts, guardDigits);
+test('stack test: no stamp can make the word filter block a username it registers', () => {
+  const { prefixes } = deployTests();
+  // The stack test also registers one username that is blocked by itself, to see the filter answer
+  // 422; it is built from a term of the list, not with testIdentity(), and is not an account.
+  const accounts = [...new Set(prefixes)].filter((p) => findBlockedTerm(p, BLOCKED_TERMS, 'username') === null);
+  assert.ok(accounts.length > 0, `no account username prefix found in deploy/test/ (${prefixes.length} prefixes, all blocked)`);
+  assert.equal(accounts.length, new Set(prefixes).size, 'a testIdentity() prefix in deploy/test/ is blocked by itself');
+  const { blocked, checked, tails } = stampRisks(accounts, SAFE_DIGITS);
   assert.ok(checked > 0 && tails > 0, 'no candidate usernames were checked');
-  assert.deepEqual(blocked, [], `${blocked.length} of ${checked} candidate smoke usernames are blocked`);
+  assert.deepEqual(blocked, [], `${blocked.length} of ${checked} candidate stack test usernames are blocked`);
 });
 
 test('every numeric run in the blocked terms contains a digit that stamps never use', () => {

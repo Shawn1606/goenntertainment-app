@@ -13,6 +13,12 @@
 // Rules:
 // - it prints how many packages it examined and refuses to report clean on zero;
 // - every advisory must be in the allow-list section for that lock file, with a reason;
+// - an npm entry also records the dependents its reason assumes ("via": the packages through
+//   which npm reports the vulnerable package, its `effects`, plus "(direct)" when the project
+//   itself depends on it). When npm reports the advisory through a dependent the entry does not
+//   list, the audit fails, so a known advisory that reaches new code is looked at again; a listed
+//   dependent npm no longer reports fails too. composer reports no dependents, so its entries
+//   carry a reason only;
 // - an allow-list entry that no longer matches an advisory fails too (the list may only shrink);
 // - composer's own `config.audit.ignore` is refused: the allow-list is the only place to accept one.
 //
@@ -35,12 +41,22 @@ function addAdvisory(map, id, info) {
   const known = map.get(id);
   if (known) {
     if (!known.pkg.split(', ').includes(info.pkg)) known.pkg += `, ${info.pkg}`;
+    if (known.dependents && info.dependents) known.dependents = [...new Set([...known.dependents, ...info.dependents])].sort();
   } else {
     map.set(id, { ...info });
   }
 }
 
-/** Parses `npm audit --json` (report version 2). */
+/** Stands in "via" for the project's own manifest, when it depends on the vulnerable package. */
+const DIRECT = '(direct)';
+const ENTRY_KEYS = ['reason', 'via'];
+
+/**
+ * Parses `npm audit --json` (report version 2). Each advisory keeps its dependents: the packages
+ * npm names in `effects` of the vulnerable package (those that pull it in), plus "(direct)" when
+ * the project's own manifest depends on it. Not `nodes`: a new dependent whose range the locked
+ * version satisfies shares the same copy, so the node paths stay the same.
+ */
 export function parseNpmAudit(report) {
   if (!report || typeof report !== 'object') return { error: 'npm audit printed no JSON object' };
   if (report.error) {
@@ -51,12 +67,18 @@ export function parseNpmAudit(report) {
   if (!Number.isInteger(total)) return { error: 'npm audit JSON has no metadata.dependencies.total' };
   const advisories = new Map();
   for (const vuln of Object.values(report.vulnerabilities ?? {})) {
+    const dependents = [...new Set([...(vuln.effects ?? []), ...(vuln.isDirect ? [DIRECT] : [])])].sort();
     for (const via of vuln.via ?? []) {
       // A string entry only points at another vulnerable package (a transitive path);
       // the advisory itself is listed under that package.
       if (typeof via !== 'object' || via === null) continue;
       const id = ghsaFrom(via.url) ?? `npm-${via.source}`;
-      addAdvisory(advisories, id, { pkg: via.name ?? vuln.name, severity: via.severity ?? vuln.severity ?? '?', title: via.title ?? '' });
+      addAdvisory(advisories, id, {
+        pkg: via.name ?? vuln.name,
+        severity: via.severity ?? vuln.severity ?? '?',
+        title: via.title ?? '',
+        dependents,
+      });
     }
   }
   return { examined: total, advisories };
@@ -103,6 +125,44 @@ export function composerIgnoreProblem(composerJson) {
     : null;
 }
 
+/**
+ * An allow-list entry: a reason (a string), or `{ "reason": ..., "via": [...] }` where "via" lists
+ * the dependents the reason assumes. Returns { reason, via, unknown } (unknown: other keys).
+ */
+export function allowEntry(value) {
+  if (typeof value === 'string') return { reason: value, via: undefined, unknown: [] };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return { reason: undefined, via: undefined, unknown: [] };
+  return { reason: value.reason, via: value.via, unknown: Object.keys(value).filter((k) => !ENTRY_KEYS.includes(k)) };
+}
+
+/** Problems of one allow-listed advisory: its reason and, where the audit names them, its dependents. */
+function entryProblems(id, advisory, value) {
+  const problems = [];
+  const entry = allowEntry(value);
+  if (typeof entry.reason !== 'string' || entry.reason.trim() === '') problems.push(`allow-list entry ${id} has no reason`);
+  if (entry.unknown.length) problems.push(`allow-list entry ${id} has unknown keys (${entry.unknown.join(', ')}); only ${ENTRY_KEYS.join(' and ')}`);
+  const reported = advisory.dependents;
+  if (!Array.isArray(reported)) {
+    if (entry.via !== undefined) problems.push(`allow-list entry ${id}: this audit names no dependents, so "via" cannot be checked; remove it`);
+    return problems;
+  }
+  const listed = (reported.length ? reported : ['none']).join(', ');
+  if (entry.via === undefined) {
+    problems.push(`allow-list entry ${id} does not record the dependents its reason assumes; check the reason against them, then add "via" (npm reports: ${listed})`);
+  } else if (!Array.isArray(entry.via) || entry.via.some((d) => typeof d !== 'string' || d.trim() === '')) {
+    problems.push(`allow-list entry ${id}: "via" must be a list of package names (npm reports: ${listed})`);
+  } else {
+    const added = reported.filter((d) => !entry.via.includes(d));
+    const gone = entry.via.filter((d) => !reported.includes(d)).sort();
+    if (added.length) {
+      problems.push(`${id} ${advisory.pkg} (${advisory.severity}) is now also reached via ${added.join(', ')}, which allow-list entry ${id} does not list; `
+        + 'check whether its reason still holds, then add them to "via" or fix the advisory');
+    }
+    if (gone.length) problems.push(`allow-list entry ${id} lists via ${gone.join(', ')}, which npm no longer reports; remove them (the list may only shrink)`);
+  }
+  return problems;
+}
+
 /** Compares the advisories with the allow-list section. */
 export function evaluate({ examined, advisories, allow }) {
   const problems = [];
@@ -111,9 +171,7 @@ export function evaluate({ examined, advisories, allow }) {
   for (const [id, a] of [...advisories].sort(([x], [y]) => x.localeCompare(y))) {
     if (Object.hasOwn(allow, id)) {
       allowListed += 1;
-      if (typeof allow[id] !== 'string' || allow[id].trim() === '') {
-        problems.push(`allow-list entry ${id} has no reason`);
-      }
+      problems.push(...entryProblems(id, a, allow[id]));
     } else {
       problems.push(`${id} ${a.pkg} (${a.severity}): ${a.title}`);
     }

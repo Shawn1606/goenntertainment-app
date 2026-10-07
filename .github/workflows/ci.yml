@@ -101,9 +101,10 @@ jobs:
     timeout-minutes: 25
     services:
       mysql:
-        # Same tag as deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs). Dependabot does
-        # not update service images in workflow files; the tag follows the 8.4 LTS patches.
-        image: mysql:8.4
+        # The same tag and digest as deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs).
+        # Dependabot does not update service images in workflow files: when it moves the
+        # compose's pin, the mirror check fails until these three lines follow.
+        image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
         env:
           MYSQL_DATABASE: goenntertainment
           MYSQL_USER: goenn
@@ -174,8 +175,8 @@ jobs:
         working-directory: api
     services:
       mysql:
-        # Same tag as the server job and deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs).
-        image: mysql:8.4
+        # Same tag and digest as the server job and deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs).
+        image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
         env:
           MYSQL_DATABASE: goenntertainment
           MYSQL_USER: goenn
@@ -261,8 +262,8 @@ jobs:
     timeout-minutes: 15
     services:
       mysql:
-        # Same tag as the server job and deploy/docker-compose.yml.
-        image: mysql:8.4
+        # Same tag and digest as the server job and deploy/docker-compose.yml.
+        image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
         env:
           MYSQL_ROOT_PASSWORD: ci-only-not-a-secret-root
         ports:
@@ -375,10 +376,11 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Non-blocking while the advisories that exist at the base are worked off. The last pull
-    # request of this series removes this line; from then on every advisory is fixed or
-    # listed with its reason in .github/audit-allowlist.json.
-    continue-on-error: true
+    # Blocking: every advisory is fixed with a compatible update or listed with its reason in
+    # .github/audit-allowlist.json; scripts/ci/audit.mjs fails on any other advisory and on an
+    # entry that no longer matches one. The advisory databases change without a commit, so a
+    # new advisory can turn this job red on unchanged code: fix it, or list it with a reason.
+    # scripts/ci/audit-job.test.mjs keeps this job blocking and covering every lock file.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -12,8 +12,9 @@ vendor/
 node_modules/
 
 # public/storage ist lokal eine Verknüpfung auf server/storage – also auf ALLE
-# hochgeladenen Bilder. Die gehören nicht ins Abbild; im Container liegt dort das
-# Upload-Volume.
+# hochgeladenen Bilder. Die gehören nicht ins Abbild.
+# In the container nothing lies there: uploads are served by the edge, never by Apache, and the
+# image build stops if a public/storage arrives all the same (Dockerfile, runtime stage).
 public/storage
 
 # Laufzeit-Dateien vom PC: Logs (enthalten u. a. 2FA-Codes aus dem Mail-Log),

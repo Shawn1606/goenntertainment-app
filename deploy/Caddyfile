@@ -1,33 +1,93 @@
 # Caddy holt und erneuert das HTTPS-Zertifikat von Let's Encrypt vollautomatisch,
 # sobald die Domain auf diesen Server zeigt. Kein certbot, kein Cronjob.
+#
+# Security headers on every answer (F-30), also on Caddy's own errors (handle_errors below).
+# `-Server` makes the block apply when the answer is written, so it also overwrites what
+# Laravel or Node sent. `?Content-Security-Policy` only sets a default: the stricter policy of the
+# uploads below stays. HSTS without includeSubDomains/preload: that would bind every subdomain of
+# the domain, an operator decision (deploy/.env.example, DOMAIN).
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		?Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		Referrer-Policy "no-referrer"
+		Permissions-Policy "accelerometer=(), autoplay=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+		-Server
+		-X-Powered-By
+	}
+}
+
 {$DOMAIN} {
-	# Alles geht an Laravel (Container `api`). Laravel beantwortet, was es kann,
-	# und reicht den Rest an das Node-Backend weiter – genau wie am PC.
-	reverse_proxy api:80 {
-		# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
-		# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
-		header_up X-Forwarded-Proto {scheme}
-		# The client address: always the TCP peer Caddy sees, never a value the client sent
-		# (overwrite, not append). Laravel trusts this header from Caddy only (TRUSTED_PROXIES)
-		# and its rate limits count this address. Caddy's default does the same today; this
-		# line keeps it so whatever the default becomes.
-		header_up X-Forwarded-For {remote_host}
+	import security_headers
+
+	# Request body limits. Multipart (image uploads): etwas über dem 5-MB-Limit des
+	# Node-Backends und unter post_max_size von PHP (api/docker/php.ini). So lehnt das
+	# Backend zu große Bilder mit seiner eigenen, in der App lesbaren Fehlermeldung ab,
+	# statt dass Caddy die Verbindung vorher mit einem nackten 413 kappt.
+	# Every other body: the largest limit Laravel and Node apply to a body that is not an upload
+	# (the webhook's JSON, LimitRequestBody::WEBHOOK_JSON_LIMIT_KB); they keep their own, smaller
+	# limits per type (deploy/test/static.test.mjs compares the numbers).
+	@multipart header Content-Type multipart/form-data*
+	@not_multipart not header Content-Type multipart/form-data*
+	request_body @multipart {
+		max_size 9MB
+	}
+	request_body @not_multipart {
+		max_size 128KiB
 	}
 
-	# Etwas über dem 5-MB-Limit des Node-Backends und unter post_max_size von PHP
-	# (api/docker/php.ini). So lehnt das Backend zu große Bilder mit seiner eigenen,
-	# in der App lesbaren Fehlermeldung ab, statt dass Caddy die Verbindung vorher
-	# mit einem nackten 413 kappt.
-	request_body {
-		max_size 9MB
+	# Public uploads (F-29): plain files from the read-only `uploads` volume, never through PHP.
+	# Only the public folders and the names Node gives a stored image (server/src/storage.js:
+	# PUBLIC_FOLDERS, STORED_NAME); everything else under /storage is a 404 from Caddy, so no
+	# other file there is ever served or handed to Laravel. Evidence and story images live in the
+	# private-media volume, which no web server mounts; Node serves them through checked routes.
+	# The files themselves come from the `media` service (deploy/Caddyfile.media), not from this
+	# container: Caddy follows symbolic links, and this container holds the certificate and
+	# account keys (caddy-data), so it mounts no volume anyone else writes to.
+	@upload path_regexp upload ^/storage/(avatars|banners|posts|user-banners)/[0-9a-f]{40}\.(jpg|png|webp)$
+	handle @upload {
+		# The browser shows the image and runs nothing in it. Set when the answer is written, so
+		# this policy is the one sent, whatever the file server answers.
+		header >Content-Security-Policy "default-src 'none'; sandbox"
+		reverse_proxy media:8080
+	}
+	@storage path /storage /storage/*
+	handle @storage {
+		respond 404
+	}
+
+	handle {
+		# Everything else goes to Laravel (container `api`).
+		# Laravel beantwortet, was es kann, und reicht den Rest an das Node-Backend weiter –
+		# genau wie am PC.
+		reverse_proxy api:8080 {
+			# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
+			# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
+			header_up X-Forwarded-Proto {scheme}
+			# The client address: always the TCP peer Caddy sees, never a value the client sent
+			# (overwrite, not append). Laravel trusts this header from Caddy only (TRUSTED_PROXIES)
+			# and its rate limits count this address. Caddy's default does the same today; this
+			# line keeps it so whatever the default becomes.
+			header_up X-Forwarded-For {remote_host}
+		}
 	}
 
 	encode gzip
 
+	# Access log to the container log (docker compose logs caddy), rotated with every other
+	# container log by the compose's logging settings (LOG_MAX_SIZE, LOG_MAX_FILES). It holds the
+	# client address, method and full URI; Caddy leaves out the Authorization and Cookie headers.
 	log {
-		output file /data/access.log {
-			roll_size 10MB
-			roll_keep 5
-		}
+		output stdout
+		format json
+	}
+
+	# Caddy's own error answers (413, a missing upload, ...) get the same headers: error routes do
+	# not pass through the site's handlers above.
+	handle_errors {
+		import security_headers
+		respond "{err.status_code} {err.status_text}" {err.status_code}
 	}
 }

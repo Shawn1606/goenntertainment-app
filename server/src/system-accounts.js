@@ -15,7 +15,34 @@
  * account to its own name in another case (routes/admin.js). Any other account that the database
  * matches by the address or by the username is refused with SystemAccountConflict before anything
  * is written; the operator resolves the conflict by hand.
+ *
+ * Nobody signs in to these accounts. Their password is systemAccountPasswordHash() below.
  */
+import crypto from 'node:crypto';
+
+import { hashPassword } from './auth.js';
+
+/** Bytes of the secret behind a system account's password: 256 bits from node:crypto. */
+const SECRET_BYTES = 32;
+
+/**
+ * The password hash for a new system account: the bcrypt hash, at the cost every password gets
+ * (hashPassword in src/auth.js), of a fresh secret from node:crypto's random source. The secret is
+ * dropped right here: it is never returned, stored in plain, printed or logged, so nobody knows a
+ * password that matches the hash. A general-purpose generator would not do: what it produces can
+ * be worked out from its earlier output.
+ *
+ * A real bcrypt hash, not a marker: Laravel's sign-in answers a stored value that is not a bcrypt
+ * hash with a server error instead of a refusal (api/app/Support/Passwords.php), and an empty one
+ * marks a password-less account, which may set a first password without knowing a current one
+ * (AccountController::updatePassword). base64url keeps the secret at 43 characters, below bcrypt's
+ * 72-byte input limit, so every one of its bits counts.
+ *
+ * @returns {Promise<string>}
+ */
+export function systemAccountPasswordHash() {
+  return hashPassword(crypto.randomBytes(SECRET_BYTES).toString('base64url'));
+}
 
 /** An account matches a system account's address or username but is not that account. */
 export class SystemAccountConflict extends Error {

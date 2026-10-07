@@ -44,6 +44,8 @@ deploy/storage-private/
 *.sql
 *.sql.gz
 !/server/schema.sql
+# Source too: the db service's first-start event that rotates the binary log.
+!/deploy/mysql/02-binlog-rotate.sql
 *.log
 /logs/
 
