@@ -44,7 +44,43 @@ class ClubTest extends TestCase
         $this->assertSame(array_column($fixtures, 'credits'), Club::packs());
         foreach ($fixtures as $p) {
             $this->assertSame($p['priceCents'], Club::packPriceCents($p['credits']));
+            $this->assertSame($p['bonus'], Club::packBonus($p['credits']));
+            $this->assertSame($p['totalCredits'], Club::packTotalCredits($p['credits']));
+            $this->assertSame($p['firstPurchaseBonus'], Club::firstPurchaseBonus($p['credits']));
         }
+    }
+
+    public function test_stempelkarte_je_stufe_und_goldene_karte(): void
+    {
+        foreach (self::fixtures()['stampRewards'] as $c) {
+            $this->assertSame($c['expect'], Club::stampReward($c['plan'], $c['card']), "{$c['plan']}, Karte {$c['card']}");
+        }
+        $this->assertTrue(Club::isGoldenCard(5));
+        $this->assertFalse(Club::isGoldenCard(4));
+    }
+
+    public function test_monats_credits_und_gueltigkeit_je_stufe(): void
+    {
+        foreach (Club::rules()['plans'] as $plan) {
+            $exact = $plan['priceCents'] * 0.125 / (Club::rules()['credits']['centsPerTenCredits'] / 10);
+            $this->assertSame((int) round($exact), $plan['monthlyCredits'], $plan['key']);
+        }
+        $this->assertSame('365 Tage', Club::creditValidityLabel('free'));
+        $this->assertSame('18 Monate', Club::creditValidityLabel('gold'));
+        $this->assertSame('30 Monate', Club::creditValidityLabel('platinum'));
+    }
+
+    public function test_gruppenrabatt_je_stufe(): void
+    {
+        foreach (self::fixtures()['groupPercents'] as $c) {
+            $this->assertEquals($c['expect'], Club::groupPercent($c['plan'], $c['people']), "{$c['plan']}, {$c['people']} Personen");
+        }
+        $this->assertEquals(10, Club::groupPercent('free', 1000));
+        $this->assertEquals(10, Club::groupPercent('gold', 1000));
+        $this->assertEquals(10, Club::groupPercent('platinum', 1000));
+        // Club + Gruppe zusammen hoechstens 20 %.
+        $this->assertEquals(20, Club::discount('platinum', 1000)['percent']);
+        $this->assertFalse(Club::discount('platinum', 1000)['capped']);
     }
 
     public function test_stempelkarte(): void

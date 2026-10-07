@@ -20,7 +20,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 #[Fillable([
     'slug', 'name', 'tagline', 'description', 'interest_id', 'address', 'city', 'lat', 'lng',
-    'phone', 'website', 'instagram', 'opening_hours', 'max_discount_percent', 'is_active', 'is_featured',
+    'phone', 'website', 'instagram', 'opening_hours', 'max_discount_percent', 'is_active', 'is_featured', 'wheelchair_accessible', 'kid_friendly', 'quiet_times',
 ])]
 #[Hidden(['checkin_token'])]
 class Partner extends Model
@@ -35,6 +35,8 @@ class Partner extends Model
             'is_active' => 'boolean',
             'is_featured' => 'boolean',
             'max_discount_percent' => 'integer',
+            'wheelchair_accessible' => 'boolean',
+            'kid_friendly' => 'boolean',
         ];
     }
 

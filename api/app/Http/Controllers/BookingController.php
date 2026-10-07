@@ -7,9 +7,15 @@ use App\Models\Booking;
 use App\Models\Group;
 use App\Models\Offer;
 use App\Models\Partner;
+use App\Support\BookingCalendar;
 use App\Support\Bookings;
+use App\Support\TestPhase\TestPhase;
+use App\Support\Wallet;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -120,6 +126,78 @@ class BookingController extends Controller
         $booking->load(self::RELATIONS);
 
         return response()->json(['data' => new BookingResource($booking)]);
+    }
+
+    /** Testphase: So viele Credits bringt eine Rueckmeldung an den Partner. */
+    public const FEEDBACK_REWARD = 10;
+
+    /**
+     * GET /api/bookings/{id}/calendar.ics?sig=… - ohne Token, signiert
+     * (App\Support\BookingCalendar). Der Kalender des Handys oeffnet ihn selbst.
+     */
+    public function calendar(Request $request, int $id): Response
+    {
+        abort_unless(BookingCalendar::verify($id, (string) $request->query('sig', '')), 404);
+        $booking = Booking::with('partner')->find($id);
+        abort_if($booking === null, 404);
+
+        return response(BookingCalendar::ics($booking), 200, [
+            'Content-Type' => 'text/calendar; charset=utf-8',
+            'Content-Disposition' => 'inline; filename="goe4fun-buchung-'.$id.'.ics"',
+            'Cache-Control' => 'private, max-age=0',
+        ]);
+    }
+
+    /** GET /api/offers/{offer}/availability?date=Y-m-d - freie Plaetze an einem Tag (Kontingent). */
+    public function availability(Request $request, Offer $offer): JsonResponse
+    {
+        $data = $request->validate(['date' => ['required', 'date_format:Y-m-d']], ['date.*' => 'Welcher Tag?']);
+
+        return response()->json(['data' => Bookings::availability($offer, $request->user(), $data['date'])]);
+    }
+
+    /**
+     * POST /api/bookings/{id}/feedback {rating, comment?} - Testphase: private
+     * Rueckmeldung an den Partner nach dem Einloesen, einmal je Buchung.
+     */
+    public function feedback(Request $request, int $id): JsonResponse
+    {
+        abort_unless(TestPhase::enabledFor($request->user()), 403, 'Rückmeldungen gibt es gerade nur in der Testphase.');
+
+        $data = $request->validate([
+            'rating' => ['required', 'integer', 'between:1,5'],
+            'comment' => ['nullable', 'string', 'max:500'],
+        ], ['rating.*' => 'Gib 1 bis 5 Sterne.', 'comment.max' => 'Höchstens 500 Zeichen.']);
+
+        $booking = $this->own($request, $id);
+        if ($booking->status !== 'redeemed') {
+            throw ValidationException::withMessages(['booking' => ['Eine Rückmeldung geht, sobald du die Buchung eingelöst hast.']]);
+        }
+
+        $user = $request->user();
+        DB::transaction(function () use ($booking, $user, $data) {
+            try {
+                DB::transaction(fn () => DB::table('booking_feedback')->insert([
+                    'booking_id' => $booking->getKey(),
+                    'user_id' => $user->getKey(),
+                    'partner_id' => $booking->partner_id,
+                    'rating' => (int) $data['rating'],
+                    'comment' => isset($data['comment']) ? trim($data['comment']) ?: null : null,
+                    'created_at' => now(),
+                ]));
+            } catch (UniqueConstraintViolationException) {
+                throw ValidationException::withMessages(['booking' => ['Für diese Buchung hast du schon eine Rückmeldung gegeben.']]);
+            }
+            Wallet::credit($user, self::FEEDBACK_REWARD, 'feedback', "Rückmeldung an {$booking->partner_name}");
+        });
+
+        $booking->load(self::RELATIONS);
+
+        return response()->json([
+            'data' => new BookingResource($booking),
+            'credits' => self::FEEDBACK_REWARD,
+            'credits_balance' => (int) $user->fresh()->credits_balance,
+        ]);
     }
 
     private function own(Request $request, int $id): Booking

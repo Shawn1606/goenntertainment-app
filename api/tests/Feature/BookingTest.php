@@ -31,18 +31,18 @@ class BookingTest extends MarketplaceTestCase
 
         $this->postJson("/api/offers/{$offer->id}/quote", ['people' => 2, 'pay_method' => 'money'])
             ->assertOk()
-            ->assertJsonPath('data.discount_percent', 17.5)
-            ->assertJsonPath('data.total_cents', 4948);
+            ->assertJsonPath('data.discount_percent', 8)
+            ->assertJsonPath('data.total_cents', 5518);
 
         $this->postJson('/api/bookings', ['offer_id' => $offer->id, 'people' => 2, 'pay_method' => 'money'])
             ->assertCreated()
             ->assertJsonPath('data.status', 'confirmed')
-            ->assertJsonPath('data.total_cents', 4948)
+            ->assertJsonPath('data.total_cents', 5518)
             ->assertJsonPath('data.plan_key', 'gold');
 
         $payment = Payment::where('user_id', $user->id)->sole();
         $this->assertSame('test', $payment->provider);
-        $this->assertSame(4948, $payment->amount_cents);
+        $this->assertSame(5518, $payment->amount_cents);
     }
 
     public function test_mit_credits_nur_wenn_genug_da_und_storno_bringt_sie_zurueck(): void
@@ -54,21 +54,22 @@ class BookingTest extends MarketplaceTestCase
             ->assertStatus(422)
             ->assertJsonValidationErrors('credits');
 
-        $this->postJson('/api/wallet/purchase', ['credits' => 500])->assertCreated()->assertJsonPath('data.balance', 500);
+        // 500 + 100 Mengenbonus + 100 Erstkauf-Bonus.
+        $this->postJson('/api/wallet/purchase', ['credits' => 500])->assertCreated()->assertJsonPath('data.balance', 700);
 
         $booking = $this->postJson('/api/bookings', ['offer_id' => $offer->id, 'people' => 1, 'pay_method' => 'credits'])
             ->assertCreated()
             ->assertJsonPath('data.total_credits', 450)
-            ->assertJsonPath('credits_balance', 50)
+            ->assertJsonPath('credits_balance', 250)
             ->json('data');
 
         $this->postJson("/api/bookings/{$booking['id']}/cancel")
             ->assertOk()
             ->assertJsonPath('data.status', 'cancelled')
-            ->assertJsonPath('credits_balance', 500);
+            ->assertJsonPath('credits_balance', 700);
 
         $this->postJson("/api/bookings/{$booking['id']}/cancel")->assertStatus(422);
-        $this->assertSame(500, $user->fresh()->credits_balance);
+        $this->assertSame(700, $user->fresh()->credits_balance);
     }
 
     public function test_grenzen_des_angebots_gelten(): void

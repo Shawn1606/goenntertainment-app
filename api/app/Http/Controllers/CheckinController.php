@@ -60,7 +60,12 @@ class CheckinController extends Controller
     /** GET /api/pass - der QR-Code, den der Partner scannt. Alle 60 s frisch holen. */
     public function pass(Request $request): JsonResponse
     {
-        return response()->json(['data' => Pass::issue($request->user())]);
+        $offline = Pass::issueOffline($request->user());
+
+        return response()->json(['data' => Pass::issue($request->user()) + [
+            'offline_token' => $offline['token'],
+            'offline_expires_at' => $offline['expires_at'],
+        ]]);
     }
 
     /** GET /api/stamps - die Stempelkarte. */
@@ -115,6 +120,8 @@ class CheckinController extends Controller
         return [
             'partner' => ['id' => $partner->id, 'name' => $partner->name],
             'stamped' => $result['stamped'],
+            // Testphase: erster Besuch bei diesem Partner = doppelter Stempel.
+            'bonus_stamp' => $result['bonus_stamp'] ?? false,
             'reward_credits' => $result['reward_credits'],
             'stamps' => Checkins::card($user),
             'credits' => (int) $user->fresh()->credits_balance,

@@ -7,15 +7,16 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 /**
- * Bilder speichern - Partner-Logos, Titelbilder, Angebotsbilder, Beweisfotos.
+ * Bilder speichern - Partner-Logos, Titelbilder, Angebotsbilder, Beweisfotos,
+ * Profilbilder.
  *
  * Alles landet auf der Platte `public` (config/filesystems.php) unter einem
  * zufaelligen Namen; in der Datenbank steht der relative Pfad, die Adresse baut
  * App\Support\Media bei jeder Antwort neu.
  *
- * Hochladen duerfen nur Admins (Partner, Angebote, Beweise). Nutzer:innen laden
- * seit dem Marktplatz-Umbau nichts mehr hoch - damit entfaellt auch die
- * KI-Pruefung von Bildern.
+ * Partner-, Angebots- und Beweisbilder laden nur Admins hoch; Nutzer:innen nur
+ * ihr eigenes Profilbild (AvatarController). Eine KI-Pruefung gibt es nicht -
+ * unpassende Profilbilder laufen ueber Melden und den Admin-Bereich.
  */
 final class Uploads
 {

@@ -3,9 +3,12 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\CreditTransaction;
+use App\Models\Stamp;
 use App\Models\User;
 use App\Rules\NoBlockedTerms;
 use App\Support\AccountDeletion;
+use App\Support\Checkins;
 use App\Support\Club;
 use App\Support\Format;
 use App\Support\Media;
@@ -17,12 +20,13 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 /**
- * Nutzer verwalten - portiert aus server/src/routes/admin.js: umbenennen,
- * sperren (dauerhaft oder auf Zeit, mit Beweisfoto), entsperren, loeschen.
- * Neu: Credits gutschreiben (Kulanz, Gewinnspiel) und Club-Stand sehen.
+ * Nutzer verwalten: umbenennen, sperren (dauerhaft oder auf Zeit, mit
+ * Beweisfoto), entsperren, loeschen - und Credits sowie Stempel ansehen und
+ * korrigieren (Kulanz, Gewinnspiel, Fehlbuchung).
  *
- * Keine dieser Aktionen geht auf das EIGENE Konto - sonst sperrt oder loescht
- * sich ein Admin aus Versehen selbst aus.
+ * Sperren, Umbenennen und Loeschen gehen nicht auf das EIGENE Konto - sonst
+ * sperrt oder loescht sich ein Admin aus Versehen selbst aus. Credits und
+ * Stempel dagegen schon: Das ist eine Korrektur, kein Rauswurf.
  */
 class UserController extends Controller
 {
@@ -37,13 +41,22 @@ class UserController extends Controller
                 ->orWhere('username', 'like', "%{$q}%")
                 ->orWhere('email', 'like', "%{$q}%")))
             ->withCount('groups')
-            ->addSelect(['bookings_count' => DB::table('bookings')->selectRaw('COUNT(*)')->whereColumn('bookings.user_id', 'users.id')])
+            ->addSelect([
+                'bookings_count' => DB::table('bookings')->selectRaw('COUNT(*)')->whereColumn('bookings.user_id', 'users.id'),
+                'stamps_total' => DB::table('stamps')->selectRaw('COUNT(*)')->whereColumn('stamps.user_id', 'users.id'),
+            ])
             ->orderByDesc('created_at')
             ->orderByDesc('id')
             ->limit(300)
             ->get();
 
         return response()->json(['data' => $users->map(fn (User $u) => $this->present($request, $u))]);
+    }
+
+    /** GET /api/admin/users/{id} - ein Konto mit Stempelkarte und letzten Credit-Bewegungen. */
+    public function show(Request $request, int $id): JsonResponse
+    {
+        return response()->json(['data' => $this->detail($request, $this->find($id))]);
     }
 
     /** PATCH /api/admin/users/{id} {username} */
@@ -111,10 +124,10 @@ class UserController extends Controller
         return response()->json(['message' => 'Nutzer gelöscht.']);
     }
 
-    /** POST /api/admin/users/{id}/credits {amount, note} - Gutschrift (oder Korrektur mit Minus). */
+    /** POST /api/admin/users/{id}/credits {amount, note} - Gutschrift (oder Korrektur mit Minus). Auch fuers eigene Konto. */
     public function credits(Request $request, int $id): JsonResponse
     {
-        $user = $this->target($request, $id);
+        $user = $this->find($id);
         $data = $request->validate([
             'amount' => ['required', 'integer', 'between:-100000,100000', 'not_in:0'],
             'note' => ['required', 'string', 'min:3', 'max:150'],
@@ -124,11 +137,40 @@ class UserController extends Controller
         ]);
 
         $amount = (int) $data['amount'];
+        if ($amount < 0 && -$amount > (int) $user->credits_balance) {
+            throw ValidationException::withMessages(['amount' => [
+                'Auf dem Konto sind nur '.Format::credits((int) $user->credits_balance).' Credits – mehr lässt sich nicht abziehen.',
+            ]]);
+        }
         $amount > 0
             ? Wallet::credit($user, $amount, 'admin', $data['note'])
             : Wallet::debit($user, -$amount, 'admin', $data['note']);
 
-        return response()->json(['data' => $this->present($request, $user->fresh())]);
+        return response()->json(['data' => $this->detail($request, $user->fresh())]);
+    }
+
+    /** POST /api/admin/users/{id}/stamps {amount} - Stempel gutschreiben (Plus) oder abziehen (Minus). Auch fuers eigene Konto. */
+    public function stamps(Request $request, int $id): JsonResponse
+    {
+        $user = $this->find($id);
+        $data = $request->validate([
+            'amount' => ['required', 'integer', 'between:-100,100', 'not_in:0'],
+        ], ['amount.*' => 'Wie viele Stempel? (–100 bis 100, nicht 0)']);
+
+        $amount = (int) $data['amount'];
+        $have = Stamp::where('user_id', $user->getKey())->count();
+        if ($amount < 0 && -$amount > $have) {
+            throw ValidationException::withMessages(['amount' => [
+                "Das Konto hat nur {$have} Stempel – mehr lassen sich nicht abziehen.",
+            ]]);
+        }
+
+        $result = Checkins::adjust($user, $amount);
+
+        return response()->json([
+            'data' => $this->detail($request, $user->fresh()),
+            'reward_credits' => $result['reward_credits'],
+        ]);
     }
 
     /** GET /api/admin/evidence */
@@ -158,13 +200,44 @@ class UserController extends Controller
         ]);
     }
 
+    /** Ein fremdes Konto - fuer Aktionen, die man nicht auf sich selbst anwenden darf. */
     private function target(Request $request, int $id): User
     {
         abort_if($id === $request->user()->getKey(), 400, 'Diese Aktion kannst du nicht auf dein eigenes Konto anwenden.');
+
+        return $this->find($id);
+    }
+
+    private function find(int $id): User
+    {
         $user = User::find($id);
         abort_if($user === null, 404, 'Nutzer nicht gefunden.');
 
         return $user;
+    }
+
+    /** Wie in der Liste, dazu Stempelkarte und die letzten Credit-Bewegungen. */
+    private function detail(Request $request, User $u): array
+    {
+        $u->loadCount('groups');
+        $u->bookings_count = DB::table('bookings')->where('user_id', $u->id)->count();
+        $u->stamps_total = Stamp::where('user_id', $u->id)->count();
+
+        $transactions = CreditTransaction::where('user_id', $u->id)->orderByDesc('id')->limit(15)->get()
+            ->map(fn (CreditTransaction $t) => [
+                'id' => $t->id,
+                'amount' => $t->amount,
+                'balance_after' => $t->balance_after,
+                'kind' => $t->kind,
+                'description' => $t->description,
+                'created_at' => Format::iso($t->created_at),
+            ]);
+
+        return $this->present($request, $u) + [
+            'is_self' => $u->id === $request->user()->getKey(),
+            'stamps' => Checkins::card($u),
+            'transactions' => $transactions,
+        ];
     }
 
     private function reason(Request $request): string
@@ -218,6 +291,7 @@ class UserController extends Controller
             'credits_balance' => (int) $u->credits_balance,
             'groups_count' => (int) ($u->groups_count ?? 0),
             'bookings_count' => (int) ($u->bookings_count ?? 0),
+            'stamps_total' => (int) ($u->stamps_total ?? 0),
             'banned' => $banned,
             'banned_permanent' => $banned && $info['permanent'],
             'banned_until' => $banned ? $info['banned_until'] : null,

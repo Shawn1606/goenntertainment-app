@@ -2,6 +2,8 @@
 
 use App\Models\User;
 use App\Support\ClubMembership;
+use App\Support\CreditReminders;
+use App\Support\Wallet;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 
@@ -15,6 +17,29 @@ Artisan::command('club:renew', function () {
 })->purpose('Faellige Club-Abos verlaengern oder auslaufen lassen');
 
 Schedule::command('club:renew')->hourly()->withoutOverlapping();
+
+/*
+| Credits verfallen je Gutschrift nach validDays (shared/club.json). Wallet bucht
+| faellige Posten auch vor jeder Bewegung aus; der Zeitplan sorgt dafuer, dass
+| der Stand in der Kopfzeile auch ohne Bewegung stimmt.
+*/
+Artisan::command('credits:expire', function () {
+    $count = Wallet::expireDue();
+    $this->info("{$count} Konto/Konten mit verfallenen Credits bearbeitet.");
+})->purpose('Verfallene Credits ausbuchen');
+
+Schedule::command('credits:expire')->everyFiveMinutes()->withoutOverlapping();
+
+/*
+| Verfall-Erinnerung per Mail, 30 und 7 Tage vorher (App\Support\CreditReminders).
+| Einmal am Vormittag - niemand soll nachts Post von uns bekommen.
+*/
+Artisan::command('credits:remind', function () {
+    $sent = CreditReminders::sendDue();
+    $this->info("{$sent} Erinnerung(en) verschickt.");
+})->purpose('An bald verfallende Credits erinnern');
+
+Schedule::command('credits:remind')->dailyAt('10:00')->withoutOverlapping();
 
 /*
 | Ein Konto zum Admin machen - der einzige Weg dorthin. Die App vergibt keine

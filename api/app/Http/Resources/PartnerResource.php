@@ -35,6 +35,10 @@ class PartnerResource extends JsonResource
             'instagram' => $this->instagram,
             'opening_hours' => $this->opening_hours,
             'is_featured' => (bool) $this->is_featured,
+            // Barrierefreiheit: true/false, oder null = unbekannt.
+            'wheelchair_accessible' => $this->wheelchair_accessible,
+            'kid_friendly' => $this->kid_friendly,
+            'quiet_times' => $this->quiet_times,
             'offers' => OfferResource::collection($this->whenLoaded('offers')),
         ];
     }

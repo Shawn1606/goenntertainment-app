@@ -3,11 +3,13 @@
 namespace App\Http\Resources;
 
 use App\Models\Booking;
+use App\Support\BookingCalendar;
 use App\Support\Codes;
 use App\Support\Format;
 use App\Support\Media;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Eine Buchung - der Beleg in der App.
@@ -62,6 +64,10 @@ class BookingResource extends JsonResource
             'redeemed_at' => Format::iso($this->redeemed_at),
             'cancelled_at' => Format::iso($this->cancelled_at),
             'created_at' => Format::iso($this->created_at),
+            // Kalender-Export: Pfad unter /api mit Signatur (App\Support\BookingCalendar).
+            'calendar_path' => BookingCalendar::path($this->resource),
+            // Testphase: Rueckmeldung an den Partner schon abgegeben?
+            'feedback_given' => $this->status === 'redeemed' && DB::table('booking_feedback')->where('booking_id', $this->id)->exists(),
         ];
     }
 }

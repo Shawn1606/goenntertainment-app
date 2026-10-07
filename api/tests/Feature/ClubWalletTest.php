@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\CreditTransaction;
 use App\Models\User;
 use App\Models\VoucherBatch;
 use App\Support\ClubMembership;
@@ -35,7 +36,7 @@ class ClubWalletTest extends MarketplaceTestCase
         $this->postJson('/api/club/subscribe', ['plan' => 'gold'])
             ->assertOk()
             ->assertJsonPath('data.plan', 'gold')
-            ->assertJsonPath('data.credits', 100);
+            ->assertJsonPath('data.credits', 42);
 
         $this->postJson('/api/club/subscribe', ['plan' => 'gold'])->assertStatus(422);
         $this->postJson('/api/club/subscribe', ['plan' => 'free'])->assertStatus(422);
@@ -43,7 +44,7 @@ class ClubWalletTest extends MarketplaceTestCase
         $this->postJson('/api/club/cancel')->assertOk()->assertJsonPath('data.cancel_at_period_end', true);
 
         // Kuendigung zuruecknehmen kostet nichts extra.
-        $this->postJson('/api/club/subscribe', ['plan' => 'gold'])->assertOk()->assertJsonPath('data.credits', 100);
+        $this->postJson('/api/club/subscribe', ['plan' => 'gold'])->assertOk()->assertJsonPath('data.credits', 42);
         $this->postJson('/api/club/cancel')->assertOk();
 
         $this->travel(32)->days();
@@ -54,14 +55,14 @@ class ClubWalletTest extends MarketplaceTestCase
     public function test_verlaengerung_bucht_ab_und_schreibt_credits_gut(): void
     {
         $user = $this->actingAsUser();
-        $this->postJson('/api/club/subscribe', ['plan' => 'platinum'])->assertOk()->assertJsonPath('data.credits', 300);
+        $this->postJson('/api/club/subscribe', ['plan' => 'platinum'])->assertOk()->assertJsonPath('data.credits', 83);
 
         $this->travel(32)->days();
         $this->assertSame(1, ClubMembership::renewDue());
 
         $fresh = $user->fresh();
         $this->assertSame('platinum', $fresh->club_plan);
-        $this->assertSame(600, $fresh->credits_balance);
+        $this->assertSame(166, $fresh->credits_balance);
         $this->assertTrue($fresh->club_renews_at->isFuture());
     }
 
@@ -101,7 +102,32 @@ class ClubWalletTest extends MarketplaceTestCase
     {
         $this->actingAsUser();
         $this->postJson('/api/wallet/purchase', ['credits' => 77])->assertStatus(422);
-        $this->postJson('/api/wallet/purchase', ['credits' => 1000])->assertCreated()->assertJsonPath('data.balance', 1000);
-        $this->assertSame(1000, User::sole()->credits_balance);
+        // 1000 + 250 Mengenbonus + 200 Erstkauf-Bonus (shared/club.json).
+        $this->getJson('/api/wallet')->assertJsonPath('data.first_purchase_bonus_percent', 20);
+        $this->postJson('/api/wallet/purchase', ['credits' => 1000])
+            ->assertCreated()
+            ->assertJsonPath('data.balance', 1450)
+            ->assertJsonPath('data.bonus', 250)
+            ->assertJsonPath('data.first_purchase_bonus', 200);
+        $this->assertSame(1450, User::sole()->credits_balance);
+        $this->assertSame('1.000 Credits + 250 Bonus + 200 Erstkauf-Bonus gekauft', CreditTransaction::sole()->description);
+
+        // Der Erstkauf-Bonus gilt nur einmal.
+        $this->getJson('/api/wallet')->assertJsonPath('data.first_purchase_bonus_percent', 0);
+        $this->postJson('/api/wallet/purchase', ['credits' => 1000])
+            ->assertCreated()
+            ->assertJsonPath('data.balance', 2700)
+            ->assertJsonPath('data.first_purchase_bonus', 0);
+    }
+
+    public function test_kleinstes_paket_hat_keinen_mengenbonus(): void
+    {
+        $this->actingAsUser();
+        $this->postJson('/api/wallet/purchase', ['credits' => 50])
+            ->assertCreated()
+            ->assertJsonPath('data.balance', 60)
+            ->assertJsonPath('data.bonus', 0)
+            ->assertJsonPath('data.first_purchase_bonus', 10);
+        $this->assertSame('50 Credits + 10 Erstkauf-Bonus gekauft', CreditTransaction::sole()->description);
     }
 }

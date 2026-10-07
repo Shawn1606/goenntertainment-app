@@ -64,6 +64,9 @@ class UserResource extends JsonResource
         $data['club_plan'] = $this->resource->club_plan ?? 'free';
         $data['credits_balance'] = (int) ($this->resource->credits_balance ?? 0);
         $data['club_cancel_at_period_end'] = (bool) ($this->resource->club_cancel_at_period_end ?? false);
+        // month | year (Jahresabo)
+        $data['club_interval'] = $this->resource->club_interval ?? 'month';
+        unset($data['club_credits_next_at']);
         foreach (['club_since', 'club_renews_at'] as $field) {
             $data[$field] = Format::iso($this->resource->{$field} ?? null);
         }

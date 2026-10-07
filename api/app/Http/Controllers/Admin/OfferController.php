@@ -92,6 +92,9 @@ class OfferController extends Controller
             'duration_minutes' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:10080'],
             'indoor' => ['sometimes', 'nullable', 'boolean'],
             'valid_days' => ['sometimes', 'integer', 'min:1', 'max:730'],
+            // Testphase: Plaetze pro Tag, davon nur fuer Platinum (leer = unbegrenzt).
+            'daily_capacity' => ['sometimes', 'nullable', 'integer', 'min:1', 'max:5000'],
+            'platinum_reserved' => ['sometimes', 'integer', 'min:0', 'max:5000'],
             'is_active' => ['sometimes', 'boolean'],
             'is_featured' => ['sometimes', 'boolean'],
             'sort' => ['sometimes', 'integer', 'min:0', 'max:65535'],

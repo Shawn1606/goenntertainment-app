@@ -23,7 +23,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 #[Fillable([
     'partner_id', 'kind', 'title', 'subtitle', 'description', 'interest_id', 'price_cents', 'price_credits',
     'max_discount_percent', 'min_people', 'max_people', 'min_age', 'max_age', 'duration_minutes', 'indoor',
-    'valid_days', 'is_active', 'is_featured', 'sort',
+    'valid_days', 'is_active', 'is_featured', 'sort', 'daily_capacity', 'platinum_reserved',
 ])]
 class Offer extends Model
 {
@@ -47,6 +47,8 @@ class Offer extends Model
             'is_active' => 'boolean',
             'is_featured' => 'boolean',
             'sort' => 'integer',
+            'daily_capacity' => 'integer',
+            'platinum_reserved' => 'integer',
         ];
     }
 

@@ -25,4 +25,7 @@ return [
 
     /* Wie lange ein Kunden-Pass (QR fuer den Partner-Scan) gilt. */
     'pass_ttl_seconds' => 120,
+
+    // Offline-Pass (App\Support\Pass::issueOffline): nur ohne Netz gezeigt.
+    'pass_offline_ttl_seconds' => (int) env('PASS_OFFLINE_TTL', 10800),
 ];

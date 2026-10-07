@@ -45,6 +45,9 @@ class OfferResource extends JsonResource
             'duration_minutes' => $this->duration_minutes,
             'indoor' => $this->indoor,
             'valid_days' => $this->valid_days,
+            // Testphase: Tageskontingent, davon fuer Platinum reserviert.
+            'daily_capacity' => $this->daily_capacity,
+            'platinum_reserved' => (int) ($this->platinum_reserved ?? 0),
             'is_featured' => (bool) $this->is_featured,
             'partner' => $partner ? [
                 'id' => $partner->id,
@@ -57,6 +60,9 @@ class OfferResource extends JsonResource
                 'lat' => $partner->lat,
                 'lng' => $partner->lng,
                 'interest_id' => $partner->interest_id,
+                'wheelchair_accessible' => $partner->wheelchair_accessible,
+                'kid_friendly' => $partner->kid_friendly,
+                'quiet_times' => $partner->quiet_times,
             ] : null,
         ];
     }

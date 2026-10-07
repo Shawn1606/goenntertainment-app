@@ -3,10 +3,12 @@
 namespace App\Support;
 
 use App\Models\Booking;
+use App\Models\CreditTransaction;
 use App\Models\Group;
 use App\Models\Offer;
 use App\Models\Payment;
 use App\Models\User;
+use App\Support\TestPhase\TestPhase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -39,13 +41,20 @@ final class Bookings
      *
      * @return array<string, mixed>
      */
-    public static function quote(User $user, Offer $offer, int $people, string $payMethod): array
+    public static function quote(User $user, Offer $offer, int $people, string $payMethod, ?string $preferredDate = null): array
     {
         self::assertBookable($offer, $people, $payMethod);
         $cap = $offer->effectiveMaxDiscount();
 
         if ($payMethod === 'credits') {
             $q = Club::quoteCredits($user->club_plan, $people, (int) $offer->price_credits, $cap);
+
+            // Testphase: Happy Hour - an ruhigen Wochentagen weniger Credits fuer
+            // Club-Mitglieder, zusaetzlich zum Rabatt (shared/club.json).
+            $happy = TestPhase::enabledFor($user) ? Club::happyHourPercent($user->club_plan, $preferredDate) : 0.0;
+            if ($happy > 0) {
+                $q['totalCredits'] = (int) ceil($q['totalCredits'] * (100 - $happy) / 100 - 1e-9);
+            }
 
             return [
                 'pay_method' => 'credits',
@@ -58,6 +67,7 @@ final class Bookings
                 'unit_credits' => $q['unitCredits'],
                 'subtotal_credits' => $q['subtotalCredits'],
                 'total_credits' => $q['totalCredits'],
+                'happy_hour_percent' => $happy,
                 'balance' => (int) $user->credits_balance,
             ];
         }
@@ -85,10 +95,17 @@ final class Bookings
             throw ValidationException::withMessages(['group_id' => ['Du bist nicht in dieser Gruppe.']]);
         }
 
-        $quote = self::quote($user, $offer, $people, $payMethod);
+        $quote = self::quote($user, $offer, $people, $payMethod, $preferredDate);
         $partner = $offer->partner;
 
-        return DB::transaction(function () use ($user, $offer, $partner, $group, $preferredDate, $quote, $payMethod) {
+        return DB::transaction(function () use ($user, $offer, $partner, $group, $preferredDate, $quote, $payMethod, $people) {
+            // Kontingent pruefen, waehrend das Angebot gesperrt ist: Zwei Buchungen
+            // gleichzeitig koennen sonst beide den letzten Platz bekommen.
+            if ($offer->daily_capacity !== null) {
+                Offer::whereKey($offer->getKey())->lockForUpdate()->value('id');
+                self::assertCapacity($user, $offer, $people, $preferredDate);
+            }
+
             $payment = null;
             if ($payMethod === 'money' && $quote['total_cents'] > 0) {
                 $payment = Payments::charge(
@@ -156,13 +173,19 @@ final class Bookings
             $booking->update(['status' => 'cancelled', 'cancelled_at' => now()]);
 
             if ($booking->pay_method === 'credits' && $booking->total_credits > 0 && $booking->user) {
-                Wallet::credit(
-                    $booking->user,
-                    $booking->total_credits,
-                    'refund',
-                    "Storno: {$booking->offer_title}",
-                    ['booking_id' => $booking->getKey()],
-                );
+                // Zurueck auf die Posten, aus denen bezahlt wurde - mit ihrer alten
+                // Frist. Sonst verlaengerte Buchen-und-Stornieren jeden Verfall.
+                $debit = CreditTransaction::where('booking_id', $booking->getKey())
+                    ->where('kind', 'booking')
+                    ->where('amount', '<', 0)
+                    ->latest('id')
+                    ->first();
+                $description = "Storno: {$booking->offer_title}";
+                $refs = ['booking_id' => $booking->getKey()];
+
+                $debit !== null
+                    ? Wallet::refund($booking->user, $debit, $booking->total_credits, $description, $refs)
+                    : Wallet::credit($booking->user, $booking->total_credits, 'refund', $description, $refs);
             }
 
             if ($booking->payment_id !== null) {
@@ -192,6 +215,56 @@ final class Bookings
         $booking->update(['status' => 'redeemed', 'redeemed_at' => now(), 'redeemed_by' => $by?->getKey()]);
 
         return $booking;
+    }
+
+    /**
+     * Tageskontingent eines Angebots (Testphase): Plaetze an einem Tag, davon
+     * `platinum_reserved` nur fuer Platinum. Ohne Kontingent = unbegrenzt.
+     *
+     * @return array{capacity: int|null, booked: int, reserved: int, available: int|null, available_for_you: int|null}
+     */
+    public static function availability(Offer $offer, User $user, string $day): array
+    {
+        if ($offer->daily_capacity === null) {
+            return ['capacity' => null, 'booked' => 0, 'reserved' => 0, 'available' => null, 'available_for_you' => null];
+        }
+
+        $booked = (int) Booking::where('offer_id', $offer->getKey())
+            ->whereDate('preferred_date', $day)
+            ->where('status', '!=', 'cancelled')
+            ->sum('people');
+        $capacity = (int) $offer->daily_capacity;
+        $reserved = min((int) $offer->platinum_reserved, $capacity);
+        $available = max(0, $capacity - $booked);
+        $platinum = Club::plan($user->club_plan)['key'] === 'platinum';
+
+        return [
+            'capacity' => $capacity,
+            'booked' => $booked,
+            'reserved' => $reserved,
+            'available' => $available,
+            'available_for_you' => $platinum ? $available : max(0, $available - $reserved),
+        ];
+    }
+
+    private static function assertCapacity(User $user, Offer $offer, int $people, ?string $day): void
+    {
+        if ($day === null) {
+            throw ValidationException::withMessages(['preferred_date' => ['Wähle einen Tag – dieses Angebot hat begrenzte Plätze.']]);
+        }
+
+        $a = self::availability($offer, $user, $day);
+        $label = \Illuminate\Support\Carbon::parse($day)->format('d.m.');
+        if ($people > $a['available']) {
+            throw ValidationException::withMessages(['people' => [
+                $a['available'] === 0 ? "Am {$label} ist alles ausgebucht." : "Am {$label} sind nur noch {$a['available']} Plätze frei.",
+            ]]);
+        }
+        if ($people > $a['available_for_you']) {
+            throw ValidationException::withMessages(['people' => [
+                "Die letzten {$a['reserved']} Plätze am {$label} sind für Platinum-Mitglieder reserviert.",
+            ]]);
+        }
     }
 
     private static function assertBookable(Offer $offer, int $people, string $payMethod): void

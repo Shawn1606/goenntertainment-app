@@ -157,6 +157,10 @@ class PartnerController extends Controller
             'max_discount_percent' => ['sometimes', 'nullable', 'integer', 'between:0,100'],
             'is_active' => ['sometimes', 'boolean'],
             'is_featured' => ['sometimes', 'boolean'],
+            // Barrierefreiheit: null = unbekannt
+            'wheelchair_accessible' => ['sometimes', 'nullable', 'boolean'],
+            'kid_friendly' => ['sometimes', 'nullable', 'boolean'],
+            'quiet_times' => ['sometimes', 'nullable', 'string', 'max:160'],
         ], [
             'name.required' => 'Wie heißt der Partner?',
             'website.url' => 'Die Webseite muss mit http:// oder https:// beginnen.',

@@ -18,15 +18,28 @@ final class Pass
     private const PREFIX = 'GP1';
 
     /** @return array{token: string, expires_at: string} */
-    public static function issue(User $user): array
+    public static function issue(User $user, ?int $ttlSeconds = null): array
     {
-        $expires = now()->addSeconds((int) config('club.pass_ttl_seconds', 120))->getTimestamp();
+        $expires = now()->addSeconds($ttlSeconds ?? (int) config('club.pass_ttl_seconds', 120))->getTimestamp();
         $payload = self::PREFIX.'.'.$user->getKey().'.'.$expires;
 
         return [
             'token' => $payload.'.'.self::sign($payload),
             'expires_at' => date(DATE_ATOM, $expires),
         ];
+    }
+
+    /**
+     * Offline-Pass: derselbe Aufbau, aber laenger gueltig (Standard 3 Stunden,
+     * club.pass_offline_ttl_seconds). Die App legt ihn beim Laden des normalen
+     * Passes beiseite und zeigt ihn NUR, wenn sie gerade kein Netz hat - etwa
+     * im Keller einer Bowlingbahn. Der Partner prueft ihn wie jeden Pass.
+     *
+     * @return array{token: string, expires_at: string}
+     */
+    public static function issueOffline(User $user): array
+    {
+        return self::issue($user, (int) config('club.pass_offline_ttl_seconds', 10800));
     }
 
     /** Die Konto-ID aus einem gueltigen Pass - oder null (abgelaufen, gefaelscht, Unsinn). */

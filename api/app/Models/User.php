@@ -86,6 +86,7 @@ class User extends Authenticatable
             'club_since' => 'datetime',
             'club_renews_at' => 'datetime',
             'club_cancel_at_period_end' => 'boolean',
+            'club_credits_next_at' => 'datetime',
             'credits_balance' => 'integer',
         ];
     }

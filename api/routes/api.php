@@ -3,10 +3,12 @@
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\Admin;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\AvatarController;
 use App\Http\Controllers\BookingController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\CheckinController;
 use App\Http\Controllers\ClubController;
+use App\Http\Controllers\FeatureController;
 use App\Http\Controllers\GoogleController;
 use App\Http\Controllers\GroupController;
 use App\Http\Controllers\InterestController;
@@ -55,6 +57,13 @@ Route::post('/auth/google', [GoogleController::class, 'store']);
 Route::get('/interests', [InterestController::class, 'index']);
 
 /*
+| Kalender-Datei einer Buchung - ohne Token, weil der Kalender des Handys den
+| Link selbst oeffnet. Geschuetzt durch eine Signatur im Link
+| (App\Support\BookingCalendar), die nur die App von der API bekommt.
+*/
+Route::get('/bookings/{id}/calendar.ics', [BookingController::class, 'calendar'])->whereNumber('id');
+
+/*
 | Zwei-Faktor-Anmeldung, zweiter Schritt. OHNE `auth:sanctum` - genau hier gibt
 | es noch keinen Token; was die Anfrage traegt, ist der Vorgang (`challenge`)
 | aus der Antwort von /login bzw. /auth/google. Siehe TwoFactorController.
@@ -75,6 +84,8 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'show']);
     Route::patch('/user', [AuthController::class, 'update']);
+    Route::post('/user/avatar', [AvatarController::class, 'store'])->middleware('throttle:10,1');
+    Route::delete('/user/avatar', [AvatarController::class, 'destroy']);
 
     Route::middleware('throttle:account-sensitive')->group(function () {
         Route::put('/user/password', [AccountController::class, 'updatePassword']);
@@ -95,6 +106,7 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::get('/offers', [MarketController::class, 'offers']);
     Route::get('/offers/{offer}', [MarketController::class, 'offer']);
     Route::post('/offers/{offer}/quote', [MarketController::class, 'quote']);
+    Route::get('/offers/{offer}/availability', [BookingController::class, 'availability']);
     Route::get('/partners', [MarketController::class, 'partners']);
     Route::get('/partners/{partner}', [MarketController::class, 'partner']);
 
@@ -104,6 +116,10 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::get('/bookings/{id}', [BookingController::class, 'show'])->whereNumber('id');
     Route::post('/bookings/{id}/cancel', [BookingController::class, 'cancel'])->whereNumber('id');
     Route::post('/bookings/{id}/redeem', [BookingController::class, 'redeem'])->whereNumber('id');
+    Route::post('/bookings/{id}/feedback', [BookingController::class, 'feedback'])->whereNumber('id');
+
+    // Abzeichen
+    Route::get('/badges', [ClubController::class, 'badges']);
 
     // Club, Credits, Gutscheine
     Route::get('/club', [ClubController::class, 'show']);
@@ -112,6 +128,11 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::get('/wallet', [ClubController::class, 'wallet']);
     Route::post('/wallet/purchase', [ClubController::class, 'purchase'])->middleware('throttle:payments');
     Route::post('/wallet/redeem', [ClubController::class, 'redeem'])->middleware('throttle:voucher-redeem');
+
+    // Funktions-Schalter (App\Support\Features) und das Stadt-Bingo, sobald es freigeschaltet ist.
+    Route::get('/features', [FeatureController::class, 'show']);
+    Route::get('/bingo', [FeatureController::class, 'bingo']);
+    Route::post('/bingo/claim', [FeatureController::class, 'claimBingo'])->middleware('throttle:payments');
 
     // Stempelkarte und Check-in
     Route::get('/stamps', [CheckinController::class, 'stamps']);
@@ -157,11 +178,13 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
         Route::patch('/reports/{id}', [Admin\DashboardController::class, 'updateReport'])->whereNumber('id');
 
         Route::get('/users', [Admin\UserController::class, 'index']);
+        Route::get('/users/{id}', [Admin\UserController::class, 'show'])->whereNumber('id');
         Route::patch('/users/{id}', [Admin\UserController::class, 'rename'])->whereNumber('id');
         Route::post('/users/{id}/ban', [Admin\UserController::class, 'ban'])->whereNumber('id');
         Route::post('/users/{id}/timeout', [Admin\UserController::class, 'timeout'])->whereNumber('id');
         Route::post('/users/{id}/unban', [Admin\UserController::class, 'unban'])->whereNumber('id');
         Route::post('/users/{id}/credits', [Admin\UserController::class, 'credits'])->whereNumber('id');
+        Route::post('/users/{id}/stamps', [Admin\UserController::class, 'stamps'])->whereNumber('id');
         Route::delete('/users/{id}', [Admin\UserController::class, 'destroy'])->whereNumber('id');
         Route::get('/evidence', [Admin\UserController::class, 'evidence']);
 
@@ -185,5 +208,27 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
         Route::post('/voucher-batches', [Admin\VoucherController::class, 'store']);
         Route::get('/voucher-batches/{batch}/codes.csv', [Admin\VoucherController::class, 'csv']);
         Route::post('/vouchers/disable', [Admin\VoucherController::class, 'disable']);
+
+        // Testphase: Bingo, Challenges, Serie - nur fuer Admins (App\Support\TestPhase).
+        // Funktions-Schalter: für alle Nutzer bzw. nur für das eigene Konto (Vorschau).
+        Route::get('/features', [Admin\FeatureController::class, 'show']);
+        Route::put('/features/{key}', [Admin\FeatureController::class, 'update']);
+        Route::put('/features/{key}/preview', [Admin\FeatureController::class, 'preview']);
+
+        Route::get('/testphase', [Admin\TestPhaseController::class, 'show']);
+        Route::post('/testphase/claim', [Admin\TestPhaseController::class, 'claim']);
+        Route::post('/testphase/challenges', [Admin\TestPhaseController::class, 'store']);
+        Route::delete('/testphase/challenges/{id}', [Admin\TestPhaseController::class, 'destroy'])->whereNumber('id');
+        Route::post('/testphase/examples', [Admin\TestPhaseController::class, 'examples']);
+        Route::post('/testphase/choose', [Admin\TestPhaseController::class, 'choose']);
+        Route::post('/testphase/wishes', [Admin\TestPhaseController::class, 'storeWish']);
+        Route::post('/testphase/wishes/{id}/vote', [Admin\TestPhaseController::class, 'voteWish'])->whereNumber('id');
+        Route::delete('/testphase/wishes/{id}', [Admin\TestPhaseController::class, 'destroyWish'])->whereNumber('id');
+        Route::post('/testphase/shares', [Admin\TestPhaseController::class, 'storeShares']);
+        Route::post('/testphase/shares/{id}/pay', [Admin\TestPhaseController::class, 'payShare'])->whereNumber('id');
+        Route::post('/testphase/shares/{id}/decline', [Admin\TestPhaseController::class, 'declineShare'])->whereNumber('id');
+        Route::post('/testphase/polls', [Admin\TestPhaseController::class, 'storePoll']);
+        Route::post('/testphase/polls/{id}/vote', [Admin\TestPhaseController::class, 'votePoll'])->whereNumber('id');
+        Route::post('/testphase/polls/{id}/close', [Admin\TestPhaseController::class, 'closePoll'])->whereNumber('id');
     });
 });
