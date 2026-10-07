@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Rules\ValidEmail;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
+use App\Support\Sessions;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,9 +33,7 @@ class PasswordController extends Controller
     /** Wie Laravel: Reset-Links laufen nach 60 Minuten ab. */
     private const EXPIRE_MINUTES = 60;
 
-    private const MSG_EMAIL = 'Bitte eine gueltige E-Mail-Adresse angeben.';
-
-    private const EMAIL_PATTERN = '/^[^\s@]+@[^\s@]+\.[^\s@]+$/';
+    private const MSG_EMAIL = ValidEmail::MESSAGE;
 
     /**
      * POST /api/forgot-password
@@ -45,10 +45,9 @@ class PasswordController extends Controller
     public function forgot(Request $request): JsonResponse
     {
         Validator::make($request->all(), [
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'email' => ['bail', 'required', new ValidEmail],
         ], [
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
         ])->validate();
 
         $email = (string) $request->input('email');
@@ -83,12 +82,11 @@ class PasswordController extends Controller
     {
         Validator::make($request->all(), [
             'token' => ['required'],
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'email' => ['bail', 'required', new ValidEmail],
             'password' => ['bail', 'required', $this->passwordRule($request), $this->confirmationRule($request)],
         ], [
             'token.required' => 'Der Token fehlt.',
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
             'password.required' => 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.',
         ])->validate();
 
@@ -131,14 +129,22 @@ class PasswordController extends Controller
         /**
          * Neues Passwort setzen und die Reset-Zeile verbrauchen.
          *
-         * Bestehende Zugriffs-Tokens bleiben ABSICHTLICH gueltig - genau so hielt
-         * es das vorige Backend. Angemeldete Geraete werden also nicht abgemeldet.
+         * Every access token of the account is revoked (F-20): whoever resets a password may be
+         * locking someone out who knew the old one, and that someone must not stay signed in.
+         * App\Support\Sessions::revokeAll is the hook PR 3's reset by code reuses.
          */
-        User::where('email', $email)->update([
+        $user = User::where('email', $email)->first();
+        if ($user === null) {
+            throw $this->invalidLink();
+        }
+
+        $user->forceFill([
             'password' => Hash::make((string) $request->input('password')),
             'remember_token' => null,
             'updated_at' => now(),
-        ]);
+        ])->save();
+
+        Sessions::revokeAll($user);
 
         DB::delete('DELETE FROM password_reset_tokens WHERE email = ?', [$email]);
 

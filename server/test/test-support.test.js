@@ -13,8 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 import { BLOCKED_TERMS, findBlockedTerm, termTokens } from '../src/blocked-terms.js';
-import { SAFE_DIGITS, STAMP_LENGTH, TEST_PASSWORD, testIdentity, uniqueStamp } from './support/fixtures.js';
-import { passwordProblem } from '../src/password-policy.js';
+import { SAFE_DIGITS, STAMP_LENGTH, testIdentity, uniqueStamp } from './support/fixtures.js';
 
 const TEST_DIR = new URL('./', import.meta.url);
 const SMOKE_WORKFLOW = new URL('../../.github/workflows/docker.yml', import.meta.url);
@@ -31,7 +30,7 @@ function testFiles() {
 function usernamePrefixes() {
   const prefixes = new Set();
   for (const { text } of testFiles()) {
-    for (const m of text.matchAll(/\b(?:registerUser|tryRegister|insertTestUser|testIdentity)\((?:pool, )?'([a-z0-9]+)'/g)) {
+    for (const m of text.matchAll(/\b(?:registerUser|tryRegister|insertTestUser|testIdentity|createUser)\((?:pool, )?'([a-z0-9]+)'/g)) {
       prefixes.add(m[1]);
     }
     for (const m of text.matchAll(/`([a-z0-9]+)\$\{(?:s|stamp|stamp\(\)|uniqueStamp\(\))\}/g)) prefixes.add(m[1]);
@@ -114,11 +113,6 @@ test('testIdentity: username fits the 28-character slice, address uses the reser
   assert.equal(id.username, `adminstoryoldadm${id.stamp}`);
   assert.ok(id.username.length <= 28);
   assert.match(id.email, /^adminstoryoldadm[0-9]+@example\.invalid$/);
-});
-
-test('TEST_PASSWORD passes the password rule for a fixture identity', () => {
-  const id = testIdentity('zfapw');
-  assert.equal(passwordProblem(TEST_PASSWORD, { username: id.username, email: id.email }), null);
 });
 
 test('no stamp can make the word filter block a username the server tests build', () => {

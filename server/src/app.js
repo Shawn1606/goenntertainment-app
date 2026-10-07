@@ -7,16 +7,13 @@
  */
 import path from 'node:path';
 import express from 'express';
-import { pool } from './db.js';
 import { HttpError } from './validate.js';
-import interestsRouter from './routes/interests.js';
-import authRouter from './routes/auth.js';
-import accountRouter from './routes/account.js';
-import passwordRouter from './routes/password.js';
-import googleRouter from './routes/google.js';
+import { clientErrorFor } from './client-errors.js';
+import { logError } from './log.js';
+import { createLimitStore, resolveWriteLimits } from './rate-limit.js';
+import { internalSecret as internalSecretSetting, trustProxySetting } from './config.js';
 import activitiesRouter from './routes/activities.js';
 import adminRouter from './routes/admin.js';
-import progressRouter from './routes/progress.js';
 import businessRouter from './routes/business.js';
 import profileRouter from './routes/profile.js';
 import rewardsRouter from './routes/rewards.js';
@@ -28,9 +25,39 @@ import reportsRouter from './routes/reports.js';
 import upgradesRouter from './routes/upgrades.js';
 import notificationsRouter from './routes/notifications.js';
 import revenueCatRouter from './routes/revenuecat.js';
+import { internalRouter } from './routes/internal.js';
 
-export function createApp() {
+/** Largest JSON body (F-02). */
+export const JSON_LIMIT = '32kb';
+/** Largest JSON body of the RevenueCat webhook (see the body parsers below). */
+export const WEBHOOK_JSON_LIMIT = '128kb';
+/** Largest urlencoded body and its number of fields (F-02). */
+export const URLENCODED_LIMIT = '16kb';
+export const PARAMETER_LIMIT = 50;
+
+/**
+ * Options (tests pass them; the server reads its environment, see config.js):
+ *   trustProxy      whose forwarding headers count, Express 'trust proxy' syntax
+ *                   (default NODE_TRUST_PROXY; see trustProxySetting)
+ *   internalSecret  shared secret for the internal routes (default NODE_INTERNAL_SECRET)
+ *   writeLimits     rules per write class, { class: 'user:10/1h,ip:60/1h' }, over the
+ *                   environment (WRITE_LIMIT_<CLASS>) and the defaults (rate-limit.js)
+ */
+export function createApp({
+  trustProxy = trustProxySetting(),
+  internalSecret = internalSecretSetting(),
+  writeLimits = {},
+} = {}) {
   const app = express();
+
+  // The counters of the write limiter (F-07), one set per app; every write route reads them
+  // through rateLimit() (rate-limit.js). Invalid rules throw here, before anything listens.
+  app.locals.writeLimits = createLimitStore({ limits: resolveWriteLimits(process.env, writeLimits) });
+
+  // One spelling per path, like the routers (src/router.js explains why). These must be set
+  // before the first app.use: Express builds the app's own router lazily from them.
+  app.set('case sensitive routing', true);
+  app.set('strict routing', true);
 
   /**
    * Hinter einem Reverse Proxy (nginx/Traefik in Produktion) steht in
@@ -42,8 +69,14 @@ export function createApp() {
    * liest Express `X-Forwarded-Proto` und gibt 'https' zurueck.
    *
    * In der Entwicklung (kein Proxy, kein X-Forwarded-Proto) aendert das nichts.
+   *
+   * Trusted is exactly one hop, Laravel (F-31): `trust proxy 1` used to believe whatever peer
+   * came first, so anyone who reached Node could choose the address in `req.ip`. Now
+   * X-Forwarded-For/-Proto/-Host count only from the configured address (config.js
+   * trustProxySetting), and `req.ip` is the client address Laravel passes on - the key for
+   * per-address rate limits. From any other peer `req.ip` is that peer.
    */
-  app.set('trust proxy', 1);
+  app.set('trust proxy', trustProxy);
 
   /**
    * CORS. Ohne diese Header ist die App im BROWSER komplett blind: Der
@@ -70,29 +103,33 @@ export function createApp() {
     return next();
   });
 
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
+  /**
+   * Request bodies (F-02): small limits and flat forms. The largest JSON body the app sends (a
+   * group with its members, the social links) is a few kilobytes. Nothing sends urlencoded bodies
+   * (src/lib/api.ts sends JSON or multipart), so that parser stays small and flat: no nesting
+   * (`extended: false`), at most PARAMETER_LIMIT fields. Multipart forms are bounded per route in
+   * uploads.js. The RevenueCat webhook gets its own, larger JSON limit (mounted first, so the
+   * general parser leaves its body alone): the store's event carries the subscriber's attributes,
+   * and their size is not the app's to choose.
+   * An unreadable or oversized body is answered with 400/413/415 (client-errors.js), not 500.
+   */
+  app.use('/api/webhooks/revenuecat', express.json({ limit: WEBHOOK_JSON_LIMIT }));
+  app.use(express.json({ limit: JSON_LIMIT }));
+  app.use(express.urlencoded({ extended: false, limit: URLENCODED_LIMIT, parameterLimit: PARAMETER_LIMIT }));
 
   // Banner-Bilder oeffentlich ausliefern (wie Laravels /storage)
   app.use('/storage', express.static(path.join(process.cwd(), 'storage')));
 
-  // Health-Check
-  app.get('/api/health', async (req, res) => {
-    try {
-      await pool.query('SELECT 1');
-      res.json({ ok: true });
-    } catch {
-      res.status(500).json({ ok: false });
-    }
-  });
+  // Internal routes for Laravel and the container health check (GET /internal/health); never
+  // forwarded from outside (Laravel forwards only /api paths). Unknown internal paths get the
+  // same JSON 404.
+  app.use('/internal', internalRouter({ secret: internalSecret }));
+  app.use('/internal', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));
 
-  // Routen (gleiche Pfade wie das alte Laravel-Backend)
-  app.use('/api', authRouter); // /register, /login, /logout, /user
-  app.use('/api', accountRouter); // DELETE /me – eigenes Konto loeschen
-  app.use('/api', passwordRouter); // /forgot-password, /reset-password
-  app.use('/api', progressRouter); // /me/progress, /leaderboard
-  app.use('/api/auth', googleRouter); // /auth/google
-  app.use('/api/interests', interestsRouter);
+  // Routen. One owner per path: what Laravel (api/) serves is not served here - sign-up,
+  // sign-in, the own account, progress, leaderboard, interests and /api/health are Laravel's
+  // (api/routes/api.php). api/tests/Feature/NodeTwinRoutesTest.php checks that no path below is
+  // one of Laravel's.
   app.use('/api/activities', activitiesRouter);
   app.use('/api/admin', adminRouter); // /stats, /users, /stories, /upgrade-requests, /evidence, /moderation (nur Admin)
   app.use('/api/business', businessRouter); // /insights, /activities/:id/boost (ab Business)
@@ -116,22 +153,31 @@ export function createApp() {
   app.use('/api', (req, res) => res.status(404).json({ message: 'Nicht gefunden.' }));
 
   // Zentrale Fehlerbehandlung -> immer JSON im Laravel-Format
-  app.use((err, req, res, next) => {
-    if (res.headersSent) {
-      return next(err);
-    }
-    if (err instanceof HttpError) {
-      return res.status(err.status).json({ message: err.message, errors: err.errors });
-    }
-    if (err?.code === 'LIMIT_FILE_SIZE') {
-      return res.status(422).json({
-        message: 'Das Banner-Bild darf hoechstens 5 MB gross sein.',
-        errors: { banner: ['Das Banner-Bild darf hoechstens 5 MB gross sein.'] },
-      });
-    }
-    console.error(err);
-    return res.status(500).json({ message: 'Serverfehler.' });
-  });
+  app.use(handleError);
 
   return app;
+}
+
+/**
+ * The central error handler (exported for test/logging.test.js).
+ *
+ * - HttpError: the route's own status and message.
+ * - A client error from the body parser, multer or Express's route-parameter decoding
+ *   (client-errors.js): 400/413/415, not logged.
+ * - Anything else: 500, logged through log.js - name, codes and the route pattern, never the
+ *   request body, SQL text or a driver message (F-38).
+ */
+export function handleError(err, req, res, next) {
+  if (res.headersSent) {
+    return next(err);
+  }
+  if (err instanceof HttpError) {
+    return res.status(err.status).json({ message: err.message, errors: err.errors });
+  }
+  const client = clientErrorFor(err);
+  if (client) {
+    return res.status(client.status).json({ message: client.message });
+  }
+  logError('request failed', err, req);
+  return res.status(500).json({ message: 'Serverfehler.' });
 }

@@ -13,13 +13,14 @@
  * ihren Zaehler nie wieder loswird. Einzeln abhaken gibt es fuer den Fall, dass
  * man genau eine antippt und wegspringt.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { NOTIFICATION_LIMIT, transformNotification } from '../notifications.js';
 
-const router = Router();
+const router = createRouter();
 
 // GET /api/notifications  (geschuetzt) – neueste zuerst, dazu der Ungelesen-Zaehler.
 router.get('/notifications', requireAuth, async (req, res, next) => {
@@ -54,7 +55,7 @@ router.get('/notifications', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/notifications/read  (geschuetzt) – alles abhaken.
-router.post('/notifications/read', requireAuth, async (req, res, next) => {
+router.post('/notifications/read', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     await pool.query(
       'UPDATE notifications SET read_at = NOW() WHERE user_id = ? AND read_at IS NULL',
@@ -67,7 +68,7 @@ router.post('/notifications/read', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/notifications/:id/read  (geschuetzt) – eine einzelne abhaken.
-router.post('/notifications/:id/read', requireAuth, async (req, res, next) => {
+router.post('/notifications/:id/read', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const row = await first('SELECT id, user_id FROM notifications WHERE id = ?', [req.params.id]);
     // Fremde Benachrichtigung: 404 statt 403 – dass es sie gibt, geht niemanden an.

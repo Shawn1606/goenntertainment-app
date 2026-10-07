@@ -98,6 +98,29 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
   KEY personal_access_tokens_expires_at_idx (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Laravel's database cache store (CACHE_STORE=database): the rate-limit counters of the sign-in,
+-- sign-up, password and two-factor routes, including the per-account caps across addresses, and
+-- the two-factor failure count. In the database rather than in a file inside the api container,
+-- because a file counter loses increments under concurrent requests and starts again from zero
+-- whenever the container is recreated. Same columns, types and index names as Laravel's stock
+-- migration (api/database/migrations/0001_01_01_000001_create_cache_table.php); `expiration` is a
+-- Unix timestamp. Keys are hashes, values are counts.
+CREATE TABLE IF NOT EXISTS cache (
+  `key`      VARCHAR(255) NOT NULL,
+  value      MEDIUMTEXT   NOT NULL,
+  expiration BIGINT       NOT NULL,
+  PRIMARY KEY (`key`),
+  KEY cache_expiration_index (expiration)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cache_locks (
+  `key`      VARCHAR(255) NOT NULL,
+  owner      VARCHAR(255) NOT NULL,
+  expiration BIGINT       NOT NULL,
+  PRIMARY KEY (`key`),
+  KEY cache_locks_expiration_index (expiration)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Offene Zwei-Faktor-Vorgaenge: ein Schritt, der auf einen Code wartet.
 --
 -- purpose:
@@ -106,7 +129,7 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
 --   'confirm' – E-Mail-Code fuer eine heikle Aktion bei aktiver E-Mail-Methode
 --               (2FA ausschalten, neue Wiederherstellungscodes, Konto loeschen).
 --   'delete'  – Freigabe von Laravel an Node: „diese Person hat das Loeschen
---               vollstaendig bestaetigt" (siehe server/src/routes/account.js).
+--               vollstaendig bestaetigt" (siehe server/src/routes/internal.js).
 --               Kein Code, nur der Token; lebt zwei Minuten.
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App

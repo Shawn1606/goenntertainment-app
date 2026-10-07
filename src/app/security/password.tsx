@@ -11,7 +11,6 @@ import { FontFamily } from '@/constants/theme';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { notifyUser } from '@/lib/confirm';
-import { clearCredentials, loadCredentials, saveCredentials } from '@/lib/credential-store';
 import { passwordStrength } from '@/lib/password-strength';
 
 /**
@@ -44,13 +43,7 @@ export default function ChangePasswordScreen() {
     setErrors({});
     try {
       const res = await api.changePassword(token, current, next);
-      // Gespeicherte Zugangsdaten auf diesem Gerät mitziehen – sonst füllte der
-      // Login beim nächsten Mal das alte Passwort ein und scheiterte.
-      const saved = await loadCredentials();
-      if (saved) {
-        if (saved.email === user?.email) await saveCredentials({ email: saved.email, password: next });
-        else await clearCredentials();
-      }
+      // Nothing to update on this device: it remembers the e-mail address only (F-20).
       await notifyUser('Passwort geändert', res.message ?? 'Dein neues Passwort gilt ab sofort.');
       router.back();
     } catch (e) {

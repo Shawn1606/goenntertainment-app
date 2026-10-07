@@ -1,6 +1,7 @@
 import { API_URL } from '@/constants/config';
 import type { AccountType } from '@/domain/account';
 import type { BillingPeriod } from '@/domain/billing-period';
+import { createSessionWatch } from '@/domain/session';
 
 /**
  * Die Kontostufe wohnt in der Domain-Schicht (dort stehen auch die Rechte und
@@ -706,7 +707,11 @@ export type PublicProfile = {
     /** Bild hinter der Profil-Karte (weichgezeichnet); ältere Server: undefiniert. */
     banner?: string | null;
     account_type: AccountType | null;
-    is_admin: boolean;
+    /**
+     * Only on the own profile (`is_me`); on anyone else's the server leaves it out (F-05).
+     * Admin rights of the signed-in account come from its own record (`User.is_admin`).
+     */
+    is_admin?: boolean;
     created_at: string | null;
   };
   links: ProfileLink[];
@@ -835,8 +840,11 @@ export function needsTwoFactor(result: LoginResult): result is { two_factor: Two
   return 'two_factor' in result && !!result.two_factor;
 }
 
-/** Bestätigung zum Abschalten der 2FA / neuen Codes: Passwort ODER aktueller Code. */
-export type SecondFactorProof = { password: string } | { code: string };
+/**
+ * Bestätigung zum Abschalten der 2FA / neuen Codes: Passwort UND aktueller Code (F-19). Eines
+ * allein reicht nicht mehr – sonst genügte ein gemailter Code oder das Passwort allein.
+ */
+export type SecondFactorProof = { password: string; code: string };
 
 export type RegisterInput = {
   name: string;
@@ -921,15 +929,49 @@ function localDate(): string {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
+/**
+ * Edit the profile. The e-mail address is not part of it: it changes only with the password (and
+ * the code with two-factor sign-in) through `api.changeEmail`.
+ */
 export type UpdateProfileInput = {
   name?: string;
   username?: string;
-  email?: string;
   /** Kontotyp umstellen – serverseitig nur für Admins erlaubt (sonst 403). */
   account_type?: AccountType;
   /** Vollständige neue Interessen-Liste (IDs); ersetzt die bisherigen. */
   interests?: number[];
 };
+
+/**
+ * Every answer to an authenticated request is reported here (F-20): a 401 means the server no
+ * longer accepts the session (expired, or signed out by a password, e-mail or two-factor change
+ * elsewhere), and the auth state signs out on this device (src/lib/auth-context.tsx). Logic and
+ * tests: src/domain/session.ts.
+ */
+export const sessionWatch = createSessionWatch();
+
+/**
+ * Reads an answer: reports its status with the token the request carried, parses JSON, and
+ * throws an ApiError with the full body (bans and moderation put their details there) when the
+ * request failed. Every fetch site of this file goes through here.
+ */
+async function parseResponse<T>(response: Response, token: string | null | undefined): Promise<T> {
+  sessionWatch.report(response.status, token);
+
+  const isJson = response.headers.get('content-type')?.includes('application/json');
+  const data = isJson ? await response.json() : null;
+
+  if (!response.ok) {
+    throw new ApiError(
+      data?.message ?? 'Etwas ist schiefgelaufen.',
+      response.status,
+      data?.errors ?? {},
+      data ?? null,
+    );
+  }
+
+  return data as T;
+}
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, token } = options;
@@ -949,19 +991,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
   }
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
-
-  if (!response.ok) {
-    throw new ApiError(
-      data?.message ?? 'Etwas ist schiefgelaufen.',
-      response.status,
-      data?.errors ?? {},
-      data ?? null,
-    );
-  }
-
-  return data as T;
+  return parseResponse<T>(response, token);
 }
 
 /**
@@ -984,19 +1014,7 @@ async function upload<T>(token: string, path: string, form: FormData): Promise<T
     throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
   }
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
-
-  if (!response.ok) {
-    throw new ApiError(
-      data?.message ?? 'Etwas ist schiefgelaufen.',
-      response.status,
-      data?.errors ?? {},
-      data ?? null,
-    );
-  }
-
-  return data as T;
+  return parseResponse<T>(response, token);
 }
 
 /**
@@ -1024,12 +1042,7 @@ async function moderationUpload(
     throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
   }
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
-  if (!response.ok) {
-    throw new ApiError(data?.message ?? 'Etwas ist schiefgelaufen.', response.status, data?.errors ?? {}, data ?? null);
-  }
-  return data as { message: string };
+  return parseResponse<{ message: string }>(response, token);
 }
 
 export const api = {
@@ -1055,11 +1068,11 @@ export const api = {
       body: { challenge },
     }),
 
-  /** 2FA per E-Mail einrichten, Schritt 1: Code an die Konto-Adresse schicken. */
-  twoFactorEmailStart: (token: string) =>
+  /** 2FA per E-Mail einrichten, Schritt 1: mit dem Passwort bestätigen, Code an die Konto-Adresse. */
+  twoFactorEmailStart: (token: string, password: string) =>
     request<{ message: string; destination: string; expires_in: number; challenge: string }>(
       '/user/two-factor/email',
-      { method: 'POST', token },
+      { method: 'POST', body: { password }, token },
     ),
 
   /** 2FA per E-Mail einrichten, Schritt 2: Code bestätigen – danach ist sie an. */
@@ -1070,9 +1083,13 @@ export const api = {
       token,
     }),
 
-  /** Authenticator-App einrichten, Schritt 1: Geheimnis + otpauth-Link holen. */
-  twoFactorTotpStart: (token: string) =>
-    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', { method: 'POST', token }),
+  /** Authenticator-App einrichten, Schritt 1: mit dem Passwort bestätigen, Geheimnis + otpauth-Link holen. */
+  twoFactorTotpStart: (token: string, password: string) =>
+    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', {
+      method: 'POST',
+      body: { password },
+      token,
+    }),
 
   /** Authenticator-App einrichten, Schritt 2: ersten Code bestätigen. */
   twoFactorTotpConfirm: (token: string, code: string) =>
@@ -1093,7 +1110,7 @@ export const api = {
       token,
     }),
 
-  /** 2FA abschalten – mit Passwort oder aktuellem Code bestätigt. */
+  /** 2FA abschalten – mit Passwort und aktuellem Code bestätigt. Meldet andere Geräte ab. */
   twoFactorDisable: (token: string, proof: SecondFactorProof) =>
     request<{ user: User }>('/user/two-factor', { method: 'DELETE', body: proof, token }),
 
@@ -1104,6 +1121,13 @@ export const api = {
       body: proof,
       token,
     }),
+
+  /**
+   * Change the e-mail address (signed in): with the current password, and with two-factor sign-in
+   * also a current code. Signs out every other device; a notice goes to the previous address.
+   */
+  changeEmail: (token: string, input: { email: string; current_password: string; code?: string }) =>
+    request<{ user: User; profile_complete: boolean }>('/user/email', { method: 'PUT', body: input, token }),
 
   /** Passwort ändern (angemeldet). Meldet alle anderen Geräte ab. */
   changePassword: (token: string, currentPassword: string, password: string) =>
@@ -1124,7 +1148,7 @@ export const api = {
 
   me: (token: string) => request<{ user: User; profile_complete: boolean }>('/user', { token }),
 
-  /** Profil bearbeiten (Name/Benutzername/E-Mail/Kontotyp). Nur gesetzte Felder werden geändert. */
+  /** Profil bearbeiten (Name/Benutzername/Kontotyp). Nur gesetzte Felder werden geändert. */
   updateProfile: (token: string, input: UpdateProfileInput) =>
     request<{ user: User; profile_complete: boolean }>('/user', {
       method: 'PATCH',
@@ -1742,20 +1766,8 @@ export const api = {
       throw new ApiError('Keine Verbindung zum Server. Läuft das Backend und stimmt die Adresse?', 0);
     }
 
-    const isJson = response.headers.get('content-type')?.includes('application/json');
-    const data = isJson ? await response.json() : null;
-
-    if (!response.ok) {
-      // Kompletten Body mitgeben: bei einer automatischen Sperre stecken die
-      // Details in `body.ban` bzw. `body.moderation`.
-      throw new ApiError(
-        data?.message ?? 'Etwas ist schiefgelaufen.',
-        response.status,
-        data?.errors ?? {},
-        data ?? null,
-      );
-    }
-
-    return data as { data: Activity };
+    // Kompletten Body mitgeben (parseResponse): bei einer automatischen Sperre stecken die
+    // Details in `body.ban` bzw. `body.moderation`.
+    return parseResponse<{ data: Activity }>(response, token);
   },
 };

@@ -11,13 +11,13 @@
  *
  * Gelesen wird von allen Angemeldeten – geschrieben nur am eigenen Profil.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
@@ -26,10 +26,11 @@ import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
-import { notifyFollowers, notifyQuietly } from '../notifications.js';
+import { notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
+import { singleUpload } from '../uploads.js';
 
-const router = Router();
+const router = createRouter();
 
 const POST_DIR = path.join(process.cwd(), 'storage', 'posts');
 /** Profilbilder und Karten-Hintergruende ("Banner") des Kontos. */
@@ -37,7 +38,6 @@ const AVATAR_DIR = path.join(process.cwd(), 'storage', 'avatars');
 const USER_BANNER_DIR = path.join(process.cwd(), 'storage', 'user-banners');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** So viele Beitraege liefert ein Profil hoechstens aus. */
 const POST_LIMIT = 50;
@@ -48,30 +48,11 @@ const MAX_COMMENT = 500;
 /** So viele Kommentare liefert ein Beitrag hoechstens aus. */
 const COMMENT_LIMIT = 100;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
-
 /**
- * Multer mit eigener Fehlerbehandlung.
- *
- * Ohne das landet ein zu grosses Bild beim allgemeinen Fehler-Handler in
- * app.js – und der spricht von einem „Banner-Bild", das es bei einem Beitrag
- * gar nicht gibt.
+ * Image in the field `image` (5 MB with its own message, uploads.js) plus at most the text field
+ * `body` (posts), with some headroom.
  */
-function uploadImage(req, res, next) {
-  upload.single('image')(req, res, (err) => {
-    if (!err) {
-      return next();
-    }
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(
-        new HttpError(422, 'Das Bild darf hoechstens 5 MB gross sein.', {
-          image: ['Das Bild darf hoechstens 5 MB gross sein.'],
-        }),
-      );
-    }
-    return next(err);
-  });
-}
+const uploadImage = singleUpload('image', { maxFields: 3 });
 
 /**
  * Beitrag in die API-Form bringen.
@@ -170,6 +151,12 @@ async function loadLinks(userId) {
 /** So viele Treffer liefert die Nutzersuche hoechstens. */
 const SEARCH_LIMIT = 30;
 
+/**
+ * Longest search term: a name holds at most 255 characters (users.name in schema.sql), so a
+ * longer term can match nothing. It is answered with no results before any pattern runs (F-02).
+ */
+const MAX_SEARCH_TERM = 255;
+
 // GET /api/users?q=…  (geschuetzt) – Leute suchen (Name oder Benutzername).
 //
 // Gibt es, seit der Freunde-Bereich eine Suche braucht, die zu PERSONEN fuehrt.
@@ -180,7 +167,7 @@ const SEARCH_LIMIT = 30;
 router.get('/users', requireAuth, async (req, res, next) => {
   try {
     const term = String(req.query?.q ?? '').trim();
-    if (term.length < 2) {
+    if (term.length < 2 || term.length > MAX_SEARCH_TERM) {
       return res.json({ data: [] });
     }
 
@@ -249,8 +236,10 @@ function friendshipStateFor(row, meId) {
 // Antwort nur, wenn man den Benutzernamen schon kennt.
 router.get('/users/:username', requireAuth, async (req, res, next) => {
   try {
+    // No `is_admin` here: whether an account is an admin is told only to that account itself
+    // (F-05), and that answer comes from the viewer's own row (`req.user`, see below).
     const user = await first(
-      `SELECT id, name, username, avatar, banner, account_type, is_admin, banned_until, created_at
+      `SELECT id, name, username, avatar, banner, account_type, banned_until, created_at
          FROM users WHERE username = ?`,
       [req.params.username],
     );
@@ -297,6 +286,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
     const following = user.id === req.user.id ? false : await isFollowing(req.user.id, user.id);
     /** Folgt die Person MIR? Daraus wird in der App „Folgt dir". */
     const followsMe = user.id === req.user.id ? false : await isFollowing(user.id, req.user.id);
+    const isMe = user.id === req.user.id;
 
     res.json({
       user: {
@@ -307,7 +297,9 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
         /** Liegt in der App weichgezeichnet hinter der Profil-Karte. */
         banner: mediaUrl(req, user.banner),
         account_type: user.account_type,
-        is_admin: Boolean(user.is_admin),
+        // Only on the viewer's own profile (F-05). On anyone else's the field is left out, so
+        // looking through profiles does not tell who the admins are.
+        ...(isMe ? { is_admin: Boolean(req.user.is_admin) } : {}),
         created_at: toIso(user.created_at),
       },
       links: showsPosts ? await loadLinks(user.id) : [],
@@ -344,7 +336,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
             req.user.id,
           )
         : 'none',
-      is_me: user.id === req.user.id,
+      is_me: isMe,
     });
   } catch (err) {
     next(err);
@@ -378,15 +370,17 @@ async function followTarget(req) {
 }
 
 // POST /api/users/:id/follow  (geschuetzt) – folgen. Idempotent.
-router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
+router.post('/users/:id/follow', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const target = await followTarget(req);
     const fresh = await follow(req.user.id, target.id);
 
     // Nur bei einer WIRKLICH neuen Folge – sonst meldet jedes erneute Tippen auf
     // ein schon gefolgtes Profil noch einmal.
+    // After an unfollow the next follow is new to `follows` again: notifyOnce writes no second
+    // row for the same follower (F-07, follow/unfollow loop).
     if (fresh) {
-      await notifyQuietly({
+      await notifyOnce({
         userId: target.id,
         actorId: req.user.id,
         type: 'follow',
@@ -406,7 +400,7 @@ router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
 // Ohne `followTarget`: Entfolgen muss auch dann gehen, wenn die andere Seite
 // inzwischen blockiert hat – sonst haenge ich in einem Abo fest, das ich nicht
 // mehr loswerde.
-router.delete('/users/:id/follow', requireAuth, async (req, res, next) => {
+router.delete('/users/:id/follow', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const id = Number(req.params.id) || 0;
     await unfollow(req.user.id, id);
@@ -465,7 +459,7 @@ router.get('/users/:username/following', requireAuth, followList('following'));
 //
 // Ersetzen statt einzeln pflegen: Das Formular kennt ohnehin den vollstaendigen
 // Stand, und so gibt es keine halb gespeicherten Zwischenzustaende.
-router.put('/me/links', requireAuth, requireProfile, async (req, res, next) => {
+router.put('/me/links', requireAuth, rateLimit('content'), requireProfile, async (req, res, next) => {
   try {
     const { links, error } = parseLinkList(req.body?.links);
     if (error) {
@@ -632,13 +626,13 @@ function clearProfileImage(kind) {
 // Bewusst OHNE `requireProfile`: Ein Gesicht und ein Hintergrund gehoeren zu
 // jedem Konto. Die Stufe entscheidet, ob es Beitraege und Social-Links gibt
 // (siehe oben) – nicht, ob man ein Profilbild haben darf.
-router.post('/me/avatar', requireAuth, uploadImage, setProfileImage('avatar'));
-router.delete('/me/avatar', requireAuth, clearProfileImage('avatar'));
-router.post('/me/banner', requireAuth, uploadImage, setProfileImage('banner'));
-router.delete('/me/banner', requireAuth, clearProfileImage('banner'));
+router.post('/me/avatar', requireAuth, rateLimit('moderated'), uploadImage, setProfileImage('avatar'));
+router.delete('/me/avatar', requireAuth, rateLimit('content'), clearProfileImage('avatar'));
+router.post('/me/banner', requireAuth, rateLimit('moderated'), uploadImage, setProfileImage('banner'));
+router.delete('/me/banner', requireAuth, rateLimit('content'), clearProfileImage('banner'));
 
 // POST /api/posts  (geschuetzt, ab Creator; multipart wegen Bild)
-router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res, next) => {
+router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploadImage, async (req, res, next) => {
   try {
     const body = String(req.body?.body ?? '').trim();
     const v = new Validator(req.body ?? {});
@@ -728,7 +722,7 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
 // gibt es Loeschen und neu anlegen. Der Text laeuft durch dieselbe
 // KI-Verifizierung wie beim Anlegen, sonst waere Bearbeiten die Luecke, durch die
 // man sie umgeht.
-router.patch('/posts/:id', requireAuth, async (req, res, next) => {
+router.patch('/posts/:id', requireAuth, rateLimit('moderated'), async (req, res, next) => {
   try {
     const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [
       req.params.id,
@@ -796,7 +790,7 @@ async function loadPostOr404(id) {
 }
 
 // POST /api/posts/:id/like  (geschuetzt) – idempotent.
-router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
+router.post('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, post.user_id)) {
@@ -811,8 +805,10 @@ router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
 
     // Nur beim ERSTEN Mal melden – sonst waere Like/Unlike/Like eine Glocke,
     // die man beliebig oft laeuten kann.
+    // A fresh row in post_likes alone is not "the first time": after an unlike the next like is
+    // fresh again. notifyOnce writes no second row for the same fan and post (F-07).
     if (result.affectedRows === 1) {
-      await notifyQuietly({
+      await notifyOnce({
         userId: post.user_id,
         actorId: req.user.id,
         type: 'like',
@@ -829,7 +825,7 @@ router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/posts/:id/like  (geschuetzt) – Gefaellt mir zuruecknehmen.
-router.delete('/posts/:id/like', requireAuth, async (req, res, next) => {
+router.delete('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     await pool.query('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?', [
@@ -876,7 +872,7 @@ router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
 //
 // Bewusst OHNE `requireProfile`: Kommentieren darf jedes Konto. Die Stufe
 // entscheidet, wer einen eigenen Auftritt hat – nicht, wer mitreden darf.
-router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
+router.post('/posts/:id/comments', requireAuth, rateLimit('comment'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, post.user_id)) {
@@ -950,7 +946,7 @@ router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/comments/:id  (geschuetzt) – eigener Kommentar, eigener Beitrag, Admin.
-router.delete('/comments/:id', requireAuth, async (req, res, next) => {
+router.delete('/comments/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const row = await first(
       `SELECT c.id, c.user_id, c.post_id, p.user_id AS post_user_id
@@ -973,7 +969,7 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/posts/:id  (geschuetzt) – eigener Beitrag; Admins jeden.
-router.delete('/posts/:id', requireAuth, async (req, res, next) => {
+router.delete('/posts/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [req.params.id]);
     if (!post) throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');

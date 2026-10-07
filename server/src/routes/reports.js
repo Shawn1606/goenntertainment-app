@@ -18,14 +18,15 @@
  * sofort und nur fuer die eigene Sicht (siehe `routes/friends.js`). Beides
  * zusammen ist die ehrliche Antwort auf „was kann ich jetzt tun?".
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import { parseReportInput } from '../reports.js';
 import { mediaUrl, publicBase } from '../media.js';
 
-const router = Router();
+const router = createRouter();
 
 /**
  * Gibt es den gemeldeten Gegenstand ueberhaupt?
@@ -49,7 +50,7 @@ async function targetExists(targetType, targetId) {
 }
 
 // POST /api/reports  (geschuetzt) – etwas melden.
-router.post('/reports', requireAuth, async (req, res, next) => {
+router.post('/reports', requireAuth, rateLimit('report'), async (req, res, next) => {
   try {
     const parsed = parseReportInput(req.body);
     if (parsed.error) throw new HttpError(422, parsed.error, { reason: [parsed.error] });
@@ -239,7 +240,7 @@ router.get('/admin/reports', requireAuth, requireAdmin, async (req, res, next) =
 // PATCH /api/admin/reports/:id  (nur Admin) – Meldung als bearbeitet oder
 // verworfen markieren. Was mit dem Inhalt passiert, entscheidet der Admin mit den
 // bestehenden Werkzeugen; hier wird nur die Liste abgearbeitet.
-router.patch('/admin/reports/:id', requireAuth, requireAdmin, async (req, res, next) => {
+router.patch('/admin/reports/:id', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const status = String(req.body?.status ?? '');
     if (!['open', 'reviewed', 'dismissed'].includes(status)) {

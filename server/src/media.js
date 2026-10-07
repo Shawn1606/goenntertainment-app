@@ -27,10 +27,15 @@
  * wirft dort den Port weg, und ohne ":8000" zeigte die URL auf Port 80.)
  *
  * Nur der ERSTE Eintrag zaehlt – bei mehreren Proxys haengt jeder seinen an.
+ *
+ * And only from the trusted hop (app.js 'trust proxy', i.e. Laravel; F-31), the same rule
+ * Express applies to X-Forwarded-Proto behind `req.protocol`: from any other peer the header is
+ * ignored, so nobody else can choose the host in the image addresses Node hands out.
  */
 export function publicBase(req) {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL;
-  const forwarded = String(req.get('x-forwarded-host') ?? '').split(',')[0].trim();
+  const trusted = req.app.get('trust proxy fn')(req.socket.remoteAddress, 0);
+  const forwarded = trusted ? String(req.get('x-forwarded-host') ?? '').split(',')[0].trim() : '';
   return `${req.protocol}://${forwarded || req.get('host')}`;
 }
 

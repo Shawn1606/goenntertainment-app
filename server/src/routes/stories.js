@@ -23,19 +23,20 @@
  * Storys ueberall kennt – und die einzige, bei der die Leiste nach dem Ansehen
  * nicht wieder bei derselben Story anfaengt.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
 import { notifyFollowers } from '../notifications.js';
 import { loadUser } from '../people.js';
+import { singleUpload } from '../uploads.js';
 // Spalten, Umwandlung und Filter wohnen in `../stories.js`: Profilseite und
 // Personenlisten fragen dasselbe, und vier Abschriften derselben Abfrage sind
 // vier Wahrheiten darueber, was „laufende Story" heisst (siehe dort).
@@ -48,32 +49,17 @@ import {
   transformStory,
 } from '../stories.js';
 
-const router = Router();
+const router = createRouter();
 
 const STORY_DIR = path.join(process.cwd(), 'storage', 'stories');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /** Laenge der Bildunterschrift – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_CAPTION = 200;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
-
-/** Multer mit eigener Fehlermeldung – der allgemeine Handler spricht von Bannern. */
-function uploadImage(req, res, next) {
-  upload.single('image')(req, res, (err) => {
-    if (!err) return next();
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(
-        new HttpError(422, 'Das Bild darf hoechstens 5 MB gross sein.', {
-          image: ['Das Bild darf hoechstens 5 MB gross sein.'],
-        }),
-      );
-    }
-    return next(err);
-  });
-}
+/** Image in the field `image` (5 MB with its own message, uploads.js) plus the caption, with some headroom. */
+const uploadImage = singleUpload('image', { maxFields: 3 });
 
 /** Verlangt ein Konto, das veroeffentlichen darf. Laeuft NACH requireAuth. */
 function requirePublisher(req, res, next) {
@@ -161,7 +147,7 @@ router.get('/users/:id/stories', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/stories  (geschuetzt, ab Creator; multipart wegen Bild)
-router.post('/stories', requireAuth, requirePublisher, uploadImage, async (req, res, next) => {
+router.post('/stories', requireAuth, rateLimit('moderated'), requirePublisher, uploadImage, async (req, res, next) => {
   try {
     const caption = String(req.body?.caption ?? '').trim();
     const v = new Validator(req.body ?? {});
@@ -246,7 +232,7 @@ router.post('/stories', requireAuth, requirePublisher, uploadImage, async (req, 
 });
 
 // POST /api/stories/:id/view  (geschuetzt) – als gesehen merken (idempotent).
-router.post('/stories/:id/view', requireAuth, async (req, res, next) => {
+router.post('/stories/:id/view', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const story = await first('SELECT id FROM stories WHERE id = ? AND expires_at > NOW()', [
       req.params.id,
@@ -265,7 +251,7 @@ router.post('/stories/:id/view', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/stories/:id  (geschuetzt) – eigene Story; Admins jede.
-router.delete('/stories/:id', requireAuth, async (req, res, next) => {
+router.delete('/stories/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const story = await first('SELECT id, user_id, image_path FROM stories WHERE id = ?', [
       req.params.id,

@@ -1456,6 +1456,15 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
   dort die `MAIL_*`-Zeilen aus `api/.env.example` übernehmen (`MAIL_MAILER=smtp`,
   `MAIL_HOST=127.0.0.1`, `MAIL_PORT=1025`). Danach die alte `api/storage/logs/laravel.log`
   löschen (sie kann Codes enthalten). Ab dann stehen Codes nie mehr in einem Log.
+- Node beantwortet keine Laravel-Pfade mehr (Anmelden, Registrieren, eigenes Konto,
+  Fortschritt, Rangliste): Die App muss mit Laravel auf Port 8000 sprechen, Node läuft dahinter
+  auf 8001. Konto löschen geht von Laravel über einen internen Node-Pfad mit gemeinsamem
+  Schlüssel. In ein vorhandenes `api/.env` und `server/.env` deshalb die Zeile
+  `NODE_INTERNAL_SECRET=...` aus den jeweiligen `.env.example` übernehmen (in beiden Dateien
+  derselbe Wert), in `api/.env` außerdem `NODE_FALLBACK_URL` und `TRUSTED_PROXIES` (leer) wie in
+  `api/.env.example`. Node prüft seine Gesundheit jetzt unter `/internal/health` statt
+  `/api/health`. Auf dem Server sind `NODE_INTERNAL_SECRET` und `APP_NET_PREFIX` in
+  `deploy/.env` Pflicht (siehe `deploy/.env.example`).
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.

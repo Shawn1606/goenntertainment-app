@@ -8,6 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
+    "seed:admin": "node src/seed.js --only=admin",
     "import": "node src/import/run.js",
     "test": "node --test \"test/*.test.js\""
   },
@@ -16,7 +17,7 @@
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
-    "multer": "^2.0.1",
+    "multer": "^2.4.0",
     "mysql2": "^3.11.5"
   }
 }

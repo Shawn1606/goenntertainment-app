@@ -33,6 +33,10 @@ RUN mkdir -p storage/avatars storage/banners storage/evidence \
 # Nicht als root laufen. Das Abbild bringt den Benutzer `node` schon mit; er
 # braucht Schreibrecht auf storage/, weil dort die Uploads landen.
 RUN chown -R node:node /app/storage
+
+# Production build: the server checks its required settings before it starts and refuses to
+# run without them (src/config.js). The compose sets the same value.
+ENV NODE_ENV=production
 USER node
 
 EXPOSE 8000

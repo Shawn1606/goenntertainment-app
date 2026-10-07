@@ -1,25 +1,28 @@
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import multer from 'multer';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, requireAdmin, PERMANENT_BAN_UNTIL, setBan, recordBanEvidence } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { Validator, HttpError, isAlphaDash } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
+import { MSG_RESERVED_USERNAME, isReservedUsernameInDatabase } from '../reserved-accounts.js';
 import { REQUESTABLE_ACCOUNT_TYPES } from '../accounts.js';
 import { transformRequest } from './upgrades.js';
 import { mediaUrl, publicBase } from '../media.js';
 import { deleteUserAccount } from '../account-deletion.js';
+import { singleUpload } from '../uploads.js';
 
-const router = Router();
+const router = createRouter();
 
 // Beweis-Bilder (Screenshots) landen unter storage/evidence und werden wie die
 // Banner ueber /storage ausgeliefert.
 const EVIDENCE_DIR = path.join(process.cwd(), 'storage', 'evidence');
 const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
 const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+// Evidence image (5 MB, uploads.js) plus the fields `reason` and `minutes`, with some headroom.
+const uploadEvidence = singleUpload('evidence', { maxFields: 4 });
 
 /** Speichert ein hochgeladenes Beweis-Bild und gibt den relativen Pfad zurueck (oder null). */
 function saveEvidenceImage(file) {
@@ -185,13 +188,21 @@ async function loadTargetUser(req) {
 }
 
 // PATCH /api/admin/users/:id  (nur Admin) – Benutzername aendern.
-router.patch('/users/:id', requireAuth, requireAdmin, async (req, res, next) => {
+router.patch('/users/:id', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
     const v = new Validator(req.body ?? {});
     if (username.length < 3 || username.length > 30 || !isAlphaDash(username)) {
       v.add('username', 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).');
+    } else if (
+      username.toLowerCase() !== String(user.username ?? '').toLowerCase() &&
+      (await isReservedUsernameInDatabase(pool, username))
+    ) {
+      // The system's own names (shared/reserved-accounts.json) are not handed to another account,
+      // not even by an admin (F-05); an account that already has one keeps it. Compared the way
+      // the database compares usernames, so a lookalike of a reserved name is refused as well.
+      v.add('username', MSG_RESERVED_USERNAME);
     } else {
       // Auch fuer Admins: Umbenennen ist genau der Weg, auf dem ein anstoessiger
       // Altname verschwinden soll – nicht der, auf dem ein neuer entsteht.
@@ -225,7 +236,7 @@ function requireReason(req) {
 
 // POST /api/admin/users/:id/ban  (nur Admin) – dauerhaft sperren.
 // multipart: Feld `reason` (Pflicht) + optionales Beweis-Bild `evidence`.
-router.post('/users/:id/ban', requireAuth, requireAdmin, upload.single('evidence'), async (req, res, next) => {
+router.post('/users/:id/ban', requireAuth, rateLimit('admin'), requireAdmin, uploadEvidence, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);
@@ -240,7 +251,7 @@ router.post('/users/:id/ban', requireAuth, requireAdmin, upload.single('evidence
 
 // POST /api/admin/users/:id/timeout  (nur Admin) – zeitlich sperren.
 // multipart: Felder `minutes` + `reason` (Pflicht) + optionales Beweis-Bild `evidence`.
-router.post('/users/:id/timeout', requireAuth, requireAdmin, upload.single('evidence'), async (req, res, next) => {
+router.post('/users/:id/timeout', requireAuth, rateLimit('admin'), requireAdmin, uploadEvidence, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     const reason = requireReason(req);
@@ -259,7 +270,7 @@ router.post('/users/:id/timeout', requireAuth, requireAdmin, upload.single('evid
 });
 
 // POST /api/admin/users/:id/unban  (nur Admin) – Sperre/Timeout aufheben (Grund leeren).
-router.post('/users/:id/unban', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/users/:id/unban', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     await pool.query('UPDATE users SET banned_until = NULL, ban_reason = NULL, updated_at = NOW() WHERE id = ?', [
@@ -277,7 +288,7 @@ router.post('/users/:id/unban', requireAuth, requireAdmin, async (req, res, next
 // Selbst-Loeschen ueber DELETE /api/me. Der letzte Admin ist hier nicht zu
 // schuetzen: Wer loescht, ist selbst Admin und bleibt (loadTargetUser verbietet
 // das eigene Konto).
-router.delete('/users/:id', requireAuth, requireAdmin, async (req, res, next) => {
+router.delete('/users/:id', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const user = await loadTargetUser(req);
     await deleteUserAccount(user.id);
@@ -494,7 +505,7 @@ async function loadPendingRequest(req) {
 }
 
 // POST /api/admin/upgrade-requests/:id/approve  (nur Admin) – Stufe freischalten.
-router.post('/upgrade-requests/:id/approve', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/upgrade-requests/:id/approve', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const request = await loadPendingRequest(req);
 
@@ -518,7 +529,7 @@ router.post('/upgrade-requests/:id/approve', requireAuth, requireAdmin, async (r
 
 // POST /api/admin/upgrade-requests/:id/reject  (nur Admin) – Anfrage ablehnen.
 // Body: { reason? } – freiwillig, wird der Person unter ihrer Anfrage gezeigt.
-router.post('/upgrade-requests/:id/reject', requireAuth, requireAdmin, async (req, res, next) => {
+router.post('/upgrade-requests/:id/reject', requireAuth, rateLimit('admin'), requireAdmin, async (req, res, next) => {
   try {
     const request = await loadPendingRequest(req);
     const note = typeof req.body?.reason === 'string' ? req.body.reason.trim().slice(0, 255) : '';

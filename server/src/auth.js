@@ -1,58 +1,31 @@
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import { tokenLifetimeMinutes } from './config.js';
 import { pool, first } from './db.js';
 import { mediaUrl } from './media.js';
-
-const TOKENABLE_TYPE = 'App\\Models\\User';
-
-/** Zufaelliger 40-Zeichen-String wie Laravels Str::random(40). */
-function randomTokenString(length = 40) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  const bytes = crypto.randomBytes(length);
-  let out = '';
-  for (let i = 0; i < length; i += 1) {
-    out += chars[bytes[i] % chars.length];
-  }
-  return out;
-}
 
 function sha256(value) {
   return crypto.createHash('sha256').update(value).digest('hex');
 }
 
-/**
- * Legt einen persoenlichen Zugriffs-Token an – gleiches Format wie Laravel Sanctum:
- * gespeichert wird nur der sha256-Hash, zurueckgegeben wird "{id}|{klartext}".
+/*
+ * Tokens are issued by Laravel (Sanctum) only: sign-up and sign-in are Laravel's routes. Node
+ * reads them (requireAuth below) and deletes them (bans, account deletion).
+ * The server tests write tokens of the same format themselves (test/support/fixtures.js).
  */
-export async function createToken(userId, name = 'mobile') {
-  const plain = randomTokenString();
-  const [result] = await pool.query(
-    `INSERT INTO personal_access_tokens
-       (tokenable_type, tokenable_id, name, token, abilities, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-    [TOKENABLE_TYPE, userId, name, sha256(plain), '["*"]'],
-  );
-  return `${result.insertId}|${plain}`;
-}
+
+/**
+ * The owner type of every token Laravel issues: `App\Models\User` (Sanctum's morph type). A token
+ * of any other type is not an account's token. Named mirror: api/app/Models/User.php (the class
+ * name) and TOKENABLE_TYPE in test/support/fixtures.js.
+ */
+export const TOKENABLE_TYPE = 'App\\Models\\User';
 
 /**
  * Kostenfaktor fuer bcrypt. 10 ist weiterhin sicher (Laravel-Standard) und rund
  * 4x schneller als 12 (~80 ms statt ~310 ms mit reinem bcryptjs).
  */
 const BCRYPT_ROUNDS = 10;
-
-/**
- * Prueft bcrypt-Passwoerter; normalisiert Laravels $2y$-Praefix fuer bcryptjs.
- * Async (bcrypt.compare statt compareSync), damit der Event-Loop nicht blockiert –
- * sonst haengen waehrend eines Logins ALLE anderen Anfragen.
- */
-export function checkPassword(plain, hash) {
-  if (!hash) {
-    return Promise.resolve(false);
-  }
-  const normalized = hash.startsWith('$2y$') ? `$2b$${hash.slice(4)}` : hash;
-  return bcrypt.compare(plain, normalized);
-}
 
 /** Async (bcrypt.hash statt hashSync) – blockiert den Event-Loop nicht. */
 export function hashPassword(plain) {
@@ -74,22 +47,6 @@ export function isBanned(user) {
 }
 
 /**
- * Sperr-Details fuer die Anzeige beim Login: Grund, Ende (ISO) und ob dauerhaft.
- * permanent = banned_until liegt >100 Jahre in der Zukunft (echter Bann).
- */
-export function banInfo(user) {
-  const untilMs = user?.banned_until
-    ? new Date(`${String(user.banned_until).replace(' ', 'T')}Z`).getTime()
-    : 0;
-  const permanent = untilMs > Date.now() + 100 * 365 * 24 * 3600 * 1000;
-  return {
-    reason: user?.ban_reason ?? null,
-    permanent,
-    banned_until: permanent || !untilMs ? null : `${String(user.banned_until).replace(' ', 'T')}Z`,
-  };
-}
-
-/**
  * Sperrt einen Nutzer bis `until` (SQL-String 'YYYY-MM-DD HH:MM:SS', UTC) mit Grund
  * und meldet ihn sofort ab. Wird vom Admin-Panel und von der KI-Moderation genutzt.
  */
@@ -100,7 +57,10 @@ export async function setBan(userId, until, reason) {
     userId,
   ]);
   // Bestehende Tokens entwerten -> sofort abgemeldet.
-  await pool.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [userId]);
+  await pool.query('DELETE FROM personal_access_tokens WHERE tokenable_type = ? AND tokenable_id = ?', [
+    TOKENABLE_TYPE,
+    userId,
+  ]);
 }
 
 /**
@@ -132,6 +92,7 @@ export function serializeUser(row, req = null) {
   // wie im #[Hidden] von api/app/Models/User.php. Secret und Codes sind zwar
   // verschluesselt, aber verschluesselt ist nicht dasselbe wie „darf raus":
   // Jede Kopie ausserhalb der DB ist eine, die man nicht mehr zurueckholt.
+  // `google_id` too (same list): Google sign-in was removed; the column is inert.
   const {
     password,
     remember_token,
@@ -139,6 +100,7 @@ export function serializeUser(row, req = null) {
     two_factor_recovery_codes,
     two_factor_confirmed_at,
     two_factor_last_step,
+    google_id,
     ...safe
   } = row;
   // is_admin kommt aus der DB als 0/1 (oder fehlt bei alten DBs) -> echter Boolean.
@@ -173,21 +135,31 @@ export async function userPayload(row, req = null) {
   return { ...safe, interests: await loadUserInterests(row.id) };
 }
 
-/** Profil vollstaendig: Username + Kontotyp gesetzt und mind. 3 Interessen. */
-export async function profileComplete(user) {
-  if (!user || user.username === null || user.account_type === null) {
-    return false;
-  }
-  const row = await first(
-    'SELECT COUNT(*) AS c FROM interest_user WHERE user_id = ?',
-    [user.id],
-  );
-  return Number(row?.c ?? 0) >= 3;
-}
+/**
+ * The token-validity rule (F-20), one rule on both backends - a named mirror of Laravel's:
+ *   - the token belongs to an account: `tokenable_type` App\Models\User;
+ *   - it has an expiry date that has not passed: AppServiceProvider (api/app/Providers) refuses a
+ *     token without `expires_at`, Sanctum's guard one whose `expires_at` has passed;
+ *   - it was issued within the lifetime: Sanctum's guard refuses a token whose `created_at` is
+ *     older than sanctum.expiration, which is SANCTUM_EXPIRATION (tokenLifetimeMinutes here). So a
+ *     lower setting ends older sessions at once on both backends, whatever their stored
+ *     `expires_at` says (both containers read the same setting: deploy/docker-compose.yml).
+ * Laravel writes both dates when it issues a token (App\Support\Sessions). The comparisons run in
+ * SQL against the database clock, the clock Laravel's dates are read against too (production runs
+ * both in UTC). api/tests/Feature/TokenLifetimeTest.php and test/token-expiry.test.js pin the same
+ * cases; scripts/ci/check-mirrors.mjs keeps the lifetime's default, its format and its setting
+ * equal on both sides.
+ */
+const TOKEN_IS_VALID_SQL = `tokenable_type = ?
+          AND expires_at IS NOT NULL AND expires_at > NOW()
+          AND created_at > NOW() - INTERVAL ? MINUTE`;
 
 /**
  * Express-Middleware: verlangt einen gueltigen Bearer-Token (Sanctum-kompatibel).
  * Setzt req.user (DB-Zeile) und req.tokenId.
+ *
+ * Valid: see TOKEN_IS_VALID_SQL. With an invalid SANCTUM_EXPIRATION (the server does not start
+ * with one) no token is accepted: the request fails instead of falling back to some lifetime.
  */
 export async function requireAuth(req, res, next) {
   try {
@@ -201,10 +173,19 @@ export async function requireAuth(req, res, next) {
 
     const id = bearer.slice(0, sep);
     const plain = bearer.slice(sep + 1);
+    if (!/^\d{1,20}$/.test(id)) {
+      return res.status(401).json({ message: 'Unauthenticated.' });
+    }
+
+    const lifetime = tokenLifetimeMinutes();
+    if (lifetime === null) {
+      throw new Error('SANCTUM_EXPIRATION is not a positive whole number of minutes');
+    }
 
     const token = await first(
-      'SELECT * FROM personal_access_tokens WHERE id = ? AND token = ?',
-      [id, sha256(plain)],
+      `SELECT * FROM personal_access_tokens
+        WHERE id = ? AND token = ? AND ${TOKEN_IS_VALID_SQL}`,
+      [id, sha256(plain), TOKENABLE_TYPE, lifetime],
     );
     if (!token) {
       return res.status(401).json({ message: 'Unauthenticated.' });

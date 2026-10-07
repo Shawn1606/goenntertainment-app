@@ -22,10 +22,8 @@
       ]
     },
     {
-      "reason": "Stock Laravel skeleton tables for the database cache, cache locks, sessions and queues. The deploy runs Laravel with CACHE_STORE=file, SESSION_DRIVER=array and QUEUE_CONNECTION=sync (deploy/docker-compose.yml) and never runs Laravel migrations (api/docker/entrypoint.sh); only a local `composer setup` creates these tables.",
+      "reason": "Stock Laravel skeleton tables for sessions and queues. The deploy runs Laravel with SESSION_DRIVER=array and QUEUE_CONNECTION=sync (deploy/docker-compose.yml) and never runs Laravel migrations (api/docker/entrypoint.sh); only a local `composer setup` creates these tables. (The cache tables are in server/schema.sql since the deploy uses CACHE_STORE=database.)",
       "entries": [
-        "laravel/migrate table-extra cache(key,value,expiration)",
-        "laravel/migrate table-extra cache_locks(key,owner,expiration)",
         "laravel/migrate table-extra failed_jobs(id,uuid,connection,queue,payload,exception,failed_at)",
         "laravel/migrate table-extra job_batches(id,name,total_jobs,pending_jobs,failed_jobs,failed_job_ids,options,cancelled_at,created_at,finished_at)",
         "laravel/migrate table-extra jobs(id,queue,payload,attempts,reserved_at,available_at,created_at)",

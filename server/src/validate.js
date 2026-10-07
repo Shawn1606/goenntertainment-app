@@ -36,7 +36,8 @@ export class HttpError extends Error {
   }
 }
 
-export const isEmail = (v) => typeof v === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+// No e-mail check here: Node accepts no e-mail address from a client (sign-up, sign-in, account
+// and password reset are Laravel's routes; Laravel checks addresses).
 export const isAlphaDash = (v) => typeof v === 'string' && /^[\w-]+$/.test(v);
 
 /** Alle IDs existieren in der Tabelle? Gibt die fehlenden zurueck. */

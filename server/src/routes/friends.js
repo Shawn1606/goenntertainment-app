@@ -19,9 +19,10 @@
  * Gruppen-Chat sitzen und wuerde weiterlesen – und „blockiert" waere eine Anzeige
  * ohne Wirkung.
  */
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError } from '../validate.js';
 import {
   USER_COLUMNS,
@@ -34,7 +35,7 @@ import {
 import { dropFollowsBetween } from '../follows.js';
 import { attachStories } from '../stories.js';
 
-const router = Router();
+const router = createRouter();
 
 // GET /api/friends  (geschuetzt) – Freunde, eingehende und offene Anfragen.
 router.get('/friends', requireAuth, async (req, res, next) => {
@@ -92,7 +93,7 @@ router.get('/friends', requireAuth, async (req, res, next) => {
 // „Ich will mit dieser Person befreundet sein." Liegt schon eine Anfrage in die
 // andere Richtung vor, ist die Antwort darauf ein Ja – und nicht eine zweite,
 // gekreuzte Anfrage, auf die dann beide warten.
-router.post('/friends', requireAuth, async (req, res, next) => {
+router.post('/friends', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const other = await loadUser(req.body?.user_id);
     if (other.id === req.user.id) {
@@ -143,7 +144,7 @@ router.post('/friends', requireAuth, async (req, res, next) => {
 
 // DELETE /api/friends/:userId  (geschuetzt) – Freundschaft beenden, Anfrage
 // zuruecknehmen oder ablehnen. Alles dasselbe: die Zeile ist weg.
-router.delete('/friends/:userId', requireAuth, async (req, res, next) => {
+router.delete('/friends/:userId', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const existing = await existingBetween(req.user.id, Number(req.params.userId) || 0);
     if (!existing) throw new HttpError(404, 'Da ist keine Verbindung.');
@@ -186,7 +187,7 @@ router.get('/blocks', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/blocks  (geschuetzt) – Konto blockieren.
-router.post('/blocks', requireAuth, async (req, res, next) => {
+router.post('/blocks', requireAuth, rateLimit('block'), async (req, res, next) => {
   try {
     const other = await loadUser(req.body?.user_id);
     if (other.id === req.user.id) {
@@ -219,7 +220,7 @@ router.post('/blocks', requireAuth, async (req, res, next) => {
 //
 // Die Freundschaft kommt dadurch NICHT zurueck: Sie war beendet, und ein
 // Wiederherstellen waere eine Verbindung, der niemand neu zugestimmt hat.
-router.delete('/blocks/:userId', requireAuth, async (req, res, next) => {
+router.delete('/blocks/:userId', requireAuth, rateLimit('block'), async (req, res, next) => {
   try {
     const targetId = Number(req.params.userId) || 0;
     const row = await first(

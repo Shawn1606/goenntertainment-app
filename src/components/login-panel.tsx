@@ -13,7 +13,7 @@ import { SUPPORT_EMAIL, supportMailto } from '@/constants/links';
 import { Brand, MaxContentWidth, Spacing, FontFamily } from '@/constants/theme';
 import { api, ApiError, type BanInfo, type TwoFactorChallenge } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { clearCredentials, loadCredentials, saveCredentials } from '@/lib/credential-store';
+import { clearSavedEmail, loadSavedEmail, saveEmail } from '@/lib/credential-store';
 import { passwordStrength } from '@/lib/password-strength';
 import { flagWeakPassword } from '@/lib/security-nudge';
 
@@ -82,15 +82,15 @@ export function LoginPanel({ active, onBack }: Props) {
     return () => clearTimeout(timer);
   }, [resendIn]);
 
-  // Gespeicherte Zugangsdaten vorausfüllen, sobald der Login sichtbar wird.
+  // Gemerkte E-Mail-Adresse vorausfüllen, sobald der Login sichtbar wird. Only the address is
+  // remembered; the password manager of the system can still fill the password field.
   useEffect(() => {
     if (!active) return;
     let alive = true;
     (async () => {
-      const saved = await loadCredentials();
+      const saved = await loadSavedEmail();
       if (alive && saved) {
-        setEmail(saved.email);
-        setPassword(saved.password);
+        setEmail(saved);
         setRemember(true);
       }
     })();
@@ -112,7 +112,7 @@ export function LoginPanel({ active, onBack }: Props) {
   }
 
   /**
-   * Nach einer ERFOLGREICHEN Anmeldung: Zugangsdaten merken (oder vergessen) und
+   * Nach einer ERFOLGREICHEN Anmeldung: die E-Mail-Adresse merken (oder vergessen) und
    * die Stärke des gerade eingegebenen Passworts festhalten. Gespeichert wird nur
    * „schwach ja/nein" – die Startseite zeigt dann einmal einen Hinweis (siehe
    * src/lib/security-nudge.ts). Erst hier, nicht schon nach dem Passwort: Bei
@@ -120,9 +120,9 @@ export function LoginPanel({ active, onBack }: Props) {
    */
   async function finishLogin() {
     if (remember) {
-      await saveCredentials({ email: email.trim(), password });
+      await saveEmail(email.trim());
     } else {
-      await clearCredentials();
+      await clearSavedEmail();
     }
     flagWeakPassword(passwordStrength(password, [email.trim()]).score <= 1);
     // Der Auth-Gate wechselt jetzt automatisch in die App.
@@ -321,7 +321,7 @@ export function LoginPanel({ active, onBack }: Props) {
                 trackColor={{ false: '#e5e7eb', true: Brand.purple }}
                 thumbColor="#ffffff"
               />
-              <Text style={styles.rememberText}>Passwort speichern</Text>
+              <Text style={styles.rememberText}>E-Mail-Adresse merken</Text>
             </View>
 
             <Pressable onPress={() => router.push('/forgot-password')} hitSlop={8}>

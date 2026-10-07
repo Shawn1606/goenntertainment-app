@@ -99,6 +99,10 @@ nano .env
 ```
 
 Pflicht sind `DOMAIN`, `DB_PASSWORD`, `DB_ROOT_PASSWORD` und `APP_KEY`.
+Also required: `NODE_INTERNAL_SECRET`, the secret Laravel and Node share for Node's internal
+routes (generate it once with `openssl rand -hex 32`), and `APP_NET_PREFIX`, the containers'
+private /24 network (see the comment in `.env.example`). Without them `docker compose` refuses
+to start.
 
 Passwörter erzeugen:
 
@@ -162,6 +166,18 @@ docker compose exec node npm run seed
 
 > Achtung: `seed` legt auch Beispieldaten an. Auf einem Server, der schon echte
 > Nutzer:innen hat, vorher `server/src/seed.js` lesen.
+
+The admin step only creates the admin. If an account with `ADMIN_EMAIL` or the username
+`admin` already exists, it refuses, changes nothing and exits with code 1; it never promotes an
+account or resets the admin's password. To run only the admin step:
+
+```bash
+docker compose exec node npm run seed:admin
+```
+
+`seed:admin` exits with code 1 when `ADMIN_EMAIL` or `ADMIN_PASSWORD` is empty. The usernames and
+the e-mail domain the seed uses for its own accounts are reserved (`shared/reserved-accounts.json`):
+nobody can register them.
 
 ---
 

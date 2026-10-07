@@ -33,7 +33,9 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // No routes for this disk: the app stores nothing here, and with `true` Laravel would
+            // register GET and PUT storage/{path} (signed URLs) that no client uses.
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

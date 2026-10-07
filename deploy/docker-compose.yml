@@ -67,12 +67,22 @@ services:
       storage-init:
         condition: service_completed_successfully
     environment:
+      # Production build: the server refuses to start without its required settings
+      # (server/src/config.js names them).
+      NODE_ENV: production
       DB_HOST: db
       DB_PORT: '3306'
       DB_DATABASE: goenntertainment
       DB_USERNAME: goenn
       DB_PASSWORD: ${DB_PASSWORD:?}
       PORT: '8000'
+      # Shared with api: Laravel sends it on Node's internal routes (account deletion).
+      NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
+      # The only hop Node takes the client address from: api's fixed address below.
+      NODE_TRUST_PROXY: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
+      # Access-token lifetime in minutes, the same setting as api's: Node refuses a token issued
+      # longer ago too (src/auth.js). Empty = the default in code (30 days).
+      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
@@ -86,10 +96,25 @@ services:
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
       FEATURE_IMPORTED_EVENTS: ${FEATURE_IMPORTED_EVENTS:-}
       FEATURE_ACCOUNT_TIERS: ${FEATURE_ACCOUNT_TIERS:-}
+      # Write limits per route class (server/src/rate-limit.js); empty = the code's defaults, an
+      # invalid value stops the start. The counters live in Node's memory: keep ONE node process.
+      WRITE_LIMIT_MODERATED: ${WRITE_LIMIT_MODERATED:-}
+      WRITE_LIMIT_COMMENT: ${WRITE_LIMIT_COMMENT:-}
+      WRITE_LIMIT_CHAT: ${WRITE_LIMIT_CHAT:-}
+      WRITE_LIMIT_REACTION: ${WRITE_LIMIT_REACTION:-}
+      WRITE_LIMIT_RELATIONSHIP: ${WRITE_LIMIT_RELATIONSHIP:-}
+      WRITE_LIMIT_BLOCK: ${WRITE_LIMIT_BLOCK:-}
+      WRITE_LIMIT_REPORT: ${WRITE_LIMIT_REPORT:-}
+      WRITE_LIMIT_STATE: ${WRITE_LIMIT_STATE:-}
+      WRITE_LIMIT_CONTENT: ${WRITE_LIMIT_CONTENT:-}
+      WRITE_LIMIT_ACCOUNT: ${WRITE_LIMIT_ACCOUNT:-}
+      WRITE_LIMIT_ADMIN: ${WRITE_LIMIT_ADMIN:-}
+      WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
       - ./storage:/app/storage
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/api/health | grep -q "\"ok\":true"']
+      # Node's own health route; /api/health belongs to Laravel.
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']
       interval: 10s
       timeout: 5s
       retries: 10
@@ -135,12 +160,43 @@ services:
       DB_PASSWORD: ${DB_PASSWORD:?}
       # Alles, was Laravel noch nicht selbst kann, geht an das Node-Backend.
       NODE_FALLBACK_URL: http://node:8000
+      # Laravel sends it on Node's internal routes (account deletion); the same value as node's.
+      NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
+      # The only proxy Laravel takes the client address from: caddy's fixed address below.
+      TRUSTED_PROXIES: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
       # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
-      # Standard-Tabellen für Cache/Sitzungen/Warteschlange gibt es dort nicht.
-      # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche) im Container
+      # Standard-Tabellen für Sitzungen/Warteschlange gibt es dort nicht.
+      # database = rate-limit counters (sign-in, sign-up, password, 2FA; per account and
+      #            per address) in the `cache` table of server/schema.sql: a file in the
+      #            container loses increments under concurrent requests and resets on restart.
       # array = keine Sitzungen – die API arbeitet nur mit Tokens
       # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
-      CACHE_STORE: file
+      CACHE_STORE: database
+      # Optional: access-token lifetime in minutes; empty = the default in code (30 days). The
+      # node service reads the same setting (scripts/ci/check-mirrors.mjs keeps both lines equal).
+      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
+      # Optional overrides of the sign-in, sign-up, password and two-factor rate limits
+      # (api/config/ratelimits.php); empty = the defaults in code, an invalid value stops the
+      # api container's start.
+      AUTH_LIMIT_REGISTER_IP: ${AUTH_LIMIT_REGISTER_IP:-}
+      AUTH_LIMIT_REGISTER_ACCOUNT: ${AUTH_LIMIT_REGISTER_ACCOUNT:-}
+      AUTH_LIMIT_LOGIN_ACCOUNT_IP: ${AUTH_LIMIT_LOGIN_ACCOUNT_IP:-}
+      AUTH_LIMIT_LOGIN_IP: ${AUTH_LIMIT_LOGIN_IP:-}
+      AUTH_LIMIT_LOGIN_ACCOUNT: ${AUTH_LIMIT_LOGIN_ACCOUNT:-}
+      AUTH_LIMIT_FORGOT_IP: ${AUTH_LIMIT_FORGOT_IP:-}
+      AUTH_LIMIT_FORGOT_ACCOUNT: ${AUTH_LIMIT_FORGOT_ACCOUNT:-}
+      AUTH_LIMIT_RESET_IP: ${AUTH_LIMIT_RESET_IP:-}
+      AUTH_LIMIT_RESET_ACCOUNT: ${AUTH_LIMIT_RESET_ACCOUNT:-}
+      AUTH_LIMIT_2FA_CHALLENGE: ${AUTH_LIMIT_2FA_CHALLENGE:-}
+      AUTH_LIMIT_2FA_IP: ${AUTH_LIMIT_2FA_IP:-}
+      AUTH_LIMIT_2FA_ACCOUNT: ${AUTH_LIMIT_2FA_ACCOUNT:-}
+      AUTH_LIMIT_2FA_RESEND_IP: ${AUTH_LIMIT_2FA_RESEND_IP:-}
+      AUTH_LIMIT_2FA_RESEND_ACCOUNT: ${AUTH_LIMIT_2FA_RESEND_ACCOUNT:-}
+      AUTH_LIMIT_2FA_SETUP_USER: ${AUTH_LIMIT_2FA_SETUP_USER:-}
+      AUTH_LIMIT_ACCOUNT_SENSITIVE_USER: ${AUTH_LIMIT_ACCOUNT_SENSITIVE_USER:-}
+      AUTH_LIMIT_PROFILE_USER: ${AUTH_LIMIT_PROFILE_USER:-}
+      AUTH_LIMIT_2FA_FAILURES: ${AUTH_LIMIT_2FA_FAILURES:-}
+      AUTH_LIMIT_LOCK_WAIT: ${AUTH_LIMIT_LOCK_WAIT:-}
       SESSION_DRIVER: array
       QUEUE_CONNECTION: sync
       # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet
@@ -158,6 +214,10 @@ services:
       # aus (so wie lokal über die Verknüpfung api/public/storage). Nur lesend:
       # Geschrieben wird ausschließlich von Node.
       - ./storage:/var/www/api/public/storage:ro
+    networks:
+      default:
+        # Fixed: node trusts the client address only from this one (NODE_TRUST_PROXY).
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.20
 
   caddy:
     image: caddy:2-alpine
@@ -169,6 +229,10 @@ services:
       - '443:443'
     environment:
       DOMAIN: ${DOMAIN:?}
+    networks:
+      default:
+        # Fixed: api trusts the client address only from this one (TRUSTED_PROXIES).
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
@@ -180,3 +244,15 @@ volumes:
   db-data:
   caddy-data:
   caddy-config:
+
+# One network for all services with a subnet the operator chooses (APP_NET_PREFIX: the first
+# three parts of a free private /24 on this host, see deploy/.env.example). caddy (.10) and api
+# (.20) get fixed addresses: Laravel trusts forwarding headers from caddy only, Node from api
+# only (F-31). Every other container gets an address from the upper half, so nothing else can
+# take a fixed one.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.0/24
+          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.128/25

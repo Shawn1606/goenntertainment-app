@@ -2,7 +2,8 @@
  * Ein Konto endgueltig loeschen – samt Daten UND Dateien.
  *
  * Genutzt von zwei Stellen: dem Admin-Panel (DELETE /api/admin/users/:id) und
- * der Selbst-Loeschung (DELETE /api/me, routes/account.js). Frueher loeschte der
+ * der Selbst-Loeschung (DELETE /api/me in Laravel, which calls the internal route
+ * DELETE /internal/accounts/:id in routes/internal.js). Frueher loeschte der
  * Admin-Weg nur die DB-Zeile; die Bilder blieben als Waisen unter storage/
  * liegen – oeffentlich abrufbar fuer jeden, der die Adresse noch kannte. Fuer
  * eine Loeschung, die jemand nach Datenschutzrecht verlangt, ist das zu wenig.

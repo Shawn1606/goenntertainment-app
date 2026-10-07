@@ -12,16 +12,26 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
 
 2. Start the backend (required — the app loads accounts/activities from it)
 
-   The app talks to the Node backend in [`server/`](server/) on port `8000`.
-   It does **not** start automatically. Run it in its own terminal:
+   The app talks to Laravel in [`api/`](api/) on port `8000`. Laravel serves sign-up,
+   sign-in and the account itself and forwards every other `/api` path to the Node backend
+   in [`server/`](server/), which runs behind it on port `8001`. Node no longer serves
+   Laravel's paths, so the app cannot talk to Node directly. Neither starts automatically;
+   run each in its own terminal (on Windows, `scripts/dev-up.ps1` starts both):
 
    ```bash
-   npm run server
+   npm run server                                    # Node on 8001 (PORT in server/.env)
+   php api/artisan serve --host=0.0.0.0 --port=8000  # Laravel in front
    ```
 
-   First-time DB setup (creates tables + seed data): apply `server/schema.sql`
-   to the MySQL database `goenntertainment`, then run `npm run server:seed`.
-   Config lives in `server/.env` (see `server/.env.example`).
+   First-time setup:
+   - Database: apply `server/schema.sql` to the MySQL database `goenntertainment`, then
+     run `npm run server:seed`.
+   - `server/.env` from `server/.env.example` (`PORT=8001`, `DB_*`).
+   - `api/.env` from `api/.env.example`, then `php api/artisan key:generate`; set
+     `DB_CONNECTION=mysql` and the same database settings as in `server/.env`.
+     `NODE_FALLBACK_URL` points Laravel at Node, and `NODE_INTERNAL_SECRET` must be the same
+     value in both files (both examples carry the same dev-only value). An older `api/.env`
+     or `server/.env` takes these lines from the examples.
 
 3. Start the app (in a second terminal)
 
@@ -76,13 +86,13 @@ CI together.
 | Expo SDK versions | | `EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo install --check` | |
 | Server tests | `server/test/*.test.js` | `npm --prefix server test` | MySQL 8.4 with `server/schema.sql` loaded; `DB_*` in `server/.env` |
 | `composer.lock` matches `composer.json` | | `cd api && composer validate --no-check-publish --strict` | PHP 8.4, Composer 2 |
-| API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` | PHP 8.4, `composer install`, `api/.env` with a key |
+| API tests | `api/tests/Unit/**/*Test.php`, `api/tests/Feature/**/*Test.php` | `cd api && php artisan test` (see [API tests and MySQL](#api-tests-and-mysql)) | PHP 8.4 with `pdo_mysql`, `composer install`, `api/.env` with a key; MySQL 8.4 with `server/schema.sql` loaded and `DB_CONNECTION=mysql` plus `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` in the environment |
 | CI tooling tests | `scripts/ci/*.test.mjs` | `npm run test:tooling` | |
 | Repository guardrails | | `node scripts/ci/check-repo.mjs` | |
 | Schema drift tool tests | `scripts/schema-drift/*.test.mjs` | `node --test "scripts/schema-drift/*.test.mjs"` | Node >= 22.18, `npm --prefix server ci` |
 | Schema drift check | | `node scripts/schema-drift/check.mjs` | Node >= 22.18, `npm --prefix server ci`, MySQL 8.4 and an account that may create databases (`SCHEMA_DRIFT_DB_HOST`, `_PORT`, `_USER`, `_PASSWORD`), PHP with `pdo_mysql`, `composer install` in `api/` |
 | Workflow policy | | `node scripts/ci/check-workflows.mjs .github/workflows --ci-env deploy/ci.env` | |
-| Versions shared by CI and the Dockerfiles | | `node scripts/ci/check-mirrors.mjs` | |
+| Values written in several places (CI and Dockerfile versions, the internal secret rules, the request body limits) | | `node scripts/ci/check-mirrors.mjs` | |
 | Workflow lint | | actionlint, see [`.github/actionlint/Dockerfile`](.github/actionlint/Dockerfile) | Docker |
 | Dependency audit | | `node scripts/ci/audit.mjs npm .`, `… npm server`, `… composer api` | network (registry); not blocking yet |
 | Container smoke test | | [`.github/workflows/docker.yml`](.github/workflows/docker.yml) with [`deploy/ci.env`](deploy/ci.env) | Docker |
@@ -99,6 +109,37 @@ EXPO_NO_TELEMETRY=1 EXPO_OFFLINE=1 npx expo customize tsconfig.json
 
 The Expo CLI always runs with `EXPO_NO_TELEMETRY=1` and `EXPO_OFFLINE=1`, so it sends nothing
 to Expo. In PowerShell set them first: `$env:EXPO_NO_TELEMETRY=1; $env:EXPO_OFFLINE=1`.
+
+### API tests and MySQL
+
+The app's tables exist only in `server/schema.sql`, so the API feature tests that use the
+database (they extend `api/tests/AppFeatureTestCase.php`) run against MySQL 8.4 loaded from that
+file, each test inside a transaction that is rolled back. Give the connection as environment
+variables, as below; they win over `api/.env` and `api/phpunit.xml`. Without them those tests
+fail with a message that says what is missing (they are never skipped). The unit tests need no
+database (`php artisan test --testsuite=Unit`). A throw-away MySQL in Docker (the password is a
+local-only value, not a secret):
+
+```bash
+docker run -d --rm --name goenn-api-tests -p 127.0.0.1:3307:3306 --tmpfs /var/lib/mysql \
+  -e MYSQL_DATABASE=goenntertainment -e MYSQL_USER=goenn \
+  -e MYSQL_PASSWORD=local-only-not-a-secret -e MYSQL_ROOT_PASSWORD=local-only-not-a-secret-root \
+  mysql:8.4
+# When `docker logs goenn-api-tests` says "ready for connections" (port 3306), load the schema:
+docker exec -i -e MYSQL_PWD=local-only-not-a-secret goenn-api-tests mysql -u goenn goenntertainment < server/schema.sql
+(cd api && DB_CONNECTION=mysql DB_HOST=127.0.0.1 DB_PORT=3307 DB_DATABASE=goenntertainment \
+  DB_USERNAME=goenn DB_PASSWORD=local-only-not-a-secret php artisan test)
+docker stop goenn-api-tests   # removes the container and its data
+```
+
+Point the tests at a database of their own, not at a development database.
+`api/tests/Probes/` is not a suite: tests of `AppFeatureTestCase` run the probe there in a
+child PHPUnit process. One class runs outside the rolled-back transaction:
+`api/tests/Feature/ConcurrentCapsTest.php` starts ten `php -S` processes on free local ports
+(`api/tests/Support/ParallelServers.php`) and sends them bursts of requests, to show that the
+per-account caps hold for requests that arrive at the same time. Those processes must see its
+accounts, so it writes committed rows and deletes them again afterwards; its cache rows carry a
+prefix of their own.
 
 ## Get a fresh project
 
