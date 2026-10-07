@@ -54,6 +54,9 @@ final class BlockedTerms
     /** @var array<string, string> */
     private array $messages;
 
+    /** Longest input examined, in code points (shared/blocked-terms.json `max_input_length`). */
+    private int $maxInputLength;
+
     /** Die Liste des Projekts, einmal geladen und vorbereitet. */
     public static function default(): self
     {
@@ -105,6 +108,13 @@ final class BlockedTerms
         ];
         $this->messages = $lists['messages'] ?? [];
 
+        // Without a bound the patterns can be made slow (F-02): a list without one is unusable.
+        $max = $lists['max_input_length'] ?? null;
+        if (! is_int($max) || $max < 1) {
+            throw new RuntimeException('Blocked-terms list: max_input_length is missing or not a positive whole number');
+        }
+        $this->maxInputLength = $max;
+
         foreach ($lists['groups'] ?? [] as $group) {
             $seen = [];
             $terms = [];
@@ -134,14 +144,23 @@ final class BlockedTerms
      * Enthaelt `$text` einen gesperrten Begriff?
      *
      * @return array{term: string, group: string, kind: string}|null Der erste Treffer
-     *   in Listen-Reihenfolge - oder null.
+     *   in Listen-Reihenfolge - oder null. Input longer than max_input_length code points is a
+     *   hit of kind 'length' before anything else runs (fail closed, F-02): the patterns get slow
+     *   on very long input, and PCRE's backtracking limit would end a long run with an error or
+     *   a silent miss. Same rule and order as server/src/blocked-terms.js and the app.
      */
     public function find(?string $text, string $mode): ?array
     {
         if (! in_array($mode, self::MODES, true)) {
             throw new InvalidArgumentException("Unbekannter Pruefmodus: {$mode}");
         }
-        if ($text === null || trim($text) === '') {
+        if ($text === null) {
+            return null;
+        }
+        if (self::exceedsMaxInput($text, $this->maxInputLength)) {
+            return ['term' => '', 'group' => 'max_input_length', 'kind' => 'length'];
+        }
+        if (trim($text) === '') {
             return null;
         }
 
@@ -164,6 +183,24 @@ final class BlockedTerms
         }
 
         return null;
+    }
+
+    /**
+     * Does $text have more than $max code points? Bounded: a string of at most $max bytes cannot,
+     * one of more than 4 * $max bytes must (UTF-8 uses at most 4 bytes per code point); only in
+     * between are the code points counted. Code points, as in the JS implementations.
+     */
+    public static function exceedsMaxInput(string $text, int $max): bool
+    {
+        $bytes = strlen($text);
+        if ($bytes <= $max) {
+            return false;
+        }
+        if ($bytes > 4 * $max) {
+            return true;
+        }
+
+        return mb_strlen($text, 'UTF-8') > $max;
     }
 
     /** Der Satz fuer einen Modus - derselbe, den App und Node zeigen. */

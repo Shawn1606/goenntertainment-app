@@ -250,6 +250,30 @@ ANTHROPIC_API_KEY=sk-ant-...
 Alles Weitere (Sperr-Dauer, ab welcher Stufe gesperrt wird, Aus-Schalter) steht mit Erklärung
 in `server/.env.example`.
 
+> **Nachtrag (Sicherheits-Update: Inhalte und Datenschutz):** Die Prüfung ist jetzt streng. Was
+> oben unter „Fällt die KI aus" und hier in Schritt 3 steht, gilt so nicht mehr:
+>
+> - Kann die KI nicht gefragt werden (kein Schlüssel, Ausfall, Zeitüberschreitung, unlesbare
+>   Antwort), wird der Inhalt **abgelehnt**: Events, Beiträge, Kommentare, Profilbilder und
+>   Storys. Wer etwas hochlädt, liest dann „Die Inhaltspruefung ist gerade nicht erreichbar";
+>   gesperrt wird dabei niemand, und du siehst den Fall weiter in der Liste.
+> - `MODERATION_FAIL_OPEN=true` lässt Inhalte bei einem Ausfall ungeprüft durch. Das ist nur ein
+>   Notschalter für einen Ausfall: bewusst setzen und danach wieder entfernen.
+> - Für alle Konten zusammen gibt es ein Tageslimit: höchstens `MODERATION_DAILY_CALL_LIMIT`
+>   KI-Prüfungen pro Tag (UTC). Ist es erreicht, wird bis zum nächsten Tag alles abgelehnt, was
+>   geprüft wird, auch mit `MODERATION_FAIL_OPEN=true`. Wer etwas hochlädt, liest dann „Die
+>   Inhaltspruefung ist fuer heute ausgelastet"; gesperrt wird dabei niemand. Am PC gibt es ohne
+>   diesen Wert kein Limit.
+> - Auf dem Server startet das Backend ohne `ANTHROPIC_API_KEY` nicht, und
+>   `MODERATION_ENABLED=false` wird dort abgelehnt.
+> - Steht im Terminal **„KI-Moderation: AN ohne ANTHROPIC_API_KEY"**, wird alles abgelehnt, was
+>   geprüft wird (außer der Notschalter `MODERATION_FAIL_OPEN=true` ist gesetzt).
+> - **„KI-Moderation: AUS"** heißt jetzt nur noch `MODERATION_ENABLED=false`: absichtlich
+>   ausgeschaltet, nur am PC zum Entwickeln. Die Vorlage `server/.env.example` enthält diese
+>   Zeile, damit du ohne Schlüssel arbeiten kannst.
+> - Wenn du den Schlüssel in `server/.env` einträgst, dort `MODERATION_ENABLED` auf `true`
+>   setzen oder die Zeile löschen – sonst bleibt die Prüfung aus.
+
 **Was ich ehrlich dazusagen muss:**
 - Ich hatte hier **keinen Zugangsschlüssel**, konnte also keinen echten KI-Aufruf machen.
   Ich habe stattdessen einen Test-Server gebaut, der so antwortet wie die echte KI, und damit
@@ -1456,6 +1480,74 @@ eigenen Fenstern. Den Windows-Autostart gibt es nicht mehr; eine früher angeleg
   dort die `MAIL_*`-Zeilen aus `api/.env.example` übernehmen (`MAIL_MAILER=smtp`,
   `MAIL_HOST=127.0.0.1`, `MAIL_PORT=1025`). Danach die alte `api/storage/logs/laravel.log`
   löschen (sie kann Codes enthalten). Ab dann stehen Codes nie mehr in einem Log.
+  „Passwort vergessen" schickt jetzt einen 6-stelligen Code per E-Mail statt eines Links: Ohne
+  Mail-Zugang kann also auch niemand sein Passwort zurücksetzen.
+- Node beantwortet keine Laravel-Pfade mehr (Anmelden, Registrieren, eigenes Konto,
+  Fortschritt, Rangliste): Die App muss mit Laravel auf Port 8000 sprechen, Node läuft dahinter
+  auf 8001. Konto löschen geht von Laravel über einen internen Node-Pfad mit gemeinsamem
+  Schlüssel. In ein vorhandenes `api/.env` und `server/.env` deshalb die Zeile
+  `NODE_INTERNAL_SECRET=...` aus den jeweiligen `.env.example` übernehmen (in beiden Dateien
+  derselbe Wert), in `api/.env` außerdem `NODE_FALLBACK_URL` und `TRUSTED_PROXIES` (leer) wie in
+  `api/.env.example`. Node prüft seine Gesundheit jetzt unter `/internal/health` statt
+  `/api/health`. Auf dem Server sind `NODE_INTERNAL_SECRET` und `APP_NET_PREFIX` in
+  `deploy/.env` Pflicht (siehe `deploy/.env.example`).
+- Sicherheits-Update für Inhalte und Datenschutz:
+  - Auf dem Server sind in `deploy/.env` außerdem Pflicht: `ANTHROPIC_API_KEY` (der Schlüssel
+    für die KI-Prüfung) und die vier Aufbewahrungsfristen `EVIDENCE_RETENTION_DAYS`,
+    `MODERATION_REPORT_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS` und `USAGE_RETENTION_DAYS`, in
+    ganzen Tagen (`USAGE_RETENTION_DAYS` mindestens 120). Wessen Anbieter-Konto und Schlüssel
+    das ist und wie lange was aufbewahrt wird, entscheidest du; Vorgaben gibt es absichtlich
+    keine. Ohne diese Werte startet der Server nicht (siehe `deploy/.env.example` und
+    `deploy/README.md`, Abschnitt „Settings").
+  - Ebenso Pflicht ist `MODERATION_DAILY_CALL_LIMIT`: wie viele KI-Prüfungen pro Tag (UTC) für
+    alle Konten zusammen höchstens laufen. Wie viel du dafür ausgibst, entscheidest du; eine
+    Vorgabe gibt es absichtlich nicht. Ohne den Wert startet der Server nicht (siehe
+    `deploy/README.md`, Abschnitt „Settings").
+  - Einmal `npm --prefix server ci` ausführen: Der Server braucht jetzt das Paket `sharp` (es
+    rechnet jedes hochgeladene Bild neu und entfernt dabei Standort- und Kameradaten). Ohne das
+    Paket startet das Backend nicht.
+  - Ein vorhandenes `server/.env` aus der alten Vorlage enthält noch `MODERATION_FAIL_OPEN=true`:
+    die Zeile löschen oder auf `false` setzen, damit es am PC so streng zugeht wie auf dem
+    Server. Ohne Schlüssel dann außerdem `MODERATION_ENABLED=false` setzen (nur am PC), sonst
+    wird jeder geprüfte Inhalt abgelehnt (siehe Abschnitt 14, Nachtrag).
+  - Beweisbilder und Story-Bilder liegen jetzt getrennt von den öffentlichen Uploads: auf dem
+    Server im Volume `private-media`, am PC in `server/storage-private/`. Sie gehören ins Backup,
+    dürfen aber nie über einen Webserver erreichbar sein.
+  - Ein älterer App-Stand passt nicht mehr zum Server: Registrieren (Alters- und
+    Nutzungsbedingungen-Bestätigung), „Passwort vergessen" (Code statt Link) und Story-Bilder
+    (nur noch angemeldet) gehen damit nicht. Am Handy die App neu laden bzw. neu bauen.
+- Sicherheits-Update für den Server (`deploy/`). Die Anleitung ist jetzt ein Runbook auf
+  Englisch: `deploy/README.md`.
+  - Neue Pflichtwerte in `deploy/.env`: `MAIL_HOST`, `MAIL_USERNAME` und `MAIL_PASSWORD` (die
+    beiden letzten dürfen bei einem Mail-Relay ohne Anmeldung leer sein, müssen aber in der Datei
+    stehen), `MAIL_FROM_ADDRESS`, `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`, `LOG_MAX_SIZE`,
+    `LOG_MAX_FILES` und `MYSQL_BINLOG_RETENTION_DAYS`. Mail-Anbieter, Absenderadresse, der Ort
+    der Sicherungen und wie lange Sicherungen, Logs und das Binärlog von MySQL aufbewahrt werden,
+    sind Entscheidungen: Sie trifft, wer den Server betreibt, zusammen mit der Person, die für den
+    Datenschutz zuständig ist. Vorgaben gibt es absichtlich keine. Die offenen Punkte stehen im
+    Runbook unter „Decisions this runbook does not make". Vor dem ersten Start und vor jedem
+    Update `deploy/scripts/preflight.sh` ausführen (Runbook, „Settings"): Es prüft die Datei und
+    `BACKUP_DIR`.
+  - `ADMIN_EMAIL` und `ADMIN_PASSWORD` gehören nicht mehr in `deploy/.env`. Beim ersten Start legt
+    ein Einmal-Container das Admin-Konto an, bevor die Domain erreichbar ist; Caddy startet erst,
+    wenn es ein Admin-Konto gibt. Die Schritte stehen im Runbook unter „First start".
+  - Die Uploads liegen nicht mehr in `deploy/storage/` und `deploy/storage-private/`, sondern in
+    den benannten Volumes `uploads` und `private-media`. Die öffentlichen Bilder liefert ein
+    eigener kleiner Dateiserver (`media`) hinter Caddy aus, der weder Schlüssel noch Passwörter
+    kennt; Laravel und PHP berühren sie nie. Lief ein Server schon mit den alten Ordnern,
+    steht im Runbook unter „Updating", wie die Dateien einmal umziehen.
+  - Lief ein Server schon mit einer früheren Fassung von `deploy/`, steht im Runbook unter
+    „Updating" („From an earlier setup"), was einmal zu tun ist: vor `git pull` den alten Stand
+    mit `docker compose down` anhalten (nie mit `-v`, das löscht die Datenbank), danach die
+    tägliche Rotation des MySQL-Binärlogs anlegen (Runbook, „Logs"). Die Datenbank bleibt in
+    ihrem Volume.
+  - Laravel läuft im Container ohne root-Rechte und hört deshalb auf Port 8080 statt 80.
+  - Jede Nacht um 02:30 UTC sichert der Dienst `backup` die Datenbank und die Uploads nach
+    `BACKUP_DIR` und löscht danach die abgelaufenen Sätze. Die Logs aller Container werden nach
+    Größe rotiert. Eine Kopie außerhalb des Servers richtet das Setup nicht ein: Ob und wohin,
+    ist ebenfalls eine Entscheidung.
+  - Den `APP_KEY` im Passwort-Manager aufheben: Ohne ihn hilft eine Sicherung bei Konten mit
+    Zwei-Faktor-Anmeldung nicht weiter.
 - Rechtstexte anwaltlich prüfen lassen, besonders den Abschnitt zur KI-Prüfung (Anbieter
   Anthropic, USA) – und das Impressum ausfüllen.
 - Am Handy durchklicken: Leiste, Feed, Profil, Anmelden mit 2FA.

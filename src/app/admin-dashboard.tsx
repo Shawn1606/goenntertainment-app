@@ -204,9 +204,10 @@ export default function AdminPanelScreen() {
             <BarChart title="Anmeldungen / Tag" points={stats.series.signups} color={surface.accent} surface={surface} />
             <BarChart title="Beitritte / Tag" points={stats.series.joins} color="#22c55e" surface={surface} />
 
-            {/* Events verwalten */}
+            {/* Events verwalten. The list holds the upcoming events (F-12: GET /api/activities lists
+                past events only to the people who hosted or joined them). */}
             <ThemedText type="smallBold" style={[styles.sectionLabel, { color: surface.textMuted }]}>
-              Alle Events ({activities.length})
+              Kommende Events ({activities.length})
             </ThemedText>
             <GlassSurface
               tone={activities.length === 0 ? 'accent' : 'card'}

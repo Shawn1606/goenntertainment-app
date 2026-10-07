@@ -4,9 +4,9 @@
  *
  * ## Warum es diese Stufe braucht, obwohl es die KI gibt
  *
- * Die KI-Moderation (src/moderation.js) ist ohne ANTHROPIC_API_KEY aus und laesst
- * bei einem Ausfall alles durch (MODERATION_FAIL_OPEN). Sie prueft ausserdem nur
- * Inhalte, keine Benutzernamen. Diese Liste greift IMMER – ohne Netz, ohne
+ * The AI moderation (src/moderation.js) needs the provider and a key; when it cannot ask the
+ * model it refuses the content (fail closed, unless MODERATION_FAIL_OPEN=true). Sie prueft
+ * ausserdem nur Inhalte, keine Benutzernamen. Diese Liste greift IMMER – ohne Netz, ohne
  * Schluessel, in Mikrosekunden – und sie greift ueberall gleich: Die App prueft
  * damit schon beim Tippen, Laravel bei Registrierung und Profil, Node bei allem
  * anderen. Alle drei lesen dieselbe Datei (shared/blocked-terms.json) und rechnen
@@ -71,8 +71,48 @@ function loadDefaultLists() {
   const file = process.env.BLOCKED_TERMS_FILE
     ? process.env.BLOCKED_TERMS_FILE
     : new URL('../../shared/blocked-terms.json', import.meta.url);
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  const lists = JSON.parse(fs.readFileSync(file, 'utf8'));
+  maxInputLength(lists); // a list without a valid maximum does not start the server
+  return lists;
 }
+
+/**
+ * The longest input the filter examines (shared/blocked-terms.json `max_input_length`, in code
+ * points). A list without a positive whole number there is unusable: the filter would have no
+ * bound (F-02).
+ */
+function maxInputLength(lists) {
+  const max = lists?.max_input_length;
+  if (!Number.isInteger(max) || max < 1) {
+    throw new TypeError('Blocked-terms list: max_input_length is missing or not a positive whole number');
+  }
+  return max;
+}
+
+/**
+ * Does `text` have more than `max` Unicode code points? Linear and bounded: a string of at most
+ * `max` UTF-16 units cannot, one of more than 2 * max units must, and in between the code points
+ * are counted, stopping at max + 1. Code points, not UTF-16 units, so that the app (TypeScript)
+ * and Laravel (mb_strlen) draw the line at the same place.
+ */
+export function exceedsMaxInput(text, max) {
+  if (text.length <= max) return false;
+  if (text.length > 2 * max) return true;
+  let count = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) i += 1;
+    }
+    count += 1;
+    if (count > max) return true;
+  }
+  return false;
+}
+
+/** The hit for input over the maximum (fail closed): kind 'length', no term. */
+export const LENGTH_HIT = Object.freeze({ term: '', group: 'max_input_length', kind: 'length' });
 
 export const BLOCKED_TERMS = loadDefaultLists();
 
@@ -370,14 +410,20 @@ function hasUncoveredHit(re, line, allow, spanCache) {
  * @param {string} text
  * @param {object} lists Inhalt von shared/blocked-terms.json
  * @param {'username'|'name'|'text'} mode
- * @returns {{ term: string, group: string, kind: 'substring'|'prefix'|'word' } | null}
- *   Der erste Treffer in Listen-Reihenfolge – oder null.
+ * @returns {{ term: string, group: string, kind: 'substring'|'prefix'|'word'|'length' } | null}
+ *   Der erste Treffer in Listen-Reihenfolge – oder null. Input longer than
+ *   `lists.max_input_length` code points is LENGTH_HIT, before anything else runs (F-02): the
+ *   patterns get slow on very long input, and a route that forgot its own cap must not be able
+ *   to stall the server with it. The same rule, in the same order, in
+ *   src/domain/blocked-terms.ts and api/app/Support/BlockedTerms.php.
  */
 export function findBlockedTerm(text, lists, mode) {
   if (!BLOCKED_TERM_MODES.includes(mode)) {
     throw new TypeError(`Unbekannter Pruefmodus: ${mode}`);
   }
-  if (typeof text !== 'string' || text.trim() === '') return null;
+  if (typeof text !== 'string') return null;
+  if (exceedsMaxInput(text, maxInputLength(lists))) return { ...LENGTH_HIT };
+  if (text.trim() === '') return null;
 
   const compiled = compileBlockedTerms(lists);
   const { chunks, tokens } = analyseText(text, lists);
@@ -397,6 +443,56 @@ export function findBlockedTerm(text, lists, mode) {
   return null;
 }
 
+/** How deep and how many parts findBlockedTermInValue() looks into a non-text value. */
+export const MAX_VALUE_DEPTH = 4;
+export const MAX_VALUE_PARTS = 100;
+
+/** The hit for a value too deep or with too many parts to check (fail closed). */
+export const STRUCTURE_HIT = Object.freeze({ term: '', group: 'max_value_parts', kind: 'structure' });
+
+/**
+ * findBlockedTerm() for a request value of any JSON type (F-06). Requests bring text fields as
+ * strings, but also as arrays, objects, numbers or booleans (JSON, or a form field sent twice),
+ * and a route that turns such a value into text (String(...)) or passes it on must not let a term
+ * through just because it was not a string:
+ *   - a string is checked as findBlockedTerm() checks it;
+ *   - a number or boolean as its text (numeric codes are on the list);
+ *   - an array or object by every string, number and boolean inside it, down to MAX_VALUE_DEPTH
+ *     levels, and an array also as the text String() makes of it (the parts joined by commas,
+ *     which can join a term split over two parts);
+ *   - a value deeper than MAX_VALUE_DEPTH or with more than MAX_VALUE_PARTS parts is not
+ *     examined further and counts as a hit (STRUCTURE_HIT): nothing that cannot be checked gets
+ *     through.
+ * Node only: App and Laravel accept strings for these fields, so the three mirrored
+ * findBlockedTerm() implementations stay as they are.
+ */
+export function findBlockedTermInValue(value, lists, mode) {
+  if (typeof value === 'string') return findBlockedTerm(value, lists, mode);
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return findBlockedTerm(String(value), lists, mode);
+  }
+  if (value === null || value === undefined || typeof value !== 'object') return null;
+
+  const parts = [];
+  const collect = (node, depth) => {
+    if (parts.length > MAX_VALUE_PARTS) return false;
+    if (node === null || node === undefined) return true;
+    if (typeof node === 'object') {
+      if (depth >= MAX_VALUE_DEPTH) return false;
+      return Object.values(node).every((child) => collect(child, depth + 1));
+    }
+    parts.push(String(node));
+    return parts.length <= MAX_VALUE_PARTS;
+  };
+  if (!collect(value, 0)) return { ...STRUCTURE_HIT };
+
+  for (const part of parts) {
+    const hit = findBlockedTerm(part, lists, mode);
+    if (hit) return hit;
+  }
+  return Array.isArray(value) ? findBlockedTerm(parts.join(','), lists, mode) : null;
+}
+
 /** Die Meldung fuer einen Modus – dieselbe, die die App anzeigt. */
 export function blockedTermMessageFor(mode, lists = BLOCKED_TERMS) {
   return lists.messages[mode];
@@ -404,13 +500,14 @@ export function blockedTermMessageFor(mode, lists = BLOCKED_TERMS) {
 
 /**
  * Bequem fuer die Routen: Ist `value` gesperrt, kommt die Meldung an `field` in
- * den Validator. Leere Werte und Nicht-Texte uebergeht sie – ob ein Feld Pflicht
- * ist, entscheidet die Route vorher.
+ * den Validator. Leere Werte uebergeht sie – ob ein Feld Pflicht ist, entscheidet
+ * die Route vorher. A value of any JSON type is checked (findBlockedTermInValue): routes pass
+ * the value as it came, so an array or object cannot carry a term past the check (F-06).
  *
  * @returns {boolean} true, wenn der Wert gesperrt war.
  */
 export function rejectBlockedTerms(v, field, value, mode, lists = BLOCKED_TERMS) {
-  if (typeof value !== 'string' || !findBlockedTerm(value, lists, mode)) return false;
+  if (!findBlockedTermInValue(value, lists, mode)) return false;
   v.add(field, blockedTermMessageFor(mode, lists));
   return true;
 }

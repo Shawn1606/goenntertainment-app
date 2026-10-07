@@ -24,8 +24,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * seinen Platz - in JavaScript wie in PHP.
  *
  * `interests` kommt nur auf Wunsch dazu und immer zuletzt: Die Anmelde-Antworten
- * liefern sie mit, der Google-Weg nicht. Dieser Unterschied ist uebernommen, kein
- * Versehen.
+ * liefern sie mit.
  */
 class UserResource extends JsonResource
 {

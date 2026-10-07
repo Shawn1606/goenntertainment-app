@@ -42,6 +42,8 @@ import { ThemedText } from '@/components/themed-text';
 import { BrandGradient, FontFamily } from '@/constants/theme';
 import { ringDash } from '@/domain/story';
 import { useBrandSurface, useGlass } from '@/hooks/use-theme';
+import { useAuth } from '@/lib/auth-context';
+import { apiImageSource } from '@/lib/auth-image';
 
 /** Erste Buchstaben des Namens – Rückfallbild ohne Profilbild. */
 export function initialsOf(name: string): string {
@@ -109,6 +111,7 @@ export function StoryAvatar({
 }: StoryAvatarProps) {
   const surface = useBrandSurface();
   const glass = useGlass();
+  const { token } = useAuth();
   // Für `url(#…)` brauchbar machen: `useId` liefert Zeichen wie „:r0:", und ein
   // Doppelpunkt in einer SVG-Referenz ist die Sorte Fehler, die nur auf einer
   // der Plattformen auffällt.
@@ -130,7 +133,8 @@ export function StoryAvatar({
     avatar ? (
       <Image source={{ uri: avatar }} style={styles.image} contentFit="cover" />
     ) : fallbackImage ? (
-      <Image source={{ uri: fallbackImage }} style={styles.image} contentFit="cover" />
+      // A story image (private, F-11): sent with the viewer's token.
+      <Image source={apiImageSource(fallbackImage, token)} style={styles.image} contentFit="cover" cachePolicy="memory" />
     ) : (
       <ThemedText style={[styles.initials, { fontSize: photo * 0.34, color: surface.accent }]}>
         {initialsOf(name)}

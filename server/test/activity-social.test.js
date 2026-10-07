@@ -14,8 +14,10 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
+import { listedActivities } from './support/activity-list.js';
 import { ensureSchema, pool } from '../src/db.js';
-import { TEST_PASSWORD, deleteTestUsers, uniqueStamp } from './support/fixtures.js';
+import { createUser, deleteTestUsers } from './support/fixtures.js';
 
 let base;
 let server;
@@ -23,33 +25,14 @@ const createdUserIds = [];
 const createdActivityIds = [];
 
 /**
- * Wegwerf-Konto. Registriert wird immer als 'standard', die Stufe kommt danach
- * direkt in die DB – 'creator', damit das Konto Events anlegen darf, egal ob die
+ * Wegwerf-Konto – 'creator', damit das Konto Events anlegen darf, egal ob die
  * Kontostufen gerade eingeschaltet sind (server/src/features.js).
+ *
+ * Written straight to the database with its token (test/support/fixtures.js):
+ * sign-up belongs to Laravel.
  */
-async function registerUser(prefix, accountType = 'creator') {
-  const stamp = uniqueStamp();
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      name: `${prefix} Test`,
-      username: `${prefix}${stamp}`.slice(0, 28),
-      email: `${prefix}${stamp}@example.com`,
-      password: TEST_PASSWORD,
-      account_type: 'standard',
-      device_name: 'test',
-    }),
-  });
-  assert.equal(res.status, 201, 'Registrierung muss klappen');
-  const body = await res.json();
-  createdUserIds.push(body.user.id);
-  if (accountType !== 'standard') {
-    await pool.query('UPDATE users SET account_type = ? WHERE id = ?', [accountType, body.user.id]);
-    body.user.account_type = accountType;
-  }
-  return body;
-}
+const registerUser = (prefix, accountType = 'creator') =>
+  createUser(prefix, { accountType, created: createdUserIds });
 
 const makeAdmin = (userId) => pool.query('UPDATE users SET is_admin = 1 WHERE id = ?', [userId]);
 
@@ -102,7 +85,7 @@ async function addComment(token, id, body) {
 
 before(async () => {
   await ensureSchema();
-  server = createApp().listen(0);
+  server = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -179,7 +162,7 @@ test('die Zahlen stehen auch in Liste, Merkliste und Beitritts-Antwort', async (
   await like(fan.token, activity.id);
   await addComment(host.token, activity.id, 'Wer bringt Getraenke mit?');
 
-  const list = (await (await get('/api/activities', fan.token)).json()).data;
+  const list = await listedActivities(base, fan.token);
   const inList = list.find((a) => a.id === activity.id);
   assert.ok(inList, 'Event steht in der Liste');
   assert.equal(inList.likes_count, 1);

@@ -3,14 +3,25 @@
 # Warum es das gibt: Die Container werden auf einem Linux-Server betrieben, und am
 # Entwicklungs-PC ist Docker nicht installiert. Ohne diese Prüfung merkte man einen
 # kaputten Bauplan erst beim Ausrollen. Hier läuft bei jedem Push dasselbe wie auf
-# dem Server – nur ohne Caddy/HTTPS – und dann ein echter Durchgang:
-# Gesundheit → Registrierung (Laravel) → Aktivität mit Bild (Laravel → Node) → Bild
-# abrufen (über das gemeinsame Upload-Verzeichnis).
+# dem Server: Caddy included, but on networks closed to the outside, and then a real
+# pass through Caddy.
+#
+# Two steps; README.md "Tests and checks" lists the same commands for a local run:
+#   - the static deploy checks (npm run test:deploy): the compose files as docker compose
+#     renders them, the Caddyfile as Caddy adapts it, the env files, the scripts and the
+#     Dockerfiles; no stack is started;
+#   - the stack test (npm run test:deploy:stack, deploy/test/stack.test.mjs): builds the images,
+#     starts the whole stack with deploy/docker-compose.ci.yml and deploy/ci.env the way the
+#     runbook's first start does (admin gate, one-off seed, then the edge), checks it through
+#     caddy from a probe container on the edge network and from inside the containers, prints
+#     the logs when a check failed, and removes the stack again. Every network is internal and
+#     caddy publishes no port: nothing in the stack reaches anything outside the runner.
 #
 # Security: read-only token, actions pinned by commit SHA, no credentials in this file.
-# All settings come from deploy/ci.env (public, fake, labelled ci-only); the Laravel key
-# is generated fresh for every run. Pull requests from forks run this with the same
-# read-only token and no secrets (there is no pull_request_target trigger).
+# All settings come from deploy/ci.env (public, fake, labelled ci-only); the stack test makes a
+# fresh Laravel key for every run and never prints it, nor any password it makes. Pull requests
+# from forks run this with the same read-only token and no secrets (there is no
+# pull_request_target trigger).
 name: Container
 
 on:
@@ -26,109 +37,58 @@ concurrency:
   group: container-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-jobs:
-  build-and-smoke-test:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    defaults:
-      run:
-        working-directory: deploy
-    env:
-      # Compose reads the file list and the project name from here, so no command
-      # needs an unquoted variable.
-      COMPOSE_FILE: docker-compose.yml:docker-compose.ci.yml
-      COMPOSE_PROJECT_NAME: goenn-ci
+env:
+  # Mirror of NODE_VERSION in ci.yml (scripts/ci/check-mirrors.mjs compares them).
+  NODE_VERSION: '22'
 
+jobs:
+  deploy:
+    name: Deploy (static checks and the running stack)
+    runs-on: ubuntu-24.04
+    # At least the sum of its steps' limits, so GitHub never cancels the job before the stack
+    # test's after() and the log step have run: the static checks 10 min, the stack test 42 (its
+    # file limit in package.json is 40 min, most of it for the first build of the api and node
+    # images), the logs 5, and 3 for checkout, setup and the counts. deploy/test/budgets.test.mjs
+    # checks these numbers against each other and against the stack test's own budgets.
+    timeout-minutes: 60
+    env:
+      # The project the stack test builds, starts and removes (required by the test), and whose
+      # logs the log step prints.
+      COMPOSE_PROJECT_NAME: goenn-ci
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # No npm install: the deploy tests need only Node's own modules and the Docker CLI.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
-      # Never a key that exists anywhere else. The shell environment wins over
-      # --env-file, so this replaces the placeholder in deploy/ci.env.
-      - name: Generate a throw-away APP_KEY for this run
-        run: |
-          key="base64:$(openssl rand -base64 32)"
-          echo "::add-mask::$key"
-          echo "APP_KEY=$key" >> "$GITHUB_ENV"
+      - name: Static deploy checks (npm run test:deploy)
+        timeout-minutes: 10
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/deploy-static.tap
+        run: npm run test:deploy
+      - name: Static deploy check count
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/test-report.mjs tap deploy-static "$RUNNER_TEMP/deploy-static.tap"
 
-      - name: Compose-Datei prüfen
-        run: docker compose --env-file ci.env config --quiet
-
-      - name: Abbilder bauen und starten (ohne Caddy)
-        run: docker compose --env-file ci.env up -d --build db node api
-
-      # Nicht `up --wait`: Das wertet den Einmal-Container storage-init, der sich
-      # planmäßig beendet, je nach Compose-Version als Fehler.
-      - name: Warten, bis Laravel antwortet
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:8080/api/health 2>/dev/null | grep -q '"ok":true'; then
-              echo "bereit nach $((i * 5)) s"; exit 0
-            fi
-            sleep 5
-          done
-          echo "Laravel wurde nicht bereit"; docker compose --env-file ci.env ps; exit 1
-
-      - name: Durchgang durch die API
-        run: |
-          set -euo pipefail
-          BASE=http://127.0.0.1:8080
-          # tr: in a CRLF checkout of ci.env (Windows, core.autocrlf) the value keeps a carriage
-          # return under a Linux shell, and the banner URL check below fails although the URL is
-          # right.
-          DOMAIN=$(sed -n 's/^DOMAIN=//p' ci.env | tr -d '\r')
-          test -n "$DOMAIN"
-
-          echo "--- Gesundheit (Laravel fragt die Datenbank)"
-          curl -fsS "$BASE/api/health" | tee /dev/stderr | grep -q '"ok":true'
-
-          echo "--- Registrierung über Laravel"
-          # Twelve digits without 1, 4, 8 and 9 (mapped to 2, 3, 5 and 0): the word filter
-          # rejects numeric codes inside usernames, and every numeric term in
-          # shared/blocked-terms.json contains 1, 4 or 8; 9 is left out because its leet
-          # reading (g) can complete a blocked term after a prefix. A plain `date +%s` could
-          # form such a code. The guard's digit class is a named mirror of SAFE_DIGITS in
-          # server/test/support/fixtures.js; server/test/test-support.test.js checks it and
-          # this username prefix.
-          STAMP=$(date +%s%N | tr 1489 2350 | cut -c8-19)
-          [[ "$STAMP" =~ ^[023567]{12}$ ]]
-          REG=$(curl -fsS -X POST "$BASE/api/register" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -d "{\"name\":\"CI Test\",\"username\":\"citest$STAMP\",\"email\":\"ci-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\",\"terms_version\":\"ci\"}")
-          TOKEN=$(echo "$REG" | jq -r .token)
-          test -n "$TOKEN" && test "$TOKEN" != null
-
-          echo "--- Aktivität mit Bild: Laravel baut das Formular neu und reicht es an Node weiter"
-          python3 -c "import zlib,struct;row=b'\x00'+b'\xfe\x2c\x55'*8;raw=row*8;c=lambda t,d:struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff);open('/tmp/ci.png','wb').write(b'\x89PNG\r\n\x1a\n'+c(b'IHDR',struct.pack('>IIBBBBB',8,8,8,2,0,0,0))+c(b'IDAT',zlib.compress(raw))+c(b'IEND',b''))"
-          STARTS=$(date -u -d '+1 day' +%Y-%m-%dT18:00:00Z)
-          ACT=$(curl -fsS -X POST "$BASE/api/activities" \
-            -H "Authorization: Bearer $TOKEN" -H 'Accept: application/json' \
-            -F 'title=Container-Test' -F 'description=Läuft im Container' \
-            -F 'location=Göttingen' -F "starts_at=$STARTS" \
-            -F 'banner=@/tmp/ci.png;type=image/png')
-          echo "$ACT" | jq '{id: .data.id, title: .data.title, banner: .data.banner_url}'
-          BANNER=$(echo "$ACT" | jq -r .data.banner_url)
-          case "$BANNER" in
-            "https://$DOMAIN/storage/banners/"*) ;;
-            *) echo "Unerwartete Bild-Adresse: $BANNER"; exit 1 ;;
-          esac
-
-          echo "--- Bild abrufen: Node hat es gespeichert, Laravel liefert es aus"
-          curl -fsS -o /dev/null -w '%{http_code} %{content_type}\n' "$BASE${BANNER#"https://$DOMAIN"}"
-
-          echo "--- Wortfilter greift auch im Container"
-          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/register" \
-            -H 'Content-Type: application/json' -H 'Accept: application/json' \
-            -d "{\"name\":\"Test\",\"username\":\"xXhurensohnXx$STAMP\",\"email\":\"ci-bad-$STAMP@example.invalid\",\"password\":\"Container-Test-$STAMP\",\"account_type\":\"standard\"}")
-          test "$CODE" = 422
-
-          echo "Alles in Ordnung."
-
-      - name: Logs bei Fehlern
-        if: failure()
-        run: docker compose --env-file ci.env logs --no-color --tail 200
-
-      - name: Aufräumen
-        if: always()
-        run: docker compose --env-file ci.env down -v
+      - name: The running stack, through the edge (npm run test:deploy:stack)
+        if: ${{ !cancelled() }}
+        # Above the test file's own limit (package.json, 40 min), so the test runner, not GitHub,
+        # ends a run that takes too long. That limit leaves room for the test's after(), which
+        # prints the logs and removes the stack.
+        timeout-minutes: 42
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/deploy-stack.tap
+        run: npm run test:deploy:stack
+      # A second copy of the logs that needs no after(): the stack test prints them itself when a
+      # check fails, but not when it was stopped before its after() ran. Prints nothing once the
+      # stack has been removed.
+      - name: Stack logs after a failure
+        if: ${{ failure() }}
+        timeout-minutes: 5
+        run: docker compose --project-directory deploy --env-file deploy/ci.env -f deploy/docker-compose.yml -f deploy/docker-compose.ci.yml --profile tools --profile test logs --no-color --tail 200
+      - name: Stack check count
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/test-report.mjs tap deploy-stack "$RUNNER_TEMP/deploy-stack.tap"

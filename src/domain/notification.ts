@@ -12,7 +12,11 @@
  * Ziel, statt die ganze Liste zu kippen.
  */
 
-/** Die Sorten, die diese App kennt. Gegenstück: NOTIFICATION_TYPES im Server. */
+/**
+ * Die Sorten, die diese App kennt. Gegenstück: NOTIFICATION_TYPES im Server
+ * (server/test/comment-reports.test.js keeps both equal). `activity_comment`: someone commented
+ * on my event (F-08).
+ */
 export const NOTIFICATION_TYPES = [
   'story',
   'activity',
@@ -20,6 +24,7 @@ export const NOTIFICATION_TYPES = [
   'like',
   'comment',
   'follow',
+  'activity_comment',
 ] as const;
 
 export type KnownNotificationType = (typeof NOTIFICATION_TYPES)[number];
@@ -61,7 +66,9 @@ export function notificationTarget(
     case 'story':
       return { kind: 'home' };
 
+    // A comment on my event leads to that event, where the comments are.
     case 'activity':
+    case 'activity_comment':
       return notification.ref_id ? { kind: 'activity', id: notification.ref_id } : null;
 
     case 'post':
@@ -96,6 +103,7 @@ export function notificationIcon(type: string): string {
     case 'like':
       return 'heart';
     case 'comment':
+    case 'activity_comment':
       return 'chat';
     case 'follow':
       return 'user-check';

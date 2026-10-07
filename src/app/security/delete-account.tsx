@@ -10,7 +10,8 @@ import { useTheme } from '@/hooks/use-theme';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
-import { clearCredentials } from '@/lib/credential-store';
+import { clearSavedEmail } from '@/lib/credential-store';
+import { clearSearchHistory } from '@/lib/search-history-store';
 
 /**
  * Konto endgültig löschen – direkt in der App.
@@ -62,7 +63,11 @@ export default function DeleteAccountScreen() {
         ...(usePhrase ? { confirm: 'LÖSCHEN' } : { password }),
         ...(needsCode ? { code: code.trim() } : {}),
       });
-      await clearCredentials();
+      await clearSavedEmail();
+      // The search history goes now (F-44), not only with the sign-out after the dialog: the
+      // dialog waits for a tap, and an app closed there would never reach that sign-out.
+      // Never throws.
+      await clearSearchHistory(user?.id ?? null);
       await notifyUser('Konto gelöscht', res.message ?? 'Dein Konto wurde gelöscht. Schade, dass du gehst!');
       // Der Token ist mit dem Konto verschwunden – lokal abmelden, dann zeigt die App
       // wieder den Willkommensbildschirm.

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "about": [
+    "Usernames and e-mail domains the system creates accounts with: the admin and the venue hosts of server/src/seed.js, the import hosts of server/src/import/sources.js.",
+    "Nobody else may take them: sign-up and profile changes (Laravel), the e-mail change (Laravel) and the admin rename (Node) refuse them, compared without regard to case. Otherwise someone could register the admin's username or a host's address before the seed runs and be adopted by it.",
+    "server/test/reserved-accounts.test.js fails when the seed or the import creates a username or uses a domain that is not listed here. Which further names to reserve (support, team, brand names) is the operator's decision; only the system's own are listed."
+  ],
+  "usernames": ["admin", "bowling-goettingen", "house-of-jumpers", "freibad-goettingen", "noergelbuff"],
+  "email_domains": ["goenntertainment.local"]
+}

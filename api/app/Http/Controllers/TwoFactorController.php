@@ -3,12 +3,17 @@
 namespace App\Http\Controllers;
 
 use App\Http\Resources\UserResource;
+use App\Mail\AccountSecurityNotice;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
+use App\Support\Sessions;
+use App\Support\StepUp;
 use App\Support\Totp;
 use App\Support\TwoFactor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 
@@ -57,20 +62,28 @@ class TwoFactorController extends Controller
         }
 
         $code = (string) $request->input('code');
+        $token = null;
 
         $result = TwoFactor::attempt(
             $challenge,
             fn (TwoFactorChallenge $locked) => TwoFactor::challengeCodeMatches($locked, $user, $code, true),
+            // The token in the transaction that uses the challenge up (F-09, F-20): a password
+            // reset or another credential change cannot commit in between (TwoFactor::attempt).
+            function (User $account) use ($request, &$token): void {
+                $token = Sessions::issue($account, $request->input('device_name'));
+            },
         );
 
         match ($result) {
             TwoFactor::OK => null,
             TwoFactor::WRONG => throw ValidationException::withMessages(['code' => [TwoFactor::MSG_WRONG]]),
             TwoFactor::TOO_MANY => throw ValidationException::withMessages(['challenge' => [TwoFactor::MSG_TOO_MANY_LOGIN]]),
+            // The account's cap (F-19): back to the password form, with the time to wait.
+            TwoFactor::LOCKED => throw ValidationException::withMessages(['challenge' => [TwoFactor::lockedMessage($user->getKey())]]),
             default => throw ValidationException::withMessages(['challenge' => [TwoFactor::MSG_EXPIRED_LOGIN]]),
         };
 
-        return $this->tokenResponse($request, $user->refresh());
+        return $this->tokenPayload($request, $user->refresh(), (string) $token);
     }
 
     /** POST /api/login/two-factor/resend {challenge} - nur fuer die E-Mail-Methode. */
@@ -98,6 +111,9 @@ class TwoFactorController extends Controller
             return response()->json(['message' => TwoFactor::MSG_USES_APP], 409);
         }
 
+        // At the account's cap no code is mailed either (F-19).
+        TwoFactor::refuseIfLocked($user, 'challenge');
+
         $wait = TwoFactor::claimResend($challenge);
         if ($wait !== null) {
             return $this->waitResponse($wait);
@@ -116,11 +132,19 @@ class TwoFactorController extends Controller
 
     /* ------------------------------------------------ Einschalten per E-Mail */
 
-    /** POST /api/user/two-factor/email - Code an die Konto-Adresse. */
+    /**
+     * POST /api/user/two-factor/email {password} - Code an die Konto-Adresse.
+     *
+     * The password first (F-19): a session alone must not be able to put its own second factor
+     * in front of the account. No code is mailed without it.
+     */
     public function startEmail(Request $request): JsonResponse
     {
         $user = $request->user();
         $this->refuseIfActive($user);
+        StepUp::assertPassword($user, $request->input('password'));
+        // At the account's cap no code is mailed (F-19), and the open setup stays as it is.
+        TwoFactor::refuseIfLocked($user, 'code');
 
         $wait = TwoFactor::secondsUntilNextMail($user, TwoFactor::PURPOSE_SETUP);
         if ($wait > 0) {
@@ -170,10 +194,12 @@ class TwoFactorController extends Controller
             TwoFactor::OK => null,
             TwoFactor::WRONG => throw ValidationException::withMessages(['code' => [TwoFactor::MSG_WRONG]]),
             TwoFactor::TOO_MANY => throw ValidationException::withMessages(['challenge' => [TwoFactor::MSG_TOO_MANY]]),
+            TwoFactor::LOCKED => throw ValidationException::withMessages(['code' => [TwoFactor::lockedMessage($user->getKey())]]),
             default => throw ValidationException::withMessages(['challenge' => [TwoFactor::MSG_EXPIRED]]),
         };
 
         $codes = TwoFactor::enable($user, TwoFactor::METHOD_EMAIL);
+        $this->afterChange($user, AccountSecurityNotice::TWO_FACTOR_ENABLED);
 
         return response()->json([
             'user' => $this->userPayload($request, $user),
@@ -194,6 +220,8 @@ class TwoFactorController extends Controller
     {
         $user = $request->user();
         $this->refuseIfActive($user);
+        // The password first (F-19): no secret is made or stored without it.
+        StepUp::assertPassword($user, $request->input('password'));
 
         $secret = Totp::generateSecret();
 
@@ -220,14 +248,26 @@ class TwoFactorController extends Controller
             throw ValidationException::withMessages(['code' => [TwoFactor::MSG_SETUP_RESTART]]);
         }
 
-        $step = Totp::verify($secret, (string) $request->input('code'));
-        if ($step === null) {
-            throw ValidationException::withMessages(['code' => [TwoFactor::MSG_WRONG]]);
-        }
+        // Wrong app codes during the setup count toward the account's cap too (F-19): looked at,
+        // checked and counted under the account's lock (TwoFactor::withAccountLock).
+        $code = (string) $request->input('code');
+        $step = TwoFactor::withAccountLock($user->getKey(), function () use ($user, $secret, $code): int {
+            TwoFactor::refuseIfLocked($user, 'code');
+
+            $step = Totp::verify($secret, $code);
+            if ($step === null) {
+                TwoFactor::recordFailure($user->getKey());
+
+                throw ValidationException::withMessages(['code' => [TwoFactor::MSG_WRONG]]);
+            }
+
+            return $step;
+        });
 
         // Das Fenster des Bestaetigungs-Codes gilt schon als verbraucht: Derselbe
         // Code kann nicht gleich danach noch eine Anmeldung freischalten.
         $codes = TwoFactor::enable($user, TwoFactor::METHOD_TOTP, $step, $secret);
+        $this->afterChange($user, AccountSecurityNotice::TWO_FACTOR_ENABLED);
 
         return response()->json([
             'user' => $this->userPayload($request, $user),
@@ -237,27 +277,52 @@ class TwoFactorController extends Controller
 
     /* ---------------------------------------------------------- Verwalten */
 
-    /** DELETE /api/user/two-factor {password} ODER {code} */
+    /**
+     * DELETE /api/user/two-factor {password, code}
+     *
+     * Password AND current code (F-19): before, either alone was enough - a stolen session with a
+     * mailed code, or the password alone, could switch the second factor off.
+     */
     public function disable(Request $request): JsonResponse
     {
         $user = $request->user();
         $this->refuseIfInactive($user);
 
-        TwoFactor::assertPasswordOrCode($user, $request->input('password'), $request->input('code'));
+        StepUp::assertPasswordAndCode($user, $request->input('password'), $request->input('code'));
         TwoFactor::disable($user);
+        $this->afterChange($user, AccountSecurityNotice::TWO_FACTOR_DISABLED);
 
         return response()->json(['user' => $this->userPayload($request, $user->refresh())]);
     }
 
-    /** POST /api/user/two-factor/recovery-codes {password} ODER {code} - neue Codes, alte ungueltig. */
+    /** POST /api/user/two-factor/recovery-codes {password, code} - neue Codes, alte ungueltig. */
     public function regenerateRecoveryCodes(Request $request): JsonResponse
     {
         $user = $request->user();
         $this->refuseIfInactive($user);
 
-        TwoFactor::assertPasswordOrCode($user, $request->input('password'), $request->input('code'));
+        StepUp::assertPasswordAndCode($user, $request->input('password'), $request->input('code'));
+        $codes = TwoFactor::replaceRecoveryCodes($user);
+        $this->afterChange($user, AccountSecurityNotice::RECOVERY_CODES_RENEWED);
 
-        return response()->json(['recovery_codes' => TwoFactor::replaceRecoveryCodes($user)]);
+        return response()->json(['recovery_codes' => $codes]);
+    }
+
+    /**
+     * After a two-factor change (F-19, F-20): every other session is signed out, and the account
+     * gets a notice. The notice is best effort: the change was proven with the password (and the
+     * code), so a mail that cannot be sent is logged (user id and exception class only) and does
+     * not undo it - unlike the e-mail change, where the notice is the only signal.
+     */
+    private function afterChange(User $user, string $kind): void
+    {
+        Sessions::revokeOthers($user);
+
+        try {
+            Mail::to($user->email)->send(new AccountSecurityNotice($kind));
+        } catch (\Throwable $e) {
+            Log::error('[two-factor] security notice not sent', ['user_id' => $user->getKey(), 'exception' => $e::class]);
+        }
     }
 
     /**
@@ -278,6 +343,9 @@ class TwoFactorController extends Controller
         if ($user->two_factor_method !== TwoFactor::METHOD_EMAIL) {
             return response()->json(['message' => TwoFactor::MSG_USES_APP], 409);
         }
+
+        // At the account's cap no code is mailed (F-19), and the open one stays as it is.
+        TwoFactor::refuseIfLocked($user, 'code');
 
         $wait = TwoFactor::secondsUntilNextMail($user, TwoFactor::PURPOSE_CONFIRM);
         if ($wait > 0) {
@@ -354,18 +422,12 @@ class TwoFactorController extends Controller
     }
 
     /**
-     * Dasselbe Format wie nach POST /login (AuthController::tokenResponse):
-     * `user` mit Kategorien, `token`, `profile_complete`. Auch nach einer
-     * Google-Anmeldung - die Kategorien sind dort nur ein Mehr, das die App
-     * ohnehin kennt.
+     * Dasselbe Format wie nach POST /login (AuthController::tokenPayload):
+     * `user` mit Kategorien, `token`, `profile_complete`. The token is already issued
+     * (verifyLogin, inside TwoFactor::attempt).
      */
-    private function tokenResponse(Request $request, User $user): JsonResponse
+    private function tokenPayload(Request $request, User $user, string $token): JsonResponse
     {
-        $deviceName = $request->input('device_name');
-        $name = (is_string($deviceName) && $deviceName !== '') ? $deviceName : 'mobile';
-
-        $token = $user->createToken($name)->plainTextToken;
-
         return response()->json([
             'user' => $this->userPayload($request, $user),
             'token' => $token,

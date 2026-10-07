@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Support\ApiPath;
+use App\Support\OwnedRoutes;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -32,6 +34,17 @@ use Symfony\Component\HttpFoundation\Response;
  * `Content-Length` und `Accept-Encoding` (Laenge und Kodierung bestimmt der
  * HTTP-Client neu; eine geerbte Laenge passt nach dem Neuaufbau des Rumpfs
  * nicht mehr und der Aufruf bricht ab).
+ *
+ * ## One owner per path (F-01)
+ *
+ * The fallback never forwards a path Laravel owns, in any spelling and for any method. It
+ * normalises the request path (App\Support\ApiPath: decoded until stable, dot segments resolved,
+ * lower-case, no repeated or trailing slashes) and asks Laravel's own route table whether a route
+ * other than this one matches (App\Support\OwnedRoutes). If so the answer is Laravel's: 405 with
+ * `Allow` for the exact path with a method Laravel does not serve there, 404 for every other
+ * spelling (the same 404 as for an unknown path, so it tells nobody which spellings exist). Only
+ * paths under /api are forwarded, and always in their normalised form; Node's routers accept that
+ * one spelling only (server/src/router.js). Upstream redirects are passed on, never followed.
  */
 class NodeFallbackController extends Controller
 {
@@ -50,23 +63,65 @@ class NodeFallbackController extends Controller
         'trailer',
     ];
 
-    public function __invoke(Request $request, string $path = ''): Response
+    /**
+     * Headers a client may never send on to Node; a copy from the client is dropped.
+     *
+     * - The internal ones: only Laravel sets them, on its internal calls (App\Support\NodeInternal).
+     * - Every header that names a client address, host or scheme (F-31): Node trusts the
+     *   forwarding headers of exactly one peer, this server, so they must say what Laravel
+     *   itself established. The fallback sets X-Forwarded-For/-Host/-Proto below.
+     */
+    private const NEVER_FORWARD = [
+        'x-internal-secret',
+        'x-account-deletion-grant',
+        'x-forwarded-for',
+        'x-forwarded-host',
+        'x-forwarded-proto',
+        'x-forwarded-port',
+        'x-forwarded-prefix',
+        'x-forwarded-aws-elb',
+        'forwarded',
+        'x-real-ip',
+        'x-client-ip',
+        'x-cluster-client-ip',
+        'true-client-ip',
+        'cf-connecting-ip',
+        'fastly-client-ip',
+    ];
+
+    public function __invoke(Request $request, OwnedRoutes $owned): Response
     {
+        // The raw path, still encoded: the router's {path} capture is decoded once and has lost
+        // its trailing slash, so it cannot be normalised reliably.
+        $normalised = ApiPath::normalise($request->getPathInfo());
+        if ($normalised === null || ! ApiPath::isUnderApi($normalised)) {
+            return $this->notFound();
+        }
+
+        $methods = $owned->methodsFor($normalised);
+        if ($methods !== null) {
+            return $this->isExactPath($request, $normalised) && ! in_array($request->method(), $methods, true)
+                ? response()->json(['message' => 'Diese Methode ist hier nicht erlaubt.'], 405)
+                    ->header('Allow', implode(', ', $methods))
+                : $this->notFound();
+        }
+
         $base = rtrim((string) config('services.node_fallback.url'), '/');
 
         // Kein Rueckfall eingerichtet: Der Umzug ist durch. Gleiche Antwort wie
         // zuvor der alte Server auf einen unbekannten Pfad.
         if ($base === '') {
-            return response()->json(['message' => 'Nicht gefunden.'], 404);
+            return $this->notFound();
         }
 
-        $target = $base.'/api'.($path === '' ? '' : '/'.$path);
+        $target = $base.ApiPath::encode($normalised);
 
         $isMultipart = str_starts_with(strtolower((string) $request->header('Content-Type', '')), 'multipart/form-data');
 
         $headers = [];
         foreach ($request->headers->all() as $name => $values) {
-            if (in_array(strtolower($name), self::HOP_BY_HOP, true)) {
+            if (in_array(strtolower($name), self::HOP_BY_HOP, true)
+                || in_array(strtolower($name), self::NEVER_FORWARD, true)) {
                 continue;
             }
             // Bei Formularen mit Dateien baut der HTTP-Client den Rumpf NEU und
@@ -89,6 +144,11 @@ class NodeFallbackController extends Controller
         $headers['X-Forwarded-Host'] = $request->getHttpHost();
         $headers['X-Forwarded-Proto'] = $request->getScheme();
 
+        // The client address as Laravel established it (only Caddy may name it, see
+        // config/trustedproxy.php): one value, written here, never a client's list. Node's rate
+        // limits key on it; Node trusts this header from this server only (NODE_TRUST_PROXY).
+        $headers['X-Forwarded-For'] = (string) $request->ip();
+
         /**
          * Zu große Datei – laut ablehnen statt still weglassen.
          *
@@ -109,7 +169,9 @@ class NodeFallbackController extends Controller
             // 4xx/5xx, und genau das ist hier richtig. Weiterleiten heisst
             // weiterleiten - antwortet der alte Server mit 401 oder 404, ist das
             // die Antwort und kein Fehler dieses Servers.
-            $client = Http::withHeaders($headers)->timeout(30);
+            // No redirects: a Location from Node goes back to the client as it is (see the
+            // header list below); Laravel never fetches another address on a client's behalf.
+            $client = Http::withHeaders($headers)->withoutRedirecting()->timeout(30);
 
             if ($isMultipart) {
                 /**
@@ -141,10 +203,9 @@ class NodeFallbackController extends Controller
                 ]);
             }
         } catch (\Throwable $e) {
-            Log::error('Rueckfall auf das alte Backend fehlgeschlagen', [
-                'target' => $target,
-                'fehler' => $e->getMessage(),
-            ]);
+            // The exception class only: the message and the target carry the URL with the
+            // client's path (user names, ids).
+            Log::error('Rueckfall auf das alte Backend fehlgeschlagen', ['exception' => $e::class]);
 
             // 502, nicht 500: Der Fehler liegt nicht hier, sondern hinter uns.
             // Die Meldung ist fuer Menschen gedacht, die gerade portieren.
@@ -160,7 +221,10 @@ class NodeFallbackController extends Controller
         // CORS-Kopfzeilen setzt Laravel selbst (config/cors.php) - kaemen sie
         // zusaetzlich vom alten Server, staenden sie doppelt in der Antwort, und
         // der Browser lehnt eine doppelte Access-Control-Allow-Origin ab.
-        foreach (['Content-Type', 'Cache-Control', 'ETag', 'Last-Modified', 'Location'] as $name) {
+        // X-Content-Type-Options and Content-Security-Policy belong to the payload too: Node sends
+        // them with stored files (F-11, server/src/storage.js), so the browser never takes an image
+        // for another type and a file opened on its own runs nothing.
+        foreach (['Content-Type', 'Cache-Control', 'ETag', 'Last-Modified', 'Location', 'X-Content-Type-Options', 'Content-Security-Policy'] as $name) {
             $value = $upstream->header($name);
             if ($value !== '') {
                 $response->header($name, $value);
@@ -171,6 +235,21 @@ class NodeFallbackController extends Controller
         // (die App liest ausschliesslich den Rumpf), aber Gold wert, wenn man
         // wissen will, ob eine Etappe wirklich greift.
         return $response->header('X-Goenn-Backend', 'node-fallback');
+    }
+
+    /** The same 404 as Node's and as an unknown path: it says nothing about the path. */
+    private function notFound(): Response
+    {
+        return response()->json(['message' => 'Nicht gefunden.'], 404);
+    }
+
+    /**
+     * Whether the request names the owned path exactly as Laravel writes it. A trailing slash
+     * counts as exact because Laravel's own router ignores it too.
+     */
+    private function isExactPath(Request $request, string $normalised): bool
+    {
+        return (rtrim($request->getPathInfo(), '/') ?: '/') === $normalised;
     }
 
     /**

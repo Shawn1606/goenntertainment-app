@@ -52,6 +52,10 @@ return [
 
     'node_fallback' => [
         'url' => env('NODE_FALLBACK_URL', ''),
+        // Shared secret for Node's internal routes (App\Support\NodeInternal; Node checks it in
+        // server/src/internal-secret.js). At least 32 characters; without it Laravel does not call
+        // them (fail closed). Required in production (deploy/docker-compose.yml).
+        'internal_secret' => env('NODE_INTERNAL_SECRET', ''),
     ],
 
 ];

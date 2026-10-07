@@ -10,6 +10,7 @@ import {
   nextTier,
   normalizeAccountType,
   rankOf,
+  showsAdminBadge,
   tierFor,
 } from './account.ts';
 
@@ -110,6 +111,15 @@ test('alles ausser Erstellen bleibt auch fuer Admins an die Stufe gebunden', () 
     { slots: adminBusiness.boostSlots, months: adminBusiness.insightMonths },
     { slots: capabilitiesFor('business').boostSlots, months: capabilitiesFor('business').insightMonths },
   );
+});
+
+test('the ADMIN badge shows only on the own profile (F-05)', () => {
+  assert.equal(showsAdminBadge({ is_me: true, user: { is_admin: true } }), true);
+  assert.equal(showsAdminBadge({ is_me: true, user: { is_admin: false } }), false);
+  // Someone else's profile: the server leaves the field out ...
+  assert.equal(showsAdminBadge({ is_me: false, user: {} }), false);
+  // ... and a response that still carried it (an older server) shows no badge either.
+  assert.equal(showsAdminBadge({ is_me: false, user: { is_admin: true } }), false);
 });
 
 test('ohne Nutzer gilt die kleinste Stufe', () => {

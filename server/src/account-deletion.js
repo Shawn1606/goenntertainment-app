@@ -2,7 +2,8 @@
  * Ein Konto endgueltig loeschen – samt Daten UND Dateien.
  *
  * Genutzt von zwei Stellen: dem Admin-Panel (DELETE /api/admin/users/:id) und
- * der Selbst-Loeschung (DELETE /api/me, routes/account.js). Frueher loeschte der
+ * der Selbst-Loeschung (DELETE /api/me in Laravel, which calls the internal route
+ * DELETE /internal/accounts/:id in routes/internal.js). Frueher loeschte der
  * Admin-Weg nur die DB-Zeile; die Bilder blieben als Waisen unter storage/
  * liegen – oeffentlich abrufbar fuer jeden, der die Adresse noch kannte. Fuer
  * eine Loeschung, die jemand nach Datenschutzrecht verlangt, ist das zu wenig.
@@ -12,14 +13,20 @@
  * Fast alles: Jede Tabelle, die an `users` haengt, hat ON DELETE CASCADE bzw.
  * SET NULL (siehe schema.sql). Events, Beitritte, Beitraege, Storys, Chats,
  * Freundschaften, Punkte, Zwei-Faktor-Vorgaenge – das geht mit der einen Zeile.
- * SET NULL steht ABSICHTLICH an drei Stellen, die das Konto ueberdauern sollen:
- * Meldungen (content_reports), KI-Pruefberichte (moderation_reports) und die
- * Admin-Spalten an fremden Zeilen (wer hat entschieden). Das sind Protokolle
- * ueber Vorgaenge, keine Inhalte der Person.
+ * SET NULL steht ABSICHTLICH an Stellen, die das Konto ueberdauern sollen:
+ * Meldungen (content_reports) und die Admin-Spalten an fremden Zeilen (wer hat
+ * entschieden). Das sind Protokolle ueber Vorgaenge, keine Inhalte der Person.
+ *
+ * The AI moderation log (moderation_reports) is NOT one of them any more (F-16): each row copies
+ * the person's own text and image as they were checked, so the rows go with the account, together
+ * with their images. (Its foreign key still says SET NULL; rows of older deletions and rows
+ * without an account are pruned by retention.js.)
  *
  * ## Was von Hand dazukommt
  *
- *   - `personal_access_tokens` (polymorph, ohne Fremdschluessel),
+ *   - `moderation_reports` of the account and their images (see above),
+ *   - `personal_access_tokens` (polymorph, ohne Fremdschluessel; only the account's own tokens,
+ *     TOKENABLE_TYPE, the same filter as setBan in auth.js),
  *   - `password_reset_tokens` (haengt an der E-Mail, nicht an der ID),
  *   - `sessions` von Laravel (ohne Fremdschluessel; die Tabelle gibt es nur,
  *     wo Laravel mitlaeuft),
@@ -36,18 +43,18 @@
  * Woche. Der Verlauf der anderen behaelt Titel, Ort und Datum (das ist ihre
  * Erinnerung, dass sie dort waren) und verliert nur das Bild.
  */
-import fs from 'node:fs';
-import path from 'node:path';
+import { TOKENABLE_TYPE } from './auth.js';
 import { pool } from './db.js';
+import { removeStored } from './storage.js';
 
 /**
  * Alle Stellen, an denen ein Pfad unter storage/ stehen kann.
  *
  * Eine Datei wird nur geloescht, wenn danach KEINE dieser Spalten mehr auf sie
- * zeigt. Beispiel: Das Beweisbild einer KI-Sperre steht zugleich im Pruefbericht
- * (moderation_reports, bleibt) und im Sperr-Beweis (ban_evidence, geht mit dem
- * Konto) – dort muss es bleiben, sonst zeigt das Admin-Panel ein leeres Bild.
- * Neue Upload-Spalten gehoeren hier dazu.
+ * zeigt. Example: the evidence image of an AI ban stands both in the moderation log
+ * (moderation_reports) and in the ban evidence (ban_evidence); the retention prune
+ * (retention.js) may clear one while the other still shows it. Neue Upload-Spalten
+ * gehoeren hier dazu.
  */
 const FILE_REFERENCES = [
   ['users', 'avatar'],
@@ -73,22 +80,55 @@ async function stillReferenced(filePath) {
   return false;
 }
 
+/** Values per query in referencedAmong(). */
+const REFERENCE_CHUNK = 500;
+
 /**
- * Datei unter storage/ entfernen – best effort.
- *
- * Der Pfad kommt zwar aus der eigenen DB, trotzdem wird geprueft, dass er
- * innerhalb von storage/ bleibt: Ein `../` in einer Zeile waere sonst ein
- * Loeschbefehl fuer beliebige Dateien des Servers.
+ * The values among `paths` that some column of FILE_REFERENCES still holds. One query per column
+ * and chunk instead of one per column and file (stillReferenced): the retention prune's sweep
+ * (retention.js) checks many files at once. Compared without case, so a value the database
+ * matches is never taken for unreferenced.
  */
-function removeStoredFile(filePath) {
-  const root = path.resolve(process.cwd(), 'storage');
-  const target = path.resolve(root, filePath);
-  if (!target.startsWith(root + path.sep)) return;
-  try {
-    fs.unlinkSync(target);
-  } catch {
-    /* Datei evtl. schon weg. */
+export async function referencedAmong(paths) {
+  const values = [...new Set(paths.filter(isStoredFile))];
+  const found = new Set();
+  for (let i = 0; i < values.length; i += REFERENCE_CHUNK) {
+    const chunk = values.slice(i, i + REFERENCE_CHUNK);
+    for (const [table, column] of FILE_REFERENCES) {
+      const [rows] = await pool.query(`SELECT DISTINCT ${column} AS p FROM ${table} WHERE ${column} IN (?)`, [chunk]);
+      for (const row of rows) found.add(String(row.p).toLowerCase());
+    }
   }
+  return new Set(values.filter((value) => found.has(value.toLowerCase())));
+}
+
+/**
+ * Removes the stored files among `paths` that no column references any more (FILE_REFERENCES),
+ * best effort; returns how many it removed and how many removals failed (a file that is already
+ * gone is neither, storage.js removeStored). Used after an account deletion and by the retention
+ * prune (retention.js), so a file another row still shows stays.
+ */
+export async function removeUnreferencedFiles(paths) {
+  const result = { removed: 0, failed: 0 };
+  for (const file of new Set(paths.filter(isStoredFile))) {
+    if (await stillReferenced(file)) continue;
+    const outcome = await removeStoredFile(file);
+    if (outcome === 'removed') result.removed += 1;
+    else if (outcome === 'failed') result.failed += 1;
+  }
+  return result;
+}
+
+/**
+ * Datei unter storage/ entfernen – best effort. Returns the outcome of storage.js removeStored.
+ *
+ * The path comes from our own database, yet it is checked to stay inside its folder: a `../` in
+ * a row would otherwise be a command to delete any file on the server. storage.js resolves the
+ * value against its root: the public tree for avatars, banners and post images, the private one
+ * for story images and evidence (F-11), so those go with the account too.
+ */
+async function removeStoredFile(filePath) {
+  return removeStored(filePath);
 }
 
 /**
@@ -135,6 +175,12 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
       'SELECT image_path AS p FROM ban_evidence WHERE user_id = ? AND image_path IS NOT NULL',
       [user.id],
     );
+    // The moderation log copies the person's own texts and images; it goes with the account
+    // (F-16). Its images are removed below unless another row still shows them.
+    const [moderation] = await conn.query(
+      'SELECT image_path AS p FROM moderation_reports WHERE user_id = ? AND image_path IS NOT NULL',
+      [user.id],
+    );
     const [activities] = await conn.query('SELECT id, banner_path AS p FROM activities WHERE user_id = ?', [
       user.id,
     ]);
@@ -171,12 +217,17 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
     // The participants' history was updated above, while activity_id was still set.
     await conn.query('DELETE FROM activities WHERE user_id = ?', [user.id]);
 
-    await conn.query('DELETE FROM personal_access_tokens WHERE tokenable_id = ?', [user.id]);
+    await conn.query('DELETE FROM moderation_reports WHERE user_id = ?', [user.id]);
+    await conn.query('DELETE FROM personal_access_tokens WHERE tokenable_type = ? AND tokenable_id = ?', [
+      TOKENABLE_TYPE,
+      user.id,
+    ]);
     await conn.query('DELETE FROM password_reset_tokens WHERE email = ?', [user.email]);
     try {
       await conn.query('DELETE FROM sessions WHERE user_id = ?', [user.id]);
     } catch (err) {
-      // Ohne Laravel (z. B. im Docker-Abbild aus deploy/) gibt es die Tabelle nicht.
+      // Only Laravel's own migrations make this table (a local `composer setup`); the deploy loads
+      // server/schema.sql, which has none, and runs Laravel with SESSION_DRIVER=array.
       if (err?.code !== 'ER_NO_SUCH_TABLE') throw err;
     }
     await conn.query('DELETE FROM users WHERE id = ?', [user.id]);
@@ -189,6 +240,7 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
       ...posts.map((row) => row.p),
       ...stories.map((row) => row.p),
       ...evidence.map((row) => row.p),
+      ...moderation.map((row) => row.p),
       ...eventBanners,
     ].filter(isStoredFile);
   } catch (err) {
@@ -201,9 +253,7 @@ export async function deleteUserAccount(userId, { refuseLastAdmin = false } = {}
   // Dateien erst NACH dem Commit: Kippt die Transaktion, zeigt das Konto
   // weiter auf Bilder, die es noch gibt. Umgekehrt (Datei weg, Konto noch da)
   // waere es ein Konto mit kaputten Bildern.
-  for (const file of new Set(files)) {
-    if (!(await stillReferenced(file))) removeStoredFile(file);
-  }
+  await removeUnreferencedFiles(files);
 
   return 'deleted';
 }

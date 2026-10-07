@@ -21,9 +21,10 @@
  * samt Bilddatei. Zwei Wege zum selben Ziel wären zwei Wege, die auseinander
  * laufen können.
  */
+import { Image } from 'expo-image';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HomeBackground } from '@/components/home-background';
@@ -37,6 +38,7 @@ import { remainingLabel } from '@/domain/story';
 import { useBrandSurface } from '@/hooks/use-theme';
 import { ApiError, type AdminStory, api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { apiImageSource } from '@/lib/auth-image';
 import { confirmAction } from '@/lib/confirm';
 
 export default function AdminStoriesScreen() {
@@ -178,7 +180,13 @@ export default function AdminStoriesScreen() {
 
               {item.image_url ? (
                 <Pressable onPress={() => setZoom(item.image_url)}>
-                  <Image source={{ uri: item.image_url }} style={styles.storyImage} resizeMode="cover" />
+                  {/* Story images are private (F-11): only with the admin's token. */}
+                  <Image
+                    source={apiImageSource(item.image_url, token)}
+                    style={styles.storyImage}
+                    contentFit="cover"
+                    cachePolicy="memory"
+                  />
                 </Pressable>
               ) : (
                 <ThemedText type="small" style={{ color: surface.textMuted, fontStyle: 'italic' }}>
@@ -217,7 +225,9 @@ export default function AdminStoriesScreen() {
       {/* Bild groß ansehen – zum Beurteilen reicht die Vorschau nicht. */}
       <Modal visible={zoom !== null} transparent animationType="fade" onRequestClose={() => setZoom(null)}>
         <Pressable style={styles.zoomBackdrop} onPress={() => setZoom(null)}>
-          {zoom ? <Image source={{ uri: zoom }} style={styles.zoomImage} resizeMode="contain" /> : null}
+          {zoom ? (
+            <Image source={apiImageSource(zoom, token)} style={styles.zoomImage} contentFit="contain" cachePolicy="memory" />
+          ) : null}
         </Pressable>
       </Modal>
     </HomeBackground>

@@ -77,6 +77,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
         {/* Sicherheit: Passwort ändern, Zwei-Faktor, Konto löschen – aus den
             Einstellungen erreichbar. */}
         <Stack.Screen name="security/password" />
+        <Stack.Screen name="security/email" />
         <Stack.Screen name="security/two-factor" />
         <Stack.Screen name="security/delete-account" />
         {/* Blockierte Konten. Braucht einen eigenen Screen, weil eine blockierte
@@ -121,8 +122,6 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
       </Stack.Protected>
-      {/* Admin-Panel: immer per URL /admin erreichbar (eigener Login, im Browser bedienbar) */}
-      <Stack.Screen name="admin" />
       {/* Rechtstexte IN der App: Impressum, Nutzungsbedingungen, Haftung, Regeln,
           Datenschutz (siehe src/domain/legal.ts).
 

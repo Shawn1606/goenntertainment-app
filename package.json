@@ -62,7 +62,9 @@
     "test": "node --test \"src/domain/*.test.ts\"",
     "test:watch": "node --test --watch \"src/domain/*.test.ts\"",
     "test:server": "npm --prefix server test",
-    "test:tooling": "node --test \"scripts/ci/*.test.mjs\""
+    "test:tooling": "node --test \"scripts/ci/*.test.mjs\"",
+    "test:deploy": "node --test \"deploy/test/!(stack).test.mjs\"",
+    "test:deploy:stack": "node --test --test-timeout=2400000 deploy/test/stack.test.mjs"
   },
   "private": true
 }

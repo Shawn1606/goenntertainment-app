@@ -1,65 +1,116 @@
 # GÖ4Fun auf einem Server – alle Teile als Container.
 #
 #   Internet ─► caddy (HTTPS, Port 80/443)
+#                 ├─► media (public uploads as plain files, read-only; holds no secrets)
 #                 └─► api   (Laravel, api/)      Anmeldung, Konto, 2FA …
 #                       └─► node (Node, server/)   alles, was noch nicht umgezogen ist
-#                 db  (MySQL)  ◄── beide Backends
+#                 db  (MySQL)  ◄── beide Backends; the nightly backup (backup)
 #
 # Genau die Aufstellung wie am Entwicklungs-PC (Laravel vorn, Node dahinter), nur
 # dass niemand außer Caddy von außen erreichbar ist.
 #
-# Starten (im Ordner deploy/, nach dem Ausfüllen von .env):
+# Networks (who can reach whom; the bottom of this file has the details):
+#   edge      caddy <-> api. caddy's ports, certificates and api's mail go through here.
+#   media     caddy <-> media. Internal: the file server has no way out and reaches nothing else.
+#   app       api <-> node, and both backends -> db. Internal: no way out.
+#   data      db <-> backup, admin-gate, seed. Internal.
+#   outbound  node alone: its way out to the moderation provider.
+# caddy reaches neither node nor db, db has no way out, and api and node share exactly one
+# network, so each backend sees the one before it at a fixed address (F-31).
 #
-#   docker compose up -d --build
+# Every setting without a default is required: docker compose refuses to start until deploy/.env
+# sets it (deploy/.env.example lists them, with who decides each). Before the first start and
+# before every update: deploy/scripts/preflight.sh. The first start creates the admin account
+# with the one-off `seed` service before caddy may start (the `admin-gate` service); the steps
+# are in deploy/README.md.
 #
-# Anleitung Schritt für Schritt: deploy/README.md
+# No top-level `name`: docker compose names the project after this file's folder, `deploy`, as
+# every earlier version of this file did, so a server that ran one keeps its volumes
+# (deploy_db-data and the others).
+
+# Every container's log is rotated by size (F-45): at most LOG_MAX_FILES files of LOG_MAX_SIZE
+# each. How much log is kept is an operator decision, so both are required. Docker rotates by
+# size, not by time.
+x-logging: &logging
+  driver: local
+  options:
+    max-size: ${LOG_MAX_SIZE:?LOG_MAX_SIZE is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
+    max-file: ${LOG_MAX_FILES:?LOG_MAX_FILES is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
+
+# The Node image: built once for the node service and the one-off seed service.
+x-node-build: &node-build
+  context: ../server
+  additional_contexts:
+    shared: ../shared
 
 services:
   db:
-    image: mysql:8.4
+    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
     restart: unless-stopped
+    # Checks MYSQL_BINLOG_RETENTION_DAYS, then starts the image's own entrypoint with it
+    # (scripts/db-entrypoint.sh).
+    entrypoint: ['bash', '/opt/deploy/db-entrypoint.sh']
+    command: ['mysqld']
     environment:
       MYSQL_DATABASE: goenntertainment
       MYSQL_USER: goenn
-      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD fehlt in deploy/.env}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD fehlt in deploy/.env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      # How many days MySQL keeps its binary log (every change, also of deleted accounts), or
+      # `off`. A retention decision (F-45) without a default; MySQL's own would be 30 days. The
+      # log is rotated every day (mysql/02-binlog-rotate.sql), so a change leaves it at most two
+      # days after that many days.
+      MYSQL_BINLOG_RETENTION_DAYS: ${MYSQL_BINLOG_RETENTION_DAYS:?MYSQL_BINLOG_RETENTION_DAYS is missing in deploy/.env (log retention, an operator decision; see deploy/.env.example)}
     volumes:
       - db-data:/var/lib/mysql
       # Legt beim ALLERERSTEN Start (leeres Volume) alle Tabellen an. Spätere
       # Ergänzungen macht das Node-Backend beim Start selbst (ensureSchema).
       - ../server/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      # On the same first start, as root: the daily rotation of the binary log (an event; F-45).
+      # A volume created before this file needs it once: deploy/README.md, Logs.
+      - ./mysql/02-binlog-rotate.sql:/docker-entrypoint-initdb.d/02-binlog-rotate.sql:ro
+      - ./scripts/db-entrypoint.sh:/opt/deploy/db-entrypoint.sh:ro
     healthcheck:
-      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '-uroot', '-p${DB_ROOT_PASSWORD}']
+      # No credentials (F-18): mysqladmin ping exits 0 as soon as the server answers, even when it
+      # refuses the login, so no password ever appears on a command line or in the container's
+      # configuration. -h 127.0.0.1: the image's first-start setup listens on its socket only.
+      test: ['CMD', 'mysqladmin', 'ping', '-h', '127.0.0.1', '--silent']
       interval: 5s
       timeout: 5s
       retries: 20
       start_period: 30s
+    networks: [app, data]
+    # The image's entrypoint changes file owners and drops to the mysql user: default capabilities.
+    security_opt: ['no-new-privileges:true']
+    logging: *logging
 
-  # Bereitet den Upload-Ordner vor und beendet sich dann wieder.
+  # Prepares the upload volumes (uploads, private-media), then exits.
   #
-  # Docker legt einen fehlenden Ordner für ein Bind-Mount als root an. Das
-  # Node-Backend läuft aber absichtlich NICHT als root (Benutzer `node`, UID 1000)
-  # und könnte dort nichts speichern – jeder Upload scheiterte mit „Serverfehler".
-  # Dieser Einmal-Container gibt den Ordner dem Benutzer `node`.
+  # A new volume belongs to root. Das Node-Backend läuft aber absichtlich NICHT als root
+  # (Benutzer `node`, UID 1000) und könnte dort nichts speichern – jeder Upload scheiterte
+  # mit „Serverfehler". This one-off container gives the folders in both volumes to the user
+  # `node`.
   #
   # Als Liste und in EINER Zeile: Als gefalteter Block (`>`) mit tiefer
   # eingerückten Folgezeilen behält YAML die Zeilenumbrüche – die Shell las
   # dann `/storage/posts` als eigenen Befehl und scheiterte am `&&` am
   # Zeilenanfang (`syntax error: unexpected "&&"`), und der ganze Stapel startete nicht.
   storage-init:
-    image: busybox:1.37
+    image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
     command:
       - sh
       - -c
-      - mkdir -p /storage/avatars /storage/banners /storage/evidence /storage/posts /storage/stories /storage/user-banners && chown -R 1000:1000 /storage
+      - mkdir -p /storage/avatars /storage/banners /storage/posts /storage/user-banners /storage-private/evidence /storage-private/stories && chown -R 1000:1000 /storage /storage-private
     volumes:
-      - ./storage:/storage
+      - uploads:/storage
+      # Evidence and story images (F-11, server/src/storage.js): node only, never a web server.
+      - private-media:/storage-private
+    network_mode: none
+    security_opt: ['no-new-privileges:true']
+    logging: *logging
 
   node:
-    build:
-      context: ../server
-      additional_contexts:
-        shared: ../shared
+    build: *node-build
     restart: unless-stopped
     depends_on:
       db:
@@ -67,33 +118,85 @@ services:
       storage-init:
         condition: service_completed_successfully
     environment:
+      # Production build: the server refuses to start without its required settings
+      # (server/src/config.js names them).
+      NODE_ENV: production
       DB_HOST: db
       DB_PORT: '3306'
       DB_DATABASE: goenntertainment
       DB_USERNAME: goenn
-      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       PORT: '8000'
-      PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Shared with api: Laravel sends it on Node's internal routes (account deletion).
+      NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
+      # The only hop Node takes the client address from: api's fixed address on the app network
+      # (below; deploy/test/static.test.mjs checks that both agree).
+      NODE_TRUST_PROXY: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.140
+      # Access-token lifetime in minutes, the same setting as api's: Node refuses a token issued
+      # longer ago too (src/auth.js). Empty = the default in code (30 days).
+      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
+      # Retention in days (F-16, server/src/retention.js): how long evidence images, AI moderation
+      # reports, expired tokens and usage rows are kept. An operator decision: no defaults, and
+      # node does not start without them.
+      EVIDENCE_RETENTION_DAYS: ${EVIDENCE_RETENTION_DAYS:?EVIDENCE_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      MODERATION_REPORT_RETENTION_DAYS: ${MODERATION_REPORT_RETENTION_DAYS:?MODERATION_REPORT_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      TOKEN_RETENTION_DAYS: ${TOKEN_RETENTION_DAYS:?TOKEN_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      USAGE_RETENTION_DAYS: ${USAGE_RETENTION_DAYS:?USAGE_RETENTION_DAYS is missing in deploy/.env (an operator decision, no default; see deploy/.env.example)}
+      PUBLIC_URL: https://${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
+      # AI moderation (F-06): required; who owns the provider account and key is the operator's
+      # decision (deploy/.env.example). Node refuses to start without it and refuses
+      # MODERATION_ENABLED=false (server/src/config.js).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY is missing in deploy/.env (see deploy/.env.example)}
       MODERATION_ENABLED: ${MODERATION_ENABLED:-true}
       MODERATION_MODEL: ${MODERATION_MODEL:-claude-opus-5}
       MODERATION_BLOCK_SEVERITY: ${MODERATION_BLOCK_SEVERITY:-2}
       MODERATION_TIMEOUT_SEVERITY: ${MODERATION_TIMEOUT_SEVERITY:-2}
       MODERATION_TIMEOUT_DAYS: ${MODERATION_TIMEOUT_DAYS:-7}
-      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-true}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      # Fail closed: content the model cannot check is refused. 'true' is an explicit emergency
+      # switch only.
+      MODERATION_FAIL_OPEN: ${MODERATION_FAIL_OPEN:-false}
+      # Global budget of AI moderation calls per UTC day across all accounts (F-07,
+      # server/src/moderation.js). How much is spent on the provider is the operator's decision:
+      # no default, and node does not start without it. Beyond it every moderated write is refused
+      # until the next UTC day, whatever MODERATION_FAIL_OPEN says.
+      MODERATION_DAILY_CALL_LIMIT: ${MODERATION_DAILY_CALL_LIMIT:?MODERATION_DAILY_CALL_LIMIT is missing in deploy/.env (the most AI moderation calls per UTC day, a whole number of at least 1; an operator decision, no default)}
       # Ausgeblendete Funktionen (siehe server/src/features.js). Leer = aus.
       FEATURE_IMPORTED_EVENTS: ${FEATURE_IMPORTED_EVENTS:-}
       FEATURE_ACCOUNT_TIERS: ${FEATURE_ACCOUNT_TIERS:-}
+      # Write limits per route class (server/src/rate-limit.js); empty = the code's defaults, an
+      # invalid value stops the start. The counters live in Node's memory: keep ONE node process.
+      WRITE_LIMIT_MODERATED: ${WRITE_LIMIT_MODERATED:-}
+      WRITE_LIMIT_COMMENT: ${WRITE_LIMIT_COMMENT:-}
+      WRITE_LIMIT_CHAT: ${WRITE_LIMIT_CHAT:-}
+      WRITE_LIMIT_REACTION: ${WRITE_LIMIT_REACTION:-}
+      WRITE_LIMIT_RELATIONSHIP: ${WRITE_LIMIT_RELATIONSHIP:-}
+      WRITE_LIMIT_BLOCK: ${WRITE_LIMIT_BLOCK:-}
+      WRITE_LIMIT_REPORT: ${WRITE_LIMIT_REPORT:-}
+      WRITE_LIMIT_STATE: ${WRITE_LIMIT_STATE:-}
+      WRITE_LIMIT_CONTENT: ${WRITE_LIMIT_CONTENT:-}
+      WRITE_LIMIT_ACCOUNT: ${WRITE_LIMIT_ACCOUNT:-}
+      WRITE_LIMIT_ADMIN: ${WRITE_LIMIT_ADMIN:-}
+      WRITE_LIMIT_WEBHOOK: ${WRITE_LIMIT_WEBHOOK:-}
     volumes:
-      - ./storage:/app/storage
+      # Public uploads: written by Node only, served from the same volume (read-only) by media,
+      # behind caddy.
+      - uploads:/app/storage
+      # Private uploads (ban evidence, AI moderation evidence, story images): served only by
+      # Node's checked routes. Never mount this volume into api, caddy, media or any other web
+      # server.
+      - private-media:/app/storage-private
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/api/health | grep -q "\"ok\":true"']
+      # Node's own health route; /api/health belongs to Laravel. The start period covers the
+      # schema step, which runs before Node listens.
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:8000/internal/health | grep -q "\"ok\":true"']
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 20s
+      start_period: 60s
+    networks: [app, outbound]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
   api:
     build:
@@ -112,9 +215,9 @@ services:
       # Niemals true auf dem Server: Laravel zeigte dann bei jedem Fehler
       # Quelltext, Pfade und Umgebungsvariablen – auch Passwörter.
       APP_DEBUG: 'false'
-      APP_KEY: ${APP_KEY:?APP_KEY fehlt in deploy/.env (siehe README, Schritt 4)}
-      APP_URL: https://${DOMAIN:?}
-      PUBLIC_URL: https://${DOMAIN:?}
+      APP_KEY: ${APP_KEY:?APP_KEY is missing in deploy/.env (see deploy/.env.example)}
+      APP_URL: https://${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
+      PUBLIC_URL: https://${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
       # UTC – und zwar überall (MySQL und Node laufen im Container ohnehin in UTC).
       # Beide Backends hängen an Zeiten aus der Datenbank ein „Z" an, behandeln sie
       # also als UTC. Am Entwicklungs-PC läuft MySQL dagegen in deutscher Ortszeit;
@@ -132,51 +235,262 @@ services:
       DB_PORT: '3306'
       DB_DATABASE: goenntertainment
       DB_USERNAME: goenn
-      DB_PASSWORD: ${DB_PASSWORD:?}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
       # Alles, was Laravel noch nicht selbst kann, geht an das Node-Backend.
       NODE_FALLBACK_URL: http://node:8000
+      # Laravel sends it on Node's internal routes (account deletion); the same value as node's.
+      NODE_INTERNAL_SECRET: ${NODE_INTERNAL_SECRET:?NODE_INTERNAL_SECRET is missing in deploy/.env (see deploy/.env.example)}
+      # The only proxy Laravel takes the client address from: caddy's fixed address on the edge
+      # network (below; deploy/test/static.test.mjs checks that both agree).
+      TRUSTED_PROXIES: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
       # Ohne eigene Tabellen: Das Schema gehört Node (server/schema.sql), Laravels
-      # Standard-Tabellen für Cache/Sitzungen/Warteschlange gibt es dort nicht.
-      # file  = Zähler fürs Rate-Limiting (Anmelde-Versuche) im Container
+      # Standard-Tabellen für Sitzungen/Warteschlange gibt es dort nicht.
+      # database = rate-limit counters (sign-in, sign-up, password, 2FA; per account and
+      #            per address) in the `cache` table of server/schema.sql: a file in the
+      #            container loses increments under concurrent requests and resets on restart.
       # array = keine Sitzungen – die API arbeitet nur mit Tokens
       # sync  = Mails (2FA-Codes) gehen sofort raus, nicht über eine Warteschlange
-      CACHE_STORE: file
+      CACHE_STORE: database
+      # Optional: access-token lifetime in minutes; empty = the default in code (30 days). The
+      # node service reads the same setting (scripts/ci/check-mirrors.mjs keeps both lines equal).
+      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}
+      # Optional overrides of the sign-in, sign-up, password and two-factor rate limits
+      # (api/config/ratelimits.php); empty = the defaults in code, an invalid value stops the
+      # api container's start.
+      AUTH_LIMIT_REGISTER_IP: ${AUTH_LIMIT_REGISTER_IP:-}
+      AUTH_LIMIT_REGISTER_ACCOUNT: ${AUTH_LIMIT_REGISTER_ACCOUNT:-}
+      AUTH_LIMIT_LOGIN_ACCOUNT_IP: ${AUTH_LIMIT_LOGIN_ACCOUNT_IP:-}
+      AUTH_LIMIT_LOGIN_IP: ${AUTH_LIMIT_LOGIN_IP:-}
+      AUTH_LIMIT_LOGIN_ACCOUNT: ${AUTH_LIMIT_LOGIN_ACCOUNT:-}
+      AUTH_LIMIT_FORGOT_IP: ${AUTH_LIMIT_FORGOT_IP:-}
+      AUTH_LIMIT_FORGOT_ACCOUNT: ${AUTH_LIMIT_FORGOT_ACCOUNT:-}
+      AUTH_LIMIT_RESET_IP: ${AUTH_LIMIT_RESET_IP:-}
+      AUTH_LIMIT_RESET_ACCOUNT: ${AUTH_LIMIT_RESET_ACCOUNT:-}
+      AUTH_LIMIT_2FA_CHALLENGE: ${AUTH_LIMIT_2FA_CHALLENGE:-}
+      AUTH_LIMIT_2FA_IP: ${AUTH_LIMIT_2FA_IP:-}
+      AUTH_LIMIT_2FA_ACCOUNT: ${AUTH_LIMIT_2FA_ACCOUNT:-}
+      AUTH_LIMIT_2FA_RESEND_IP: ${AUTH_LIMIT_2FA_RESEND_IP:-}
+      AUTH_LIMIT_2FA_RESEND_ACCOUNT: ${AUTH_LIMIT_2FA_RESEND_ACCOUNT:-}
+      AUTH_LIMIT_2FA_SETUP_USER: ${AUTH_LIMIT_2FA_SETUP_USER:-}
+      AUTH_LIMIT_ACCOUNT_SENSITIVE_USER: ${AUTH_LIMIT_ACCOUNT_SENSITIVE_USER:-}
+      AUTH_LIMIT_PROFILE_USER: ${AUTH_LIMIT_PROFILE_USER:-}
+      AUTH_LIMIT_2FA_FAILURES: ${AUTH_LIMIT_2FA_FAILURES:-}
+      AUTH_LIMIT_LOCK_WAIT: ${AUTH_LIMIT_LOCK_WAIT:-}
       SESSION_DRIVER: array
       QUEUE_CONNECTION: sync
-      # Mail-Versand für 2FA-Codes und „Passwort vergessen". Ohne Zugang meldet
-      # die App „Wir konnten dir gerade keinen Code schicken".
-      MAIL_MAILER: ${MAIL_MAILER:-smtp}
-      MAIL_HOST: ${MAIL_HOST:-}
+      # Mail-Versand für 2FA-Codes und „Passwort vergessen". Always SMTP: the log mailer would
+      # write every code into the container log. Which provider and which sender address are
+      # operator decisions, so both are required.
+      MAIL_MAILER: smtp
+      MAIL_HOST: ${MAIL_HOST:?MAIL_HOST is missing in deploy/.env (the mail provider, an operator decision; see deploy/.env.example)}
       MAIL_PORT: ${MAIL_PORT:-587}
-      MAIL_USERNAME: ${MAIL_USERNAME:-}
-      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      # Must be in deploy/.env; may be empty for a relay that takes mail without a login.
+      MAIL_USERNAME: ${MAIL_USERNAME?MAIL_USERNAME is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
+      MAIL_PASSWORD: ${MAIL_PASSWORD?MAIL_PASSWORD is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
       MAIL_SCHEME: ${MAIL_SCHEME:-}
-      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-noreply@${DOMAIN}}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
-    volumes:
-      # Dieselben Uploads, die Node speichert – Laravel liefert sie unter /storage
-      # aus (so wie lokal über die Verknüpfung api/public/storage). Nur lesend:
-      # Geschrieben wird ausschließlich von Node.
-      - ./storage:/var/www/api/public/storage:ro
+    # No volumes: uploads are served by media behind caddy, never by Laravel or PHP (F-29).
+    healthcheck:
+      # Checks the way to the database (/api/health asks MySQL), not only that Apache answers.
+      # `php -r`: the image has no curl. Port 8080: Apache runs as www-data and cannot bind 80.
+      test: ['CMD', 'php', '-r', 'exit(str_contains((string) @file_get_contents("http://127.0.0.1:8080/api/health"), "\"ok\":true") ? 0 : 1);']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      edge: {}
+      app:
+        # Fixed: node trusts the client address only from this one (NODE_TRUST_PROXY).
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.140
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
+      # The public edge starts only once an admin account exists (F-05, scripts/admin-gate.sh).
+      admin-gate:
+        condition: service_completed_successfully
     ports:
-      - '80:80'
-      - '443:443'
+      # IPv4 only. The networks have no IPv6, so Docker would relay an IPv6 client with the
+      # network's gateway as its address: every IPv6 client would share one address in the
+      # rate limits. Until IPv6 is set up end to end the domain gets no AAAA record
+      # (deploy/.env.example, DOMAIN).
+      - '0.0.0.0:80:80'
+      - '0.0.0.0:443:443'
     environment:
-      DOMAIN: ${DOMAIN:?}
+      DOMAIN: ${DOMAIN:?DOMAIN is missing in deploy/.env (an operator decision; see deploy/.env.example)}
+    networks:
+      edge:
+        # Fixed: api trusts the client address only from this one (TRUSTED_PROXIES).
+        ipv4_address: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.10
+      media: {}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Hier liegen die Let's-Encrypt-Zertifikate. Ohne dieses Volume holt Caddy
       # bei jedem Neustart neue und läuft irgendwann ins Rate-Limit.
       - caddy-data:/data
       - caddy-config:/config
+      # No uploads volume: caddy follows symbolic links, so a link planted there would hand out
+      # the keys in caddy-data. The media service serves the uploads (deploy/Caddyfile.media).
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    # Runs as root in its image and binds 80 and 443.
+    cap_add: [NET_BIND_SERVICE]
+    logging: *logging
+
+  # The public uploads as plain files (deploy/Caddyfile.media), for caddy only: caddy forwards the
+  # allow-listed /storage paths here and adds the security headers. A container of its own because
+  # Caddy's file server follows symbolic links: one planted in the uploads volume resolves in here,
+  # where there is nothing secret to read (no settings, no keys, empty temporary /data and /config).
+  media:
+    image: caddy:2-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
+    restart: unless-stopped
+    user: '65534:65534'
+    read_only: true
+    tmpfs: [/data, /config]
+    volumes:
+      - ./Caddyfile.media:/etc/caddy/Caddyfile:ro
+      - uploads:/srv/storage:ro
+    networks: [media]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    # Port 8080 needs no privilege, but the image's caddy binary carries the file capability
+    # cap_net_bind_service; without it in the bounding set, no-new-privileges refuses to start it.
+    cap_add: [NET_BIND_SERVICE]
+    logging: *logging
+
+  # One-shot check before caddy starts: is there an admin account (scripts/admin-gate.sh)?
+  admin-gate:
+    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+    entrypoint: ['bash', '/opt/deploy/admin-gate.sh']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+    volumes:
+      - ./scripts/admin-gate.sh:/opt/deploy/admin-gate.sh:ro
+    tmpfs: [/tmp]
+    networks: [data]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
+
+  # Nightly backup of the database and the uploads, with pruning (F-17, scripts/backup.sh):
+  # every day at 02:30 UTC and once at start, into BACKUP_DIR on the host.
+  backup:
+    image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+    restart: unless-stopped
+    init: true
+    entrypoint: ['bash', '/opt/deploy/backup.sh']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      # How many days a backup set is kept. An operator decision without a default.
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:?BACKUP_RETENTION_DAYS is missing in deploy/.env (backup retention, an operator decision; see deploy/.env.example)}
+      TZ: UTC
+    volumes:
+      - ./scripts/backup.sh:/opt/deploy/backup.sh:ro
+      - uploads:/data/uploads:ro
+      - private-media:/data/private-media:ro
+      # Outside the clone (deploy/scripts/preflight.sh checks it), so neither a fresh clone nor
+      # a `git clean` takes the backups with it. Never created implicitly: a missing directory
+      # stops the start instead of filling a new, empty one.
+      - type: bind
+        source: ${BACKUP_DIR:?BACKUP_DIR is missing in deploy/.env (an absolute path outside this clone, an operator decision; see deploy/.env.example)}
+        target: /backups
+        bind:
+          create_host_path: false
+    tmpfs: [/tmp]
+    healthcheck:
+      # Healthy while the last run succeeded within 26 hours and none failed since.
+      test: ['CMD', 'bash', '/opt/deploy/backup.sh', '--check']
+      interval: 10m
+      timeout: 30s
+      retries: 3
+      start_period: 30m
+    networks: [data]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
+
+  # One-off: creates the admin account (server/src/seed.js, `npm run seed:admin`), before caddy
+  # may start. Never started by `docker compose up` (profile tools); run it with
+  # `docker compose run --rm seed` as deploy/README.md shows. ADMIN_EMAIL and ADMIN_PASSWORD come
+  # from the operator's shell for that one run: they are not in deploy/.env and never in a
+  # long-running container (F-05, F-18). Exits 1 when either is missing or the account exists.
+  seed:
+    profiles: [tools]
+    build: *node-build
+    command: ['npm', 'run', 'seed:admin']
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: '3306'
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is missing in deploy/.env (see deploy/.env.example)}
+      NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+      ADMIN_EMAIL:
+      ADMIN_PASSWORD:
+    networks: [data]
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    logging: *logging
 
 volumes:
   db-data:
   caddy-data:
   caddy-config:
+  # Public uploads (avatars, banners, posts, user banners): node writes, media serves (read-only).
+  uploads:
+  # Private media (evidence, stories): node only; the backup reads it.
+  private-media:
+
+# APP_NET_PREFIX (the first three parts of a free private /24 on this host, see
+# deploy/.env.example) is split into two halves with fixed proxy addresses (F-31):
+#   edge  <prefix>.0/25    caddy at .10; Laravel trusts forwarding headers from it only
+#                          (TRUSTED_PROXIES). Other containers get .64-.127.
+#   app   <prefix>.128/25  api at .140; Node trusts forwarding headers from it only
+#                          (NODE_TRUST_PROXY). Other containers get .192-.255.
+# So no other container can take a fixed address. media, data and outbound get addresses from
+# Docker. No network has IPv6 (see caddy's ports).
+networks:
+  edge:
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.0/25
+          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.64/26
+  media:
+    internal: true
+    enable_ipv6: false
+  app:
+    internal: true
+    enable_ipv6: false
+    ipam:
+      config:
+        - subnet: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.128/25
+          ip_range: ${APP_NET_PREFIX:?APP_NET_PREFIX is missing in deploy/.env (see deploy/.env.example)}.192/26
+  data:
+    internal: true
+    enable_ipv6: false
+  outbound:
+    enable_ipv6: false

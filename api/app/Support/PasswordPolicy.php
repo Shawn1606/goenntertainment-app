@@ -28,10 +28,10 @@ use Illuminate\Support\Facades\Log;
  *
  * ## Wo es sie noch gibt
  *
- * In server/src/password-policy.js - gleiche Regel, gleiche Texte. Node hat
- * eigene Wege zum Registrieren und Zuruecksetzen, und das Server-Abbild in
- * deploy/ startet sogar nur Node. Die App liest dieselbe Liste fuer ihre
- * Staerkeanzeige. Wer hier etwas aendert, aendert es an allen drei Stellen.
+ * Only here on the server side: Node no longer registers or resets passwords
+ * (those routes are Laravel's), so its copy of this rule is gone. Die App liest
+ * dieselbe Liste fuer ihre Staerkeanzeige. Wer hier etwas aendert, prueft die
+ * App mit.
  */
 final class PasswordPolicy
 {

@@ -221,6 +221,20 @@ export function accountAbilities(
 }
 
 /**
+ * Whether a profile page shows the ADMIN badge: only on the viewer's own profile (F-05).
+ *
+ * The server sends `is_admin` only on the viewer's own record. The `is_me` check keeps the same
+ * rule in the app, so a response that still carried the flag for someone else (an older server)
+ * shows no badge either.
+ */
+export function showsAdminBadge(profile: {
+  is_me: boolean;
+  user: { is_admin?: boolean | null };
+}): boolean {
+  return profile.is_me && Boolean(profile.user.is_admin);
+}
+
+/**
  * Cent → deutscher Preistext: `799` ergibt `"7,99 €"`.
  *
  * Von Hand formatiert, kein `Intl.NumberFormat` – aus demselben Grund wie in

@@ -2,12 +2,12 @@
 
 use App\Http\Controllers\AccountController;
 use App\Http\Controllers\AuthController;
-use App\Http\Controllers\GoogleController;
 use App\Http\Controllers\InterestController;
 use App\Http\Controllers\NodeFallbackController;
 use App\Http\Controllers\PasswordController;
 use App\Http\Controllers\ProgressController;
 use App\Http\Controllers\TwoFactorController;
+use App\Support\OwnedRoutes;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
@@ -49,17 +49,21 @@ Route::get('/health', function () {
 | und gesperrte Konten abweisen.
 */
 
-Route::post('/register', [AuthController::class, 'register']);
+// Every route that takes a password, a code or an e-mail address has a named limiter with a
+// per-account cap across client addresses (config/ratelimits.php). The route table and its
+// limits are pinned in tests/Feature/RouteThrottleCoverageTest.php. `throttle` is
+// App\Http\Middleware\ThrottleRequestsExactly (bootstrap/app.php): it checks and counts each
+// counter under a lock, so a cap also holds for requests that arrive at the same time.
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:register');
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
-Route::post('/forgot-password', [PasswordController::class, 'forgot']);
-Route::post('/reset-password', [PasswordController::class, 'reset']);
-Route::post('/auth/google', [GoogleController::class, 'store']);
+Route::post('/forgot-password', [PasswordController::class, 'forgot'])->middleware('throttle:password-forgot');
+Route::post('/reset-password', [PasswordController::class, 'reset'])->middleware('throttle:password-reset');
 Route::get('/interests', [InterestController::class, 'index']);
 
 /*
 | Zwei-Faktor-Anmeldung, zweiter Schritt. OHNE `auth:sanctum` - genau hier gibt
 | es noch keinen Token; was die Anfrage traegt, ist der Vorgang (`challenge`)
-| aus der Antwort von /login bzw. /auth/google. Siehe TwoFactorController.
+| aus der Antwort von /login. Siehe TwoFactorController.
 */
 Route::post('/login/two-factor', [TwoFactorController::class, 'verifyLogin'])->middleware('throttle:two-factor');
 Route::post('/login/two-factor/resend', [TwoFactorController::class, 'resendLogin'])->middleware('throttle:two-factor-resend');
@@ -67,14 +71,21 @@ Route::post('/login/two-factor/resend', [TwoFactorController::class, 'resendLogi
 Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'show']);
-    Route::patch('/user', [AuthController::class, 'update']);
+    Route::patch('/user', [AuthController::class, 'update'])->middleware('throttle:profile');
     Route::get('/me/progress', [ProgressController::class, 'progress']);
     Route::get('/leaderboard', [ProgressController::class, 'leaderboard']);
 
     // Passwort aendern, Konto loeschen. DELETE /me prueft hier und loescht in
-    // Node (AccountController::destroy erklaert, warum).
+    // Node (AccountController::destroy erklaert, warum). One shared budget: each checks the
+    // password, or a code that only a password-checked request or the account's mailbox gets.
     Route::middleware('throttle:account-sensitive')->group(function () {
         Route::put('/user/password', [AccountController::class, 'updatePassword']);
+        // An account without a password: a code to its address before its first one (F-04).
+        Route::post('/user/password/code', [AccountController::class, 'sendFirstPasswordCode']);
+        // E-Mail-Adresse aendern: only here, with the password (and code); F-04. The new address
+        // takes effect only with the code mailed to it.
+        Route::put('/user/email', [AccountController::class, 'updateEmail']);
+        Route::post('/user/email/confirm', [AccountController::class, 'confirmEmail']);
         Route::delete('/me', [AccountController::class, 'destroy']);
     });
 
@@ -108,5 +119,11 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
  * statt weiterzuleiten. Die App bekaeme einen Fehler fuer eine Funktion, die
  * es laengst gibt. `Route::any` mit `.*` fasst dagegen jede Methode auf jeder
  * Adresse und laesst nur das durch, was oben ausdruecklich steht.
+ *
+ * It never forwards a path Laravel owns, in any spelling and for any method: the controller
+ * checks the normalised path against Laravel's whole route table (App\Support\OwnedRoutes, which
+ * skips this route by its name). Keep the name.
  */
-Route::any('/{path?}', NodeFallbackController::class)->where('path', '.*');
+Route::any('/{path?}', NodeFallbackController::class)
+    ->where('path', '.*')
+    ->name(OwnedRoutes::FALLBACK_ROUTE);

@@ -34,7 +34,6 @@ use Laravel\Sanctum\HasApiTokens;
     'email',
     'password',
     'account_type',
-    'google_id',
     'avatar',
     'banner',
     'terms_version',
@@ -46,6 +45,10 @@ use Laravel\Sanctum\HasApiTokens;
  * aber verschluesselt ist nicht dasselbe wie „darf raus": Jede Kopie ausserhalb
  * der DB ist eine, die man nicht zurueckholt. Dieselbe Liste steht in
  * `serializeUser` in server/src/auth.js.
+ *
+ * `google_id` is hidden too: Google sign-in was removed from both backends. The
+ * column stays in the schema, inert (nothing reads or writes it), and neither
+ * API returns it.
  */
 #[Hidden([
     'password',
@@ -54,6 +57,7 @@ use Laravel\Sanctum\HasApiTokens;
     'two_factor_recovery_codes',
     'two_factor_confirmed_at',
     'two_factor_last_step',
+    'google_id',
 ])]
 class User extends Authenticatable
 {
@@ -73,6 +77,10 @@ class User extends Authenticatable
             'is_admin' => 'boolean',
             'banned_until' => 'datetime',
             'terms_accepted_at' => 'datetime',
+            // The minimum age confirmed at sign-up and when (F-14). Not fillable: set by
+            // AuthController::register from shared/legal.json, never from request data.
+            'min_age_confirmed' => 'integer',
+            'min_age_confirmed_at' => 'datetime',
             // Verschluesselt mit APP_KEY (siehe App\Support\TwoFactor). Die
             // Codes sind zusaetzlich einzeln gehasht - auch entschluesselt steht
             // dort nichts, das man eintippen koennte.

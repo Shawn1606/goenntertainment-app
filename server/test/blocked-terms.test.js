@@ -19,6 +19,9 @@ import {
   analyseText,
   blockedTermMessageFor,
   findBlockedTerm,
+  findBlockedTermInValue,
+  MAX_VALUE_DEPTH,
+  MAX_VALUE_PARTS,
   rejectBlockedTerms,
 } from '../src/blocked-terms.js';
 import { Validator } from '../src/validate.js';
@@ -87,13 +90,116 @@ test('rejectBlockedTerms: traegt die Meldung am Feld ein und uebergeht Leeres', 
   assert.deepEqual(v.errors, { description: [blockedTermMessageFor('text')] });
 });
 
+test('rejectBlockedTerms checks a value of any JSON type (F-06)', () => {
+  const blocked = 'Du Hurensohn';
+  for (const value of [[blocked], ['ok', [blocked]], { text: blocked }, { a: { b: [blocked] } }]) {
+    const v = new Validator({});
+    assert.equal(rejectBlockedTerms(v, 'body', value, 'text'), true, JSON.stringify(value));
+    assert.deepEqual(v.errors, { body: [blockedTermMessageFor('text')] });
+  }
+  for (const value of [null, undefined, [], {}, ['Hallo', 'Welt'], { a: 'Hallo' }, 42, true]) {
+    const v = new Validator({});
+    assert.equal(rejectBlockedTerms(v, 'body', value, 'text'), false, JSON.stringify(value));
+  }
+});
+
+test('findBlockedTermInValue: a string as before, numbers and booleans as their text', () => {
+  for (const text of ['Du Hurensohn', 'Hallo', '', 'Nazis raus!']) {
+    for (const mode of BLOCKED_TERM_MODES) {
+      assert.deepEqual(findBlockedTermInValue(text, BLOCKED_TERMS, mode), findBlockedTerm(text, BLOCKED_TERMS, mode), text);
+    }
+  }
+  for (const n of [0, 18, 88, 1488, 2026, 3.5, -7, true, false]) {
+    for (const mode of BLOCKED_TERM_MODES) {
+      assert.deepEqual(findBlockedTermInValue(n, BLOCKED_TERMS, mode), findBlockedTerm(String(n), BLOCKED_TERMS, mode), `${n} ${mode}`);
+    }
+  }
+});
+
+test('findBlockedTermInValue: an array is also read as the text String() makes of it', () => {
+  // The two halves of a term in two parts: each part alone is harmless, the joined text is not.
+  const halves = ['Hu', 'rensohn'];
+  assert.equal(findBlockedTerm(halves[0], BLOCKED_TERMS, 'text'), null);
+  assert.equal(findBlockedTerm(halves[1], BLOCKED_TERMS, 'text'), null);
+  assert.notEqual(findBlockedTerm(String(halves), BLOCKED_TERMS, 'text'), null, 'precondition: String() joins them into a term');
+  assert.notEqual(findBlockedTermInValue(halves, BLOCKED_TERMS, 'text'), null);
+});
+
+test('findBlockedTermInValue fails closed on values too deep or too large to check', () => {
+  let deep = 'Hallo';
+  for (let i = 0; i <= MAX_VALUE_DEPTH; i += 1) deep = [deep];
+  assert.equal(findBlockedTermInValue(deep, BLOCKED_TERMS, 'text')?.kind, 'structure', 'too deep');
+
+  const wide = Array.from({ length: MAX_VALUE_PARTS + 1 }, () => 'Hallo');
+  assert.equal(findBlockedTermInValue(wide, BLOCKED_TERMS, 'text')?.kind, 'structure', 'too many parts');
+  assert.equal(findBlockedTermInValue(wide.slice(1), BLOCKED_TERMS, 'text'), null, 'at the limit it is checked');
+});
+
 test('ein unbekannter Modus ist ein Programmierfehler, kein „erlaubt"', () => {
   assert.throws(() => findBlockedTerm('x', BLOCKED_TERMS, 'bio'), TypeError);
 });
 
 test('eine volle Beschreibung (2000 Zeichen) ist schnell geprueft', () => {
-  const long = 'Wir treffen uns am Samstag im Park, bringt Decken und gute Laune mit. '.repeat(29);
+  // Exactly 2000 characters, as the name says: 29 repetitions were 2030, which is now over
+  // max_input_length (a 'length' hit; the route refuses such a description first anyway).
+  const long = 'Wir treffen uns am Samstag im Park, bringt Decken und gute Laune mit. '.repeat(29).slice(0, 2000);
+  assert.equal(long.length, 2000);
   const started = Date.now();
   assert.equal(findBlockedTerm(long, BLOCKED_TERMS, 'text'), null);
   assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms`);
+});
+
+/* ------------------------------------------------ Input over the maximum (F-02) */
+
+/** The shared maximum, written out: the routes' longest text (an event description). */
+const MAX_INPUT = 2000;
+
+test('the shared list carries max_input_length = 2000', () => {
+  assert.equal(BLOCKED_TERMS.max_input_length, MAX_INPUT);
+});
+
+test('the shared length cases: the same answer as the app and Laravel', () => {
+  assert.ok(Array.isArray(FIXTURES.length_cases) && FIXTURES.length_cases.length >= 5, 'length_cases missing');
+  for (const c of FIXTURES.length_cases) {
+    const hit = findBlockedTerm(c.unit.repeat(c.count), BLOCKED_TERMS, c.mode);
+    const label = `${JSON.stringify(c.unit)} x ${c.count} (${c.mode})${c.note ? ` – ${c.note}` : ''}`;
+    assert.equal(hit !== null, c.blocked, label);
+    if (c.blocked) assert.deepEqual({ term: hit.term, kind: hit.kind }, { term: '', kind: 'length' }, label);
+  }
+});
+
+test('the word filter fails closed on 100,000 characters in under 500 ms, in every mode', () => {
+  for (const mode of BLOCKED_TERM_MODES) {
+    for (const text of ['a'.repeat(100_000), 'n1gg3r '.repeat(15_000), `${'x'.repeat(99_999)}!`]) {
+      const started = performance.now();
+      const hit = findBlockedTerm(text, BLOCKED_TERMS, mode);
+      const ms = performance.now() - started;
+      assert.equal(hit?.kind, 'length', mode);
+      assert.ok(ms < 500, `${mode}: ${ms.toFixed(1)} ms`);
+    }
+  }
+});
+
+test('adversarial input at the maximum (2000 characters) is checked in under 500 ms', () => {
+  // The residual cost the cap leaves: the unanchored patterns are quadratic in the input length.
+  const shapes = [...'abcdefghijklmnopqrstuvwxyz'].map((ch) => ch.repeat(MAX_INPUT));
+  shapes.push('a '.repeat(MAX_INPUT / 2), 'aA'.repeat(MAX_INPUT / 2), 'n1'.repeat(MAX_INPUT / 2), 'ä'.repeat(MAX_INPUT));
+  let worst = 0;
+  for (const text of shapes) {
+    for (const mode of BLOCKED_TERM_MODES) {
+      const started = performance.now();
+      const hit = findBlockedTerm(text, BLOCKED_TERMS, mode);
+      worst = Math.max(worst, performance.now() - started);
+      assert.notEqual(hit?.kind, 'length', 'at the maximum the patterns run');
+    }
+  }
+  assert.ok(worst < 500, `worst ${worst.toFixed(1)} ms over ${shapes.length * BLOCKED_TERM_MODES.length} checks`);
+});
+
+test('a list without a valid max_input_length is refused, never used without a bound', () => {
+  // Operator-facing, so in English; the same text in all three copies of the filter.
+  const refused = { name: 'TypeError', message: 'Blocked-terms list: max_input_length is missing or not a positive whole number' };
+  for (const max of [undefined, 0, -1, 2.5, '2000']) {
+    assert.throws(() => findBlockedTerm('Hallo', { ...BLOCKED_TERMS, max_input_length: max }, 'text'), refused, String(max));
+  }
 });

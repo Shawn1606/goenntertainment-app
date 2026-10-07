@@ -11,33 +11,27 @@
  *
  * Gelesen wird von allen Angemeldeten – geschrieben nur am eigenen Profil.
  */
-import { Router } from 'express';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import multer from 'multer';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
 import { requireAuth, userPayload } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { HttpError, Validator } from '../validate.js';
-import { rejectBlockedTerms } from '../blocked-terms.js';
+import { BLOCKED_TERMS, blockedTermMessageFor, findBlockedTerm, rejectBlockedTerms } from '../blocked-terms.js';
 import { abilitiesFor } from '../accounts.js';
-import { parseLinkList } from '../social.js';
+import { linkFilterTexts, parseLinkList } from '../social.js';
 import { moderateContent, fieldErrorsFor } from '../moderation.js';
-import { mediaUrl, publicBase } from '../media.js';
-import { blockExistsBetween, transformUser, USER_COLUMNS } from '../people.js';
+import { mediaUrl } from '../media.js';
+import { blockExistsBetween, hiddenByBlock, notBlockedWith, transformUser, USER_COLUMNS } from '../people.js';
 import { follow, followCounts, isFollowing, unfollow } from '../follows.js';
-import { notifyFollowers, notifyQuietly } from '../notifications.js';
+import { forgetCommentNotification, notifyFollowers, notifyOnce, notifyQuietly } from '../notifications.js';
 import { attachStories, storiesOf } from '../stories.js';
+import { singleUpload } from '../uploads.js';
+import { ALLOWED_MIME, processImageOr422 } from '../images.js';
+import { removeStored, storeImage } from '../storage.js';
 
-const router = Router();
+const router = createRouter();
 
-const POST_DIR = path.join(process.cwd(), 'storage', 'posts');
-/** Profilbilder und Karten-Hintergruende ("Banner") des Kontos. */
-const AVATAR_DIR = path.join(process.cwd(), 'storage', 'avatars');
-const USER_BANNER_DIR = path.join(process.cwd(), 'storage', 'user-banners');
-const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const EXT_BY_MIME = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const MSG_IMAGE_TYPE = 'Das Bild muss jpeg, png oder webp sein.';
 
 /** So viele Beitraege liefert ein Profil hoechstens aus. */
 const POST_LIMIT = 50;
@@ -48,30 +42,11 @@ const MAX_COMMENT = 500;
 /** So viele Kommentare liefert ein Beitrag hoechstens aus. */
 const COMMENT_LIMIT = 100;
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: MAX_IMAGE_BYTES } });
-
 /**
- * Multer mit eigener Fehlerbehandlung.
- *
- * Ohne das landet ein zu grosses Bild beim allgemeinen Fehler-Handler in
- * app.js – und der spricht von einem „Banner-Bild", das es bei einem Beitrag
- * gar nicht gibt.
+ * Image in the field `image` (5 MB with its own message, uploads.js) plus at most the text field
+ * `body` (posts), with some headroom.
  */
-function uploadImage(req, res, next) {
-  upload.single('image')(req, res, (err) => {
-    if (!err) {
-      return next();
-    }
-    if (err.code === 'LIMIT_FILE_SIZE') {
-      return next(
-        new HttpError(422, 'Das Bild darf hoechstens 5 MB gross sein.', {
-          image: ['Das Bild darf hoechstens 5 MB gross sein.'],
-        }),
-      );
-    }
-    return next(err);
-  });
-}
+const uploadImage = singleUpload('image', { maxFields: 3 });
 
 /**
  * Beitrag in die API-Form bringen.
@@ -88,7 +63,7 @@ function transformPost(req, row) {
   return {
     id: row.id,
     body: row.body,
-    image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+    image_url: mediaUrl(req, row.image_path),
     created_at: toIso(row.created_at),
     updated_at: toIso(row.updated_at ?? null),
     edited: Boolean(row.updated_at && row.created_at && row.updated_at !== row.created_at),
@@ -107,13 +82,25 @@ function transformPost(req, row) {
 const POST_SELECT = `
   p.id, p.body, p.image_path, p.created_at, p.updated_at,
   (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id)      AS likes_count,
-  (SELECT COUNT(*) FROM post_comments pc WHERE pc.post_id = p.id)   AS comments_count,
+  (SELECT COUNT(*) FROM post_comments pc
+    WHERE pc.post_id = p.id
+      AND NOT EXISTS (SELECT 1 FROM user_blocks b
+                       WHERE (b.blocker_id = pc.user_id AND b.blocked_id = ?)
+                          OR (b.blocker_id = ? AND b.blocked_id = pc.user_id))) AS comments_count,
   EXISTS(SELECT 1 FROM post_likes pl2 WHERE pl2.post_id = p.id AND pl2.user_id = ?) AS liked_by_me
 `;
 
+/**
+ * The bound values POST_SELECT takes, in its order: the viewer twice for `comments_count`, which
+ * leaves out comments of anyone in a block relation with the viewer - the same rule as the
+ * comment list (GET /posts/:id/comments), so the number under a post matches what it lists (F-08,
+ * F-13) - then the viewer for `liked_by_me`.
+ */
+const postSelectParams = (viewerId) => [viewerId, viewerId, viewerId];
+
 /** Einen Beitrag frisch laden – mit den Zahlen aus Sicht von `viewerId`. */
 function loadPost(postId, viewerId) {
-  return first(`SELECT ${POST_SELECT} FROM posts p WHERE p.id = ?`, [viewerId, postId]);
+  return first(`SELECT ${POST_SELECT} FROM posts p WHERE p.id = ?`, [...postSelectParams(viewerId), postId]);
 }
 
 /**
@@ -127,17 +114,21 @@ function loadPost(postId, viewerId) {
 const COMMENT_USER_COLUMNS =
   'u.id AS user_id, u.name, u.username, u.avatar, u.account_type';
 
-/** Ein Kommentar in die API-Form. */
-function transformComment(req, row, viewerId, postAuthorId) {
+/** Ein Kommentar in die API-Form. `viewer` is the calling account (req.user). */
+function transformComment(req, row, viewer, postAuthorId) {
   return {
     id: row.id,
     body: row.body,
     created_at: toIso(row.created_at),
     // Loeschen darf: wer ihn geschrieben hat, und wem der Beitrag gehoert. Das
     // Zweite ist wichtig – sonst braeuchte man fuer jeden unerwuenschten
-    // Kommentar unter dem eigenen Beitrag einen Admin.
+    // Kommentar unter dem eigenen Beitrag einen Admin. And an admin, as the delete route
+    // (DELETE /comments/:id) already allows: a reported comment can then be removed in place
+    // (F-08), like an event comment.
     can_delete:
-      Number(row.user_id) === Number(viewerId) || Number(postAuthorId) === Number(viewerId),
+      Boolean(viewer.is_admin) ||
+      Number(row.user_id) === Number(viewer.id) ||
+      Number(postAuthorId) === Number(viewer.id),
     user: transformUser(req, {
       id: row.user_id,
       name: row.name,
@@ -170,6 +161,12 @@ async function loadLinks(userId) {
 /** So viele Treffer liefert die Nutzersuche hoechstens. */
 const SEARCH_LIMIT = 30;
 
+/**
+ * Longest search term: a name holds at most 255 characters (users.name in schema.sql), so a
+ * longer term can match nothing. It is answered with no results before any pattern runs (F-02).
+ */
+const MAX_SEARCH_TERM = 255;
+
 // GET /api/users?q=…  (geschuetzt) – Leute suchen (Name oder Benutzername).
 //
 // Gibt es, seit der Freunde-Bereich eine Suche braucht, die zu PERSONEN fuehrt.
@@ -180,7 +177,7 @@ const SEARCH_LIMIT = 30;
 router.get('/users', requireAuth, async (req, res, next) => {
   try {
     const term = String(req.query?.q ?? '').trim();
-    if (term.length < 2) {
+    if (term.length < 2 || term.length > MAX_SEARCH_TERM) {
       return res.json({ data: [] });
     }
 
@@ -194,10 +191,12 @@ router.get('/users', requireAuth, async (req, res, next) => {
            OR (f.addressee_id = u.id AND f.requester_id = ?)
         WHERE u.id <> ?
           AND (u.banned_until IS NULL OR u.banned_until <= NOW())
+          -- A block in either direction: neither finds the other (F-13).
+          AND ${notBlockedWith('u.id')}
           AND (u.name LIKE ? OR u.username LIKE ?)
         ORDER BY (u.username = ?) DESC, u.name ASC
         LIMIT ${SEARCH_LIMIT}`,
-      [req.user.id, req.user.id, req.user.id, like, like, term],
+      [req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, like, like, term],
     );
 
     res.json({
@@ -249,13 +248,18 @@ function friendshipStateFor(row, meId) {
 // Antwort nur, wenn man den Benutzernamen schon kennt.
 router.get('/users/:username', requireAuth, async (req, res, next) => {
   try {
+    // No `is_admin` here: whether an account is an admin is told only to that account itself
+    // (F-05), and that answer comes from the viewer's own row (`req.user`, see below).
     const user = await first(
-      `SELECT id, name, username, avatar, banner, account_type, is_admin, banned_until, created_at
+      `SELECT id, name, username, avatar, banner, account_type, banned_until, created_at
          FROM users WHERE username = ?`,
       [req.params.username],
     );
 
-    if (!user) throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+    // A block in either direction answers like an unknown name (F-13): the same 404 and text.
+    if (!user || (await hiddenByBlock(req.user.id, user.id))) {
+      throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+    }
 
     const showsPosts = abilitiesFor(user).hasPublicProfile;
 
@@ -263,7 +267,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
       ? await pool.query(
           `SELECT ${POST_SELECT} FROM posts p
             WHERE p.user_id = ? ORDER BY p.created_at DESC, p.id DESC LIMIT ${POST_LIMIT}`,
-          [req.user.id, user.id],
+          [...postSelectParams(req.user.id), user.id],
         )
       : [[]];
 
@@ -297,6 +301,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
     const following = user.id === req.user.id ? false : await isFollowing(req.user.id, user.id);
     /** Folgt die Person MIR? Daraus wird in der App „Folgt dir". */
     const followsMe = user.id === req.user.id ? false : await isFollowing(user.id, req.user.id);
+    const isMe = user.id === req.user.id;
 
     res.json({
       user: {
@@ -307,7 +312,9 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
         /** Liegt in der App weichgezeichnet hinter der Profil-Karte. */
         banner: mediaUrl(req, user.banner),
         account_type: user.account_type,
-        is_admin: Boolean(user.is_admin),
+        // Only on the viewer's own profile (F-05). On anyone else's the field is left out, so
+        // looking through profiles does not tell who the admins are.
+        ...(isMe ? { is_admin: Boolean(req.user.is_admin) } : {}),
         created_at: toIso(user.created_at),
       },
       links: showsPosts ? await loadLinks(user.id) : [],
@@ -344,7 +351,7 @@ router.get('/users/:username', requireAuth, async (req, res, next) => {
             req.user.id,
           )
         : 'none',
-      is_me: user.id === req.user.id,
+      is_me: isMe,
     });
   } catch (err) {
     next(err);
@@ -378,15 +385,17 @@ async function followTarget(req) {
 }
 
 // POST /api/users/:id/follow  (geschuetzt) – folgen. Idempotent.
-router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
+router.post('/users/:id/follow', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const target = await followTarget(req);
     const fresh = await follow(req.user.id, target.id);
 
     // Nur bei einer WIRKLICH neuen Folge – sonst meldet jedes erneute Tippen auf
     // ein schon gefolgtes Profil noch einmal.
+    // After an unfollow the next follow is new to `follows` again: notifyOnce writes no second
+    // row for the same follower (F-07, follow/unfollow loop).
     if (fresh) {
-      await notifyQuietly({
+      await notifyOnce({
         userId: target.id,
         actorId: req.user.id,
         type: 'follow',
@@ -406,7 +415,7 @@ router.post('/users/:id/follow', requireAuth, async (req, res, next) => {
 // Ohne `followTarget`: Entfolgen muss auch dann gehen, wenn die andere Seite
 // inzwischen blockiert hat – sonst haenge ich in einem Abo fest, das ich nicht
 // mehr loswerde.
-router.delete('/users/:id/follow', requireAuth, async (req, res, next) => {
+router.delete('/users/:id/follow', requireAuth, rateLimit('relationship'), async (req, res, next) => {
   try {
     const id = Number(req.params.id) || 0;
     await unfollow(req.user.id, id);
@@ -425,7 +434,10 @@ function followList(direction) {
   return async (req, res, next) => {
     try {
       const target = await first('SELECT id FROM users WHERE username = ?', [req.params.username]);
-      if (!target) throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+      // The lists of someone in a block relation answer like an unknown profile (F-13).
+      if (!target || (await hiddenByBlock(req.user.id, target.id))) {
+        throw new HttpError(404, 'Dieses Profil gibt es nicht.');
+      }
 
       const [rows] = await pool.query(
         `SELECT ${USER_COLUMNS},
@@ -465,11 +477,17 @@ router.get('/users/:username/following', requireAuth, followList('following'));
 //
 // Ersetzen statt einzeln pflegen: Das Formular kennt ohnehin den vollstaendigen
 // Stand, und so gibt es keine halb gespeicherten Zwischenzustaende.
-router.put('/me/links', requireAuth, requireProfile, async (req, res, next) => {
+router.put('/me/links', requireAuth, rateLimit('content'), requireProfile, async (req, res, next) => {
   try {
     const { links, error } = parseLinkList(req.body?.links);
     if (error) {
       throw new HttpError(422, error, { links: [error] });
+    }
+    // Links stand on the profile like any text: the fixed list checks their words, and each of
+    // their parts as a post's text, too (F-06).
+    if (links.some((link) => linkFilterTexts(link.url).some((text) => findBlockedTerm(text, BLOCKED_TERMS, 'text')))) {
+      const message = blockedTermMessageFor('text');
+      throw new HttpError(422, message, { links: [message] });
     }
 
     const connection = await pool.getConnection();
@@ -511,8 +529,8 @@ router.put('/me/links', requireAuth, requireProfile, async (req, res, next) => {
  * deshalb liegt es auch in einem eigenen Ordner.
  */
 const IMAGE_KINDS = {
-  avatar: { column: 'avatar', dir: AVATAR_DIR, folder: 'avatars', label: 'Profilbild' },
-  banner: { column: 'banner', dir: USER_BANNER_DIR, folder: 'user-banners', label: 'Banner' },
+  avatar: { column: 'avatar', folder: 'avatars', label: 'Profilbild' },
+  banner: { column: 'banner', folder: 'user-banners', label: 'Banner' },
 };
 
 /**
@@ -523,15 +541,9 @@ const IMAGE_KINDS = {
  * fehlgeschlagenes Loeschen darf den Aufruf nicht kippen – das Bild ist
  * ersetzt, das ist die Hauptsache.
  */
-function removeStoredImage(value) {
-  if (!value || /^https?:\/\//i.test(String(value))) {
-    return;
-  }
-  try {
-    fs.unlinkSync(path.join(process.cwd(), 'storage', value));
-  } catch {
-    /* Datei evtl. schon weg. */
-  }
+async function removeStoredImage(value) {
+  // Foreign addresses and unknown folders are left alone by storage.js; never throws.
+  await removeStored(value);
 }
 
 /** Konto neu laden und als API-User ausliefern (mit fertigen Bild-Adressen). */
@@ -557,16 +569,17 @@ function setProfileImage(kind) {
         });
       }
       if (!ALLOWED_MIME.includes(req.file.mimetype)) {
-        throw new HttpError(422, 'Das Bild muss jpeg, png oder webp sein.', {
-          image: ['Das Bild muss jpeg, png oder webp sein.'],
-        });
+        throw new HttpError(422, MSG_IMAGE_TYPE, { image: [MSG_IMAGE_TYPE] });
       }
+      // A real image, encoded again without metadata, before anything looks at it (F-11).
+      const image = await processImageOr422(req.file, 'image', MSG_IMAGE_TYPE);
 
       const check = await moderateContent({
         user: req.user,
         context: 'profile',
-        description: spec.label,
-        image: { buffer: req.file.buffer, mimetype: req.file.mimetype },
+        // Code-made, not user text: where the image goes (buildModerationText 'verwendung').
+        label: spec.label,
+        image,
       });
 
       if (!check.allowed) {
@@ -589,18 +602,16 @@ function setProfileImage(kind) {
         );
       }
 
-      fs.mkdirSync(spec.dir, { recursive: true });
-      const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[req.file.mimetype]}`;
-      fs.writeFileSync(path.join(spec.dir, name), req.file.buffer);
+      const stored = await storeImage(spec.folder, image);
 
       // Erst das neue Bild eintragen, dann das alte wegwerfen: Kippt das UPDATE,
       // zeigt das Konto weiter auf ein Bild, das es noch gibt.
       const previous = req.user[spec.column] ?? null;
       await pool.query(
         `UPDATE users SET ${spec.column} = ?, updated_at = NOW() WHERE id = ?`,
-        [`${spec.folder}/${name}`, req.user.id],
+        [stored, req.user.id],
       );
-      removeStoredImage(previous);
+      await removeStoredImage(previous);
 
       await respondWithUser(req, res);
     } catch (err) {
@@ -619,7 +630,7 @@ function clearProfileImage(kind) {
         `UPDATE users SET ${spec.column} = NULL, updated_at = NOW() WHERE id = ?`,
         [req.user.id],
       );
-      removeStoredImage(previous);
+      await removeStoredImage(previous);
       await respondWithUser(req, res);
     } catch (err) {
       next(err);
@@ -632,13 +643,13 @@ function clearProfileImage(kind) {
 // Bewusst OHNE `requireProfile`: Ein Gesicht und ein Hintergrund gehoeren zu
 // jedem Konto. Die Stufe entscheidet, ob es Beitraege und Social-Links gibt
 // (siehe oben) – nicht, ob man ein Profilbild haben darf.
-router.post('/me/avatar', requireAuth, uploadImage, setProfileImage('avatar'));
-router.delete('/me/avatar', requireAuth, clearProfileImage('avatar'));
-router.post('/me/banner', requireAuth, uploadImage, setProfileImage('banner'));
-router.delete('/me/banner', requireAuth, clearProfileImage('banner'));
+router.post('/me/avatar', requireAuth, rateLimit('moderated'), uploadImage, setProfileImage('avatar'));
+router.delete('/me/avatar', requireAuth, rateLimit('content'), clearProfileImage('avatar'));
+router.post('/me/banner', requireAuth, rateLimit('moderated'), uploadImage, setProfileImage('banner'));
+router.delete('/me/banner', requireAuth, rateLimit('content'), clearProfileImage('banner'));
 
 // POST /api/posts  (geschuetzt, ab Creator; multipart wegen Bild)
-router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res, next) => {
+router.post('/posts', requireAuth, rateLimit('moderated'), requireProfile, uploadImage, async (req, res, next) => {
   try {
     const body = String(req.body?.body ?? '').trim();
     const v = new Validator(req.body ?? {});
@@ -653,21 +664,26 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
     } else if (body.length > MAX_BODY) {
       v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
     } else {
-      // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall.
-      rejectBlockedTerms(v, 'body', body, 'text');
+      // Feste Liste vor der KI – sie greift auch ohne Schluessel und bei Ausfall. The value as it
+      // came, any JSON type (F-06).
+      rejectBlockedTerms(v, 'body', req.body?.body, 'text');
     }
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
-      v.add('image', 'Das Bild muss jpeg, png oder webp sein.');
+      v.add('image', MSG_IMAGE_TYPE);
     }
     v.throwIfFails();
+
+    // A real image, encoded again without metadata, before anything looks at it (F-11).
+    const image = req.file ? await processImageOr422(req.file, 'image', MSG_IMAGE_TYPE) : null;
 
     // KI-Verifizierung VOR dem Speichern – wie bei den Events. Ab der
     // eingestellten Schwere sperrt die Moderation das Konto automatisch.
     const check = await moderateContent({
       user: req.user,
       context: 'post',
-      description: body || 'Beitrag ohne Text',
-      image: req.file ? { buffer: req.file.buffer, mimetype: req.file.mimetype } : null,
+      // Only the user's text, no placeholder of ours in the user-data slot (F-06).
+      description: body,
+      image,
     });
 
     if (!check.allowed) {
@@ -692,13 +708,7 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
       );
     }
 
-    let imagePath = null;
-    if (req.file) {
-      fs.mkdirSync(POST_DIR, { recursive: true });
-      const name = `${crypto.randomBytes(20).toString('hex')}.${EXT_BY_MIME[req.file.mimetype]}`;
-      fs.writeFileSync(path.join(POST_DIR, name), req.file.buffer);
-      imagePath = `posts/${name}`;
-    }
+    const imagePath = image ? await storeImage('posts', image) : null;
 
     const [result] = await pool.query(
       'INSERT INTO posts (user_id, body, image_path, created_at, updated_at) VALUES (?, ?, ?, NOW(), NOW())',
@@ -728,7 +738,7 @@ router.post('/posts', requireAuth, requireProfile, uploadImage, async (req, res,
 // gibt es Loeschen und neu anlegen. Der Text laeuft durch dieselbe
 // KI-Verifizierung wie beim Anlegen, sonst waere Bearbeiten die Luecke, durch die
 // man sie umgeht.
-router.patch('/posts/:id', requireAuth, async (req, res, next) => {
+router.patch('/posts/:id', requireAuth, rateLimit('moderated'), async (req, res, next) => {
   try {
     const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [
       req.params.id,
@@ -747,7 +757,7 @@ router.patch('/posts/:id', requireAuth, async (req, res, next) => {
     } else if (body.length > MAX_BODY) {
       v.add('body', `Ein Beitrag fasst hoechstens ${MAX_BODY} Zeichen.`);
     } else {
-      rejectBlockedTerms(v, 'body', body, 'text');
+      rejectBlockedTerms(v, 'body', req.body?.body, 'text'); // as it came, any JSON type (F-06)
     }
     v.throwIfFails();
 
@@ -796,7 +806,7 @@ async function loadPostOr404(id) {
 }
 
 // POST /api/posts/:id/like  (geschuetzt) – idempotent.
-router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
+router.post('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, post.user_id)) {
@@ -811,8 +821,10 @@ router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
 
     // Nur beim ERSTEN Mal melden – sonst waere Like/Unlike/Like eine Glocke,
     // die man beliebig oft laeuten kann.
+    // A fresh row in post_likes alone is not "the first time": after an unlike the next like is
+    // fresh again. notifyOnce writes no second row for the same fan and post (F-07).
     if (result.affectedRows === 1) {
-      await notifyQuietly({
+      await notifyOnce({
         userId: post.user_id,
         actorId: req.user.id,
         type: 'like',
@@ -829,13 +841,18 @@ router.post('/posts/:id/like', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/posts/:id/like  (geschuetzt) – Gefaellt mir zuruecknehmen.
-router.delete('/posts/:id/like', requireAuth, async (req, res, next) => {
+router.delete('/posts/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
+    // Withdrawing one's own like always works, also after a block (F-13) ...
     await pool.query('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?', [
       post.id,
       req.user.id,
     ]);
+    // ... but the answer shows the post only to someone it is not hidden from.
+    if (await hiddenByBlock(req.user.id, post.user_id)) {
+      throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    }
     res.json({ data: transformPost(req, await loadPost(post.id, req.user.id)) });
   } catch (err) {
     next(err);
@@ -849,6 +866,10 @@ router.delete('/posts/:id/like', requireAuth, async (req, res, next) => {
 router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
+    // The post of someone in a block relation answers like a post that does not exist (F-13).
+    if (await hiddenByBlock(req.user.id, post.user_id)) {
+      throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    }
     const [rows] = await pool.query(
       `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
          FROM post_comments c
@@ -865,7 +886,7 @@ router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
     );
 
     res.json({
-      data: rows.map((row) => transformComment(req, row, req.user.id, post.user_id)),
+      data: rows.map((row) => transformComment(req, row, req.user, post.user_id)),
     });
   } catch (err) {
     next(err);
@@ -876,7 +897,7 @@ router.get('/posts/:id/comments', requireAuth, async (req, res, next) => {
 //
 // Bewusst OHNE `requireProfile`: Kommentieren darf jedes Konto. Die Stufe
 // entscheidet, wer einen eigenen Auftritt hat – nicht, wer mitreden darf.
-router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
+router.post('/posts/:id/comments', requireAuth, rateLimit('comment'), async (req, res, next) => {
   try {
     const post = await loadPostOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, post.user_id)) {
@@ -888,7 +909,7 @@ router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
     if (!body) v.add('body', 'Schreib etwas, bevor du kommentierst.');
     else if (body.length > MAX_COMMENT) {
       v.add('body', `Ein Kommentar fasst hoechstens ${MAX_COMMENT} Zeichen.`);
-    } else rejectBlockedTerms(v, 'body', body, 'text');
+    } else rejectBlockedTerms(v, 'body', req.body?.body, 'text'); // as it came, any JSON type (F-06)
     v.throwIfFails();
 
     // Kommentare laufen durch dieselbe KI-Verifizierung wie Beitraege: Sonst
@@ -941,7 +962,7 @@ router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
     );
 
     res.status(201).json({
-      data: transformComment(req, row, req.user.id, post.user_id),
+      data: transformComment(req, row, req.user, post.user_id),
       post: transformPost(req, await loadPost(post.id, req.user.id)),
     });
   } catch (err) {
@@ -950,10 +971,10 @@ router.post('/posts/:id/comments', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/comments/:id  (geschuetzt) – eigener Kommentar, eigener Beitrag, Admin.
-router.delete('/comments/:id', requireAuth, async (req, res, next) => {
+router.delete('/comments/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const row = await first(
-      `SELECT c.id, c.user_id, c.post_id, p.user_id AS post_user_id
+      `SELECT c.id, c.user_id, c.post_id, c.body, c.created_at, p.user_id AS post_user_id
          FROM post_comments c JOIN posts p ON p.id = c.post_id WHERE c.id = ?`,
       [req.params.id],
     );
@@ -965,7 +986,23 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
       Number(row.post_user_id) === Number(req.user.id);
     if (!mayDelete) throw new HttpError(403, 'Das darfst du nicht.');
 
+    // Deleting one's own comment always works, also after a block (F-13) ...
     await pool.query('DELETE FROM post_comments WHERE id = ?', [row.id]);
+    // ... and the post owner's notification, which copied the text, goes with it (F-08).
+    await forgetCommentNotification({
+      userId: row.post_user_id,
+      actorId: row.user_id,
+      type: 'comment',
+      refId: row.post_id,
+      body: row.body,
+      createdAt: row.created_at,
+    });
+    // The answer shows the post only to someone it is not hidden from, like DELETE
+    // /posts/:id/like. Admins are left out: removing a reported comment is moderation, and the
+    // admin panel goes on to close the report after this answer.
+    if (!req.user.is_admin && (await hiddenByBlock(req.user.id, row.post_user_id))) {
+      throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
+    }
     res.json({ data: transformPost(req, await loadPost(row.post_id, req.user.id)) });
   } catch (err) {
     next(err);
@@ -973,7 +1010,7 @@ router.delete('/comments/:id', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/posts/:id  (geschuetzt) – eigener Beitrag; Admins jeden.
-router.delete('/posts/:id', requireAuth, async (req, res, next) => {
+router.delete('/posts/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const post = await first('SELECT id, user_id, image_path FROM posts WHERE id = ?', [req.params.id]);
     if (!post) throw new HttpError(404, 'Diesen Beitrag gibt es nicht.');
@@ -987,13 +1024,8 @@ router.delete('/posts/:id', requireAuth, async (req, res, next) => {
 
     // Bild mitnehmen – anders als bei Event-Bannern haengt an einem Beitrag
     // kein Verlaufs-Eintrag, das Bild wird also von niemandem mehr gebraucht.
-    if (post.image_path) {
-      try {
-        fs.unlinkSync(path.join(process.cwd(), 'storage', post.image_path));
-      } catch {
-        /* Datei evtl. schon weg – das darf das Loeschen nicht kippen. */
-      }
-    }
+    // Best effort, never throws (storage.js): the post is gone either way.
+    if (post.image_path) await removeStored(post.image_path);
 
     res.json({ message: 'Beitrag geloescht.' });
   } catch (err) {

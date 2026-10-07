@@ -93,3 +93,66 @@ function isEntry(value: unknown): value is SearchHistoryEntry {
   if (v.kind === 'activity') return typeof v.id === 'number' && typeof v.title === 'string';
   return false;
 }
+
+/*
+ * Forgetting the history on sign-out (F-44).
+ *
+ * The history is per account and stays on the device, so after a sign-out (deliberate, after a
+ * 401, or after deleting the account) it would still be there for the next person using the
+ * device - and it says whom someone looked for. The one local sign-out (endLocalSession in
+ * src/lib/auth-context.tsx, through signOutLocally in src/domain/session.ts) removes it.
+ */
+
+/** Start of every history's storage key; the account id follows. */
+export const SEARCH_HISTORY_KEY_PREFIX = 'goenn_search_history_';
+
+/** The storage key of one account's history. */
+export function searchHistoryKey(userId: number): string {
+  return `${SEARCH_HISTORY_KEY_PREFIX}${userId}`;
+}
+
+/**
+ * The device storage the histories live in. `keys` exists where the storage can list what it holds
+ * (localStorage on the web); the phones' secure store cannot.
+ */
+export type HistoryStore = {
+  remove(key: string): Promise<void>;
+  keys?(): Promise<string[]>;
+};
+
+/**
+ * Removes the search history of the account that signs out, and where the storage can list its
+ * keys every other history left on the device as well: at a sign-out nobody is signed in, so each
+ * of them belongs to a signed-out account. `userId` may be unknown (null), for example when the
+ * stored session was rejected at app start; then only the listing helps.
+ *
+ * Never throws: a storage error must not stop the sign-out. Returns how many keys were removed and
+ * how many removals (or the listing) failed.
+ */
+export async function forgetSearchHistory(
+  store: HistoryStore,
+  userId: number | null | undefined,
+): Promise<{ removed: number; failed: number }> {
+  const keys = new Set<string>();
+  if (typeof userId === 'number' && Number.isSafeInteger(userId) && userId > 0) keys.add(searchHistoryKey(userId));
+  let failed = 0;
+  if (store.keys) {
+    try {
+      for (const key of await store.keys()) {
+        if (key.startsWith(SEARCH_HISTORY_KEY_PREFIX)) keys.add(key);
+      }
+    } catch {
+      failed += 1;
+    }
+  }
+  let removed = 0;
+  for (const key of keys) {
+    try {
+      await store.remove(key);
+      removed += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { removed, failed };
+}
