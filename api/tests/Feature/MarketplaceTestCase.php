@@ -5,19 +5,22 @@ namespace Tests\Feature;
 use App\Models\Offer;
 use App\Models\Partner;
 use App\Models\User;
-use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
-use Tests\TestCase;
+use Tests\AppFeatureTestCase;
 
 /**
- * Gemeinsamer Aufbau fuer die Marktplatz-Tests: leere sqlite-Datenbank mit allen
- * Migrationen, Zahlungen im Testmodus, Standort-Pruefung beim Check-in aus.
+ * Gemeinsamer Aufbau fuer die Marktplatz-Tests: Zahlungen im Testmodus, Standort-Pruefung beim
+ * Check-in aus.
+ *
+ * The database is the one of every database feature test (Tests\AppFeatureTestCase): MySQL 8.4
+ * loaded from server/schema.sql, which holds the marketplace tables too, each test inside a
+ * transaction that is rolled back. Not RefreshDatabase: that would drop and rebuild the shared
+ * test database from the migrations in the middle of the suite (scripts/schema-drift checks that
+ * the migrations and schema.sql agree).
  */
-abstract class MarketplaceTestCase extends TestCase
+abstract class MarketplaceTestCase extends AppFeatureTestCase
 {
-    use RefreshDatabase;
-
     protected function setUp(): void
     {
         parent::setUp();

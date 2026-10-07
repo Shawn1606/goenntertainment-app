@@ -1,10 +1,13 @@
 <?php
 
 use App\Models\User;
+use App\Support\AdminAccount;
 use App\Support\ClubMembership;
 use App\Support\CreditReminders;
+use App\Support\Retention;
 use App\Support\Wallet;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schedule;
 
 /*
@@ -60,3 +63,38 @@ Artisan::command('admin:grant {email} {--revoke}', function (string $email) {
 
     return 0;
 })->purpose('Admin-Rechte vergeben oder entziehen');
+
+/*
+| The first admin account, before the public edge may start (F-05; App\Support\AdminAccount).
+| Run once by the one-off `seed` service (deploy/README.md, First start), with ADMIN_EMAIL and
+| ADMIN_PASSWORD set for that one run. Read from the process environment, not through config/:
+| they are no setting of the app, and a cached configuration never holds them.
+*/
+Artisan::command('admin:create', function () {
+    [$created, $message] = AdminAccount::create(getenv('ADMIN_EMAIL'), getenv('ADMIN_PASSWORD'));
+    $created ? $this->info($message) : $this->error($message);
+
+    return $created ? 0 : 1;
+})->purpose('Das erste Admin-Konto anlegen (nur, wenn es noch keins gibt)');
+
+/*
+| The retention prune (F-16; App\Support\Retention): expired sign-in data and old evidence
+| images go, every hour. Prints and logs counts only. Without settings outside production it
+| prunes nothing; in production a missing or malformed setting stops it with an error in the log.
+*/
+Artisan::command('retention:prune', function () {
+    $settings = Retention::settings();
+    if ($settings === null) {
+        $this->info('Retention prune: no retention settings; nothing was deleted.');
+
+        return 0;
+    }
+    $counts = Retention::prune($settings['evidence_days'], $settings['token_days'], (int) config('sanctum.expiration'));
+    $line = 'Retention prune: '.Retention::describe($counts);
+    $this->info($line);
+    $counts['filesFailed'] > 0 ? Log::warning($line) : Log::info($line);
+
+    return 0;
+})->purpose('Abgelaufene Anmeldedaten und alte Beweisbilder loeschen');
+
+Schedule::command('retention:prune')->hourly()->withoutOverlapping();

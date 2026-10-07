@@ -1,0 +1,29 @@
+# The `media` service (deploy/docker-compose.yml): serves the public uploads as plain files from
+# the read-only `uploads` volume, and nothing else. Only the edge (caddy, deploy/Caddyfile) reaches
+# it, over the internal `media` network; the edge keeps the allow-list, the security headers and
+# the sandbox policy for these answers and forwards only the allow-listed paths.
+#
+# Why a container of its own: Caddy's file server follows symbolic links, and Caddy 2 has no
+# option to refuse them. Whoever can write into the uploads volume could plant a link there under
+# an allowed name. Served by the edge itself, such a link would hand out the edge's own files,
+# its certificate and account keys among them. Here it resolves inside this container, which holds
+# no key, no password and no setting: it runs as nobody, read-only, with empty temporary /data and
+# /config, and has no way out of its network.
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:8080 {
+	# The same allow-list as the edge's (deploy/test/static.test.mjs checks both against
+	# api/app/Support/Uploads.php: PUBLIC_FOLDERS, STORED_NAME).
+	@upload path_regexp upload ^/storage/(avatars|partners|offers)/[0-9a-f]{40}\.(jpg|png|webp)$
+	handle @upload {
+		root * /srv
+		file_server
+	}
+	handle {
+		respond 404
+	}
+}

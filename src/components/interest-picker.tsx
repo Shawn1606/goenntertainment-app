@@ -37,9 +37,9 @@ export function InterestPicker({ value, onChange, palette, max, disabled }: Prop
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    // `loading`/`failed` already start as true/false, and this effect runs only
+    // on mount, so there is nothing to reset here.
     let alive = true;
-    setLoading(true);
-    setFailed(false);
     api
       .interests()
       .then((res) => {

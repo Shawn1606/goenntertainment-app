@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Keyboard,
   Platform,
@@ -89,7 +89,11 @@ export function KeyboardForm({
   // registrieren: ein Ab-/Anmelden mitten im Fokus-Wechsel würde Ereignisse
   // verschlucken.
   const revealRef = useRef(reveal);
-  revealRef.current = reveal;
+  // Updated after commit, not during render (React Compiler rule: no ref writes
+  // in render). Keyboard events and focus callbacks only fire after commit.
+  useLayoutEffect(() => {
+    revealRef.current = reveal;
+  }, [reveal]);
 
   useEffect(() => {
     // iOS kündigt an („will"), Android meldet erst hinterher („did").

@@ -81,6 +81,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="security/password" />
+        <Stack.Screen name="security/email" />
         <Stack.Screen name="security/two-factor" />
         <Stack.Screen name="security/delete-account" />
         <Stack.Screen name="blocked" />
@@ -101,12 +102,22 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
         {/* Funktions-Schalter: für alle Nutzer bzw. nur für mich. */}
         <Stack.Screen name="admin-features" />
         <Stack.Screen name="admin-preview" />
+        {/* Testphase (admins only). A screen not listed inside a guard would be reachable signed
+            out (src/domain/app-routes.test.ts). */}
+        <Stack.Screen name="admin-test" />
+        <Stack.Screen name="admin-test-challenge" />
+        <Stack.Screen name="badges" />
       </Stack.Protected>
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
       </Stack.Protected>
-      {/* Rechtstexte – AUSSERHALB beider Wächter: Bei der Registrierung muss man
-          den Bedingungen zustimmen, und genau dort gibt es noch keinen Token. */}
+      {/* Rechtstexte IN der App: Impressum, Nutzungsbedingungen, Haftung, Regeln,
+          Datenschutz (siehe src/domain/legal.ts).
+
+          Bewusst AUSSERHALB beider Wächter: Bei der Registrierung muss man den
+          Bedingungen zustimmen, und genau dort gibt es noch keinen Token. Lägen
+          diese Texte im geschützten Bereich, führte der Link im
+          Zustimmungssatz ins Leere – man müsste zustimmen, ohne lesen zu können. */}
       <Stack.Screen name="legal" />
     </Stack>
   );

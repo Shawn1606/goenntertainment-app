@@ -14,13 +14,13 @@ import { PasswordMeter } from '@/components/ui/password-meter';
 import { TextField } from '@/components/ui/text-field';
 import { MIN_AGE } from '@/constants/operator';
 import { Brand, MaxContentWidth, Spacing, FontFamily, Radius } from '@/constants/theme';
-import { LEGAL_VERSION } from '@/domain/legal';
+import { isEmailAddress } from '@/domain/email';
+import { registrationConsent } from '@/domain/legal';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { blockedTermMessage } from '@/lib/blocked-terms';
 import { passwordStrength } from '@/lib/password-strength';
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const USERNAME_RE = /^[A-Za-z0-9_-]+$/;
 
 /** Mindestanzahl Interessen für ein vollständiges Profil (Backend verlangt ≥ 3). */
@@ -82,7 +82,8 @@ export default function RegisterScreen() {
       userBlocked: blockedTermMessage(u, 'username'),
       userLenOk: u.length >= 3 && u.length <= 30,
       userCharsOk: u.length > 0 && USERNAME_RE.test(u),
-      emailOk: EMAIL_RE.test(email.trim()),
+      // The same check as the server, with the same length limit (src/domain/email.ts).
+      emailOk: isEmailAddress(email.trim()),
       // Dieselbe Regel wie am Server (Länge, Buchstaben + Zahl, keine Liste häufiger
       // Passwörter, kein Benutzername darin) – siehe src/domain/password-strength.ts.
       passOk: passwordStrength(p, [u, email.trim(), name.trim()]).meetsPolicy,
@@ -115,8 +116,10 @@ export default function RegisterScreen() {
         interests,
         // Der Stand, dem tatsächlich zugestimmt wurde. Nicht bloß ein „ja":
         // Nur mit der Version lässt sich nach einer Änderung erkennen, wer noch
-        // dem alten Text zugestimmt hat (siehe src/domain/legal.ts).
-        terms_version: LEGAL_VERSION,
+        // dem alten Text zugestimmt hat (siehe src/domain/legal.ts). With it the
+        // confirmed minimum age: the server records both and refuses a sign-up
+        // without them (F-14).
+        ...registrationConsent(),
       });
     } catch (error) {
       if (error instanceof ApiError) {
@@ -219,6 +222,12 @@ export default function RegisterScreen() {
                 ). Ich bin mindestens {MIN_AGE} Jahre alt.
               </Text>
             </Pressable>
+            {/* The server's answer about this consent (an outdated app sends an old terms
+                version): without this line a field error here would show nowhere, because the
+                general notice above only fills when there are no field errors (onSubmit). */}
+            {errors.terms_version?.[0] ?? errors.confirmed_min_age?.[0] ? (
+              <Text style={styles.generalError}>{errors.terms_version?.[0] ?? errors.confirmed_min_age?.[0]}</Text>
+            ) : null}
 
             <BrandButton title="Konto erstellen" onPress={onSubmit} loading={loading} disabled={!formValid} />
           </View>

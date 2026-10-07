@@ -17,7 +17,9 @@ use App\Support\Wallet;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Nutzer verwalten: umbenennen, sperren (dauerhaft oder auf Zeit, mit
@@ -255,9 +257,33 @@ class UserController extends Controller
         if (! $request->hasFile('evidence')) {
             return null;
         }
-        $request->validate(['evidence' => Uploads::rule()], ['evidence.*' => 'Der Beweis muss ein Bild sein (jpeg, png, webp).']);
+        $message = 'Der Beweis muss ein Bild sein (jpeg, png, webp).';
+        $request->validate(['evidence' => Uploads::rule()], ['evidence.*' => $message]);
 
-        return Uploads::store($request->file('evidence'), 'evidence');
+        return Uploads::store($request->file('evidence'), 'evidence', 'evidence', $message);
+    }
+
+    /**
+     * GET /api/admin/evidence-files/{file} - an evidence image, for admins only.
+     *
+     * Evidence lies on the private disk (App\Support\Uploads), never under the public /storage;
+     * this route is the only way to it. The app loads it with the admin's bearer token. Like every
+     * stored file: the type as sent and nothing guessed (nosniff), a file opened on its own may run
+     * nothing (the CSP), and no cache on the way or on the device keeps it.
+     */
+    public function evidenceFile(string $file): Response
+    {
+        $path = 'evidence/'.$file;
+        abort_unless(Uploads::isStored($path), 404, 'Nicht gefunden.');
+        $disk = Storage::disk(Uploads::PRIVATE_DISK);
+        abort_unless($disk->exists($path), 404, 'Nicht gefunden.');
+
+        return response((string) $disk->get($path), 200, [
+            'Content-Type' => Uploads::mimeFor($file),
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Security-Policy' => "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+            'Cache-Control' => 'private, no-store',
+        ]);
     }
 
     private function recordEvidence(Request $request, User $user, string $action, string $reason, $until, ?string $image): void

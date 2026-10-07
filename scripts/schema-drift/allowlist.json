@@ -1,0 +1,40 @@
+{
+  "about": "Known differences between server/schema.sql and its copies (F-33). May only shrink: the check fails on a difference not listed here, on an entry that no longer matches a difference, and (with --ratchet) on an entry the base commit's copy of this file does not have. Every group needs a reason. README.md explains the keys.",
+  "groups": [
+    {
+      "reason": "server/src/db.js ensureSchema() creates only the tables added after the original schema. The base tables come from server/schema.sql alone in the test databases (CI loads it), imported_events also from the importer's ensureImportSchema(); a fresh production database is built by the Laravel migrations (api/docker/entrypoint.sh runs migrate), not by db.js. Open part of F-33, not fixed in PR 1.",
+      "entries": [
+        "db.js/create table-not-defined activities",
+        "db.js/create table-not-defined activity_interest",
+        "db.js/create table-not-defined activity_user",
+        "db.js/create table-not-defined imported_events",
+        "db.js/create table-not-defined interest_user",
+        "db.js/create table-not-defined interests",
+        "db.js/create table-not-defined password_reset_tokens",
+        "db.js/create table-not-defined personal_access_tokens",
+        "db.js/create table-not-defined users"
+      ]
+    },
+    {
+      "reason": "seed.js's ban_evidence retrofit predates the source column. The column is not lost: db.js ensureSchema(), which runs on every server start, adds ban_evidence.source at the reference's position (the db.js alter pass compares it without a difference).",
+      "entries": [
+        "seed.js/create column-missing ban_evidence.source"
+      ]
+    },
+    {
+      "reason": "Stock Laravel skeleton tables for sessions and queues. The deploy runs Laravel with SESSION_DRIVER=array and QUEUE_CONNECTION=sync (deploy/docker-compose.yml) and never runs Laravel migrations (api/docker/entrypoint.sh); only a local `composer setup` creates these tables. (The cache tables are in server/schema.sql since the deploy uses CACHE_STORE=database.)",
+      "entries": [
+        "laravel/migrate table-extra failed_jobs(id,uuid,connection,queue,payload,exception,failed_at)",
+        "laravel/migrate table-extra job_batches(id,name,total_jobs,pending_jobs,failed_jobs,failed_job_ids,options,cancelled_at,created_at,finished_at)",
+        "laravel/migrate table-extra jobs(id,queue,payload,attempts,reserved_at,available_at,created_at)",
+        "laravel/migrate table-extra sessions(id,user_id,ip_address,user_agent,payload,last_activity)"
+      ]
+    },
+    {
+      "reason": "Laravel's own migration ledger, created by `php artisan migrate` itself; it is not part of the application schema.",
+      "entries": [
+        "laravel/migrate table-extra migrations(id,migration,batch)"
+      ]
+    }
+  ]
+}

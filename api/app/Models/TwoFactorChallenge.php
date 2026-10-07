@@ -7,8 +7,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Ein offener Zwei-Faktor-Vorgang (Tabelle two_factor_challenges, Schema in
- * server/schema.sql - Node besitzt das Schema).
+ * Ein offener Zwei-Faktor-Vorgang (Tabelle two_factor_challenges: angelegt von den
+ * Migrationen, Referenz server/schema.sql).
  *
  * Nur `created_at`, kein `updated_at`: Ein Vorgang wird nicht „bearbeitet",
  * er zaehlt Versuche und wird verbraucht. Eine Spalte, die nie jemand liest,

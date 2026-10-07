@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { Animated, Platform, Pressable, StyleSheet } from 'react-native';
 
 import { ChevronLeftIcon, ChevronRightIcon } from '@/components/ui/icons';
@@ -34,7 +34,7 @@ export function ScrollHint({
   label?: string;
 }) {
   const surface = useBrandSurface();
-  const opacity = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const [opacity] = useState(() => new Animated.Value(visible ? 1 : 0));
 
   // Weich ein- und ausblenden statt hart umschalten: Der Pfeil erscheint und
   // verschwindet mitten in einer Wischbewegung, ein Aufblitzen würde stören.

@@ -1,0 +1,85 @@
+# Dependabot keeps dependencies, base images and the pinned actions fresh. Every update is a
+# pull request that runs the full CI, including the Expo SDK compatibility check and the
+# CI-versus-Dockerfile version check (scripts/ci/check-mirrors.mjs): a base-image update that
+# moves Node or PHP fails there until .github/workflows/ci.yml (and api/composer.json) move
+# with it, which is the prompt to upgrade on purpose.
+#
+# Not covered, on purpose or by limitation:
+# - api/package.json (Laravel's frontend skeleton): no lock file, not built or deployed;
+# - the mysql service image in .github/workflows/ci.yml: Dependabot does not read service
+#   images in workflow files. It is pinned to the same tag and digest as
+#   deploy/docker-compose.yml, which Dependabot does update; the mirror check then fails until
+#   the workflow's lines carry the new pin too (scripts/ci/check-mirrors.mjs, "MySQL image digest");
+# No reviewers or assignees here: that needs real accounts (CODEOWNERS, once decided).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build(deps)
+    groups:
+      # The Expo SDK pins these together; `expo install --check` in CI rejects versions
+      # outside the installed SDK, so they are updated as one pull request.
+      expo-sdk:
+        patterns:
+          - expo
+          - expo-*
+          - '@expo/*'
+          - react
+          - react-dom
+          - react-native
+          - react-native-*
+          - '@react-native/*'
+          - '@react-native-*'
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /server
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build(deps)
+
+  - package-ecosystem: composer
+    directory: /api
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build(deps)
+
+  # FROM lines of the Dockerfiles, including the pinned actionlint image used by CI.
+  - package-ecosystem: docker
+    directories:
+      - /server
+      - /api
+      - /.github/actionlint
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build(deps)
+
+  # image: lines of the compose files (deploy/: the stack; dev/: the local mail catcher).
+  - package-ecosystem: docker-compose
+    directories:
+      - /deploy
+      - /dev
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build(deps)
+
+  # The SHA-pinned actions in .github/workflows (the version comments are updated too).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci(deps)
+    groups:
+      actions:
+        patterns:
+          - '*'

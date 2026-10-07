@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 
-import { hasOperatorGaps } from '../constants/operator.ts';
-import {
-  LEGAL_DOCUMENTS,
-  LEGAL_DOC_IDS,
-  LEGAL_VERSION,
-  acceptanceIsCurrent,
-  legalDocument,
-} from './legal.ts';
+import { MIN_AGE, hasOperatorGaps } from '../constants/operator.ts';
+// A namespace import: a test of an export that does not exist yet then fails on its assertion,
+// not on loading the file.
+import * as legal from './legal.ts';
+
+const { LEGAL_DOCUMENTS, LEGAL_DOC_IDS, LEGAL_VERSION, acceptanceIsCurrent, legalDocument } = legal;
 
 test('es gibt die fünf Dokumente, die eine solche App braucht', () => {
   // Impressum und Nutzungsbedingungen sind Pflicht, der Datenschutz-Text auch.
@@ -124,4 +124,24 @@ test('die Betreiberdaten sind noch Platzhalter – dieser Test ist die Erinnerun
     console.log(`  Hinweis: Impressum noch unvollständig – offen: ${gaps.join(', ')}`);
   }
   assert.ok(Array.isArray(gaps));
+});
+
+/**
+ * F-14: the server accepts a sign-up only with the terms version and the minimum age of
+ * shared/legal.json. The app cannot import that file in these tests (no JSON imports without a
+ * bundler), so LEGAL_VERSION and MIN_AGE are named mirrors, and this test keeps them equal.
+ */
+const LEGAL_JSON = path.resolve(import.meta.dirname, '..', '..', 'shared', 'legal.json');
+
+test("the app's terms version and minimum age equal shared/legal.json (F-14)", () => {
+  assert.ok(existsSync(LEGAL_JSON), 'shared/legal.json (the server-side source of both values) is missing');
+  const shared = JSON.parse(readFileSync(LEGAL_JSON, 'utf8'));
+  assert.equal(LEGAL_VERSION, shared.terms_version, 'LEGAL_VERSION differs from shared/legal.json');
+  assert.equal(MIN_AGE, shared.min_age, 'MIN_AGE differs from shared/legal.json');
+});
+
+test('registration sends the confirmed minimum age and the current terms version (F-14)', () => {
+  const consent = (legal as unknown as Record<string, unknown>).registrationConsent;
+  assert.equal(typeof consent, 'function', 'the app sends no server-checkable age confirmation');
+  assert.deepEqual((consent as () => unknown)(), { terms_version: LEGAL_VERSION, confirmed_min_age: MIN_AGE });
 });

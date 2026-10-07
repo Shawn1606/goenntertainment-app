@@ -1,8 +1,7 @@
 ﻿<#
   GÖ4Fun – Entwicklungsumgebung hochfahren.
 
-  Läuft automatisch beim Windows-Start (Verknüpfung im Autostart, siehe
-  scripts/install-autostart.ps1) und beim Start von Claude Code (SessionStart-Hook
+  Läuft beim Start von Claude Code (SessionStart-Hook
   in .claude/settings.local.json – bewusst die PERSÖNLICHE Datei: Die IP und die
   Server gehören zu diesem PC, nicht zu jedem, der das Repo klont). Von Hand:
 

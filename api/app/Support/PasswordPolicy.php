@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Log;
  *      ihr Text bleibt Wort fuer Wort derselbe: Die App zeigt ihn seit Monaten,
  *      und aeltere App-Fassungen pruefen ihn schon vor dem Absenden.
  *   2. nicht in `shared/common-passwords.json`. Verglichen wird das GANZE
- *      Passwort, kleingeschrieben: „geheim" ist verboten, „geheim1234" nicht.
+ *      Passwort, kleingeschrieben: „geheim" ist verboten, „geheimtipp42" nicht.
  *      Ein Teilstring-Vergleich klaenge strenger, waere aber willkuerlich - er
  *      verboete jedes Passwort, in dem irgendwo „hallo" oder „love" steckt.
  *   3. enthaelt weder den Benutzernamen noch den Teil der E-Mail vor dem @ -
@@ -28,10 +28,10 @@ use Illuminate\Support\Facades\Log;
  *
  * ## Wo es sie noch gibt
  *
- * In server/src/password-policy.js - gleiche Regel, gleiche Texte. Node hat
- * eigene Wege zum Registrieren und Zuruecksetzen, und das Server-Abbild in
- * deploy/ startet sogar nur Node. Die App liest dieselbe Liste fuer ihre
- * Staerkeanzeige. Wer hier etwas aendert, aendert es an allen drei Stellen.
+ * Only here on the server side: Node no longer registers or resets passwords
+ * (those routes are Laravel's), so its copy of this rule is gone. Die App liest
+ * dieselbe Liste fuer ihre Staerkeanzeige. Wer hier etwas aendert, prueft die
+ * App mit.
  */
 final class PasswordPolicy
 {

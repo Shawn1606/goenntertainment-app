@@ -35,11 +35,27 @@ import { SUPPORT_EMAIL } from '../constants/links.ts';
  * Stand der Nutzungsbedingungen.
  *
  * Ein **Datum** und keine laufende Nummer: Man kann es lesen, ohne eine Tabelle
- * zu kennen. Beim Ändern eines inhaltlich relevanten Punktes wird es hochgesetzt –
- * dann gilt die frühere Zustimmung nicht mehr (siehe {@link acceptanceIsCurrent})
- * und die App fragt erneut. Reine Tippfehler-Korrekturen ändern es NICHT.
+ * zu kennen, und es steht so auch unter dem Text. Beim Ändern eines inhaltlich
+ * relevanten Punktes wird es hochgesetzt – dann gilt die frühere Zustimmung nicht
+ * mehr (siehe {@link acceptanceIsCurrent}) und die App fragt erneut.
+ *
+ * Reine Tippfehler-Korrekturen ändern das Datum NICHT: Sonst müssten alle
+ * Nutzer:innen wegen eines Kommas erneut zustimmen, und dann klickt es niemand
+ * mehr bewusst weg.
+ *
+ * Named mirror of `terms_version` in shared/legal.json, the version the server accepts at
+ * sign-up (F-14); legal.test.ts fails when the two differ, so change both together.
  */
 export const LEGAL_VERSION = '2026-10-05';
+
+/**
+ * What a sign-up confirms, in the form the server checks and stores (F-14): the current terms
+ * version and the minimum age. The server refuses a registration without both, or with other
+ * values (api/app/Support/Legal.php reads shared/legal.json).
+ */
+export function registrationConsent(): { terms_version: string; confirmed_min_age: number } {
+  return { terms_version: LEGAL_VERSION, confirmed_min_age: MIN_AGE };
+}
 
 /** Reihenfolge der Dokumente – so stehen sie auch in den Einstellungen. */
 export const LEGAL_DOC_IDS = ['terms', 'liability', 'conduct', 'privacy', 'imprint'] as const;

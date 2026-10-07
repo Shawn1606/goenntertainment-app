@@ -50,6 +50,12 @@ class Media
             return $value;
         }
 
+        // A private folder never comes out as a public /storage address: evidence only through
+        // the admin route that checks who asks (App\Support\Uploads::PRIVATE_FOLDERS).
+        if (Uploads::isPrivate($value)) {
+            return self::base($request).'/api/admin/evidence-files/'.basename($value);
+        }
+
         return self::base($request).'/storage/'.$value;
     }
 }

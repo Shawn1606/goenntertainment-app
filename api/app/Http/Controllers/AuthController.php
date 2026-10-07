@@ -5,14 +5,21 @@ namespace App\Http\Controllers;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Rules\NoBlockedTerms;
+use App\Rules\ValidEmail;
+use App\Support\EmailAddress;
+use App\Support\Legal;
 use App\Support\Passwords;
 use App\Support\PasswordPolicy;
+use App\Support\ReservedAccounts;
+use App\Support\Sessions;
 use App\Support\TwoFactor;
 use Closure;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -37,17 +44,34 @@ use Illuminate\Validation\ValidationException;
  */
 class AuthController extends Controller
 {
-    /** Muster der bisherigen E-Mail-Pruefung (server/src/validate.js). */
-    private const EMAIL_PATTERN = '/^[^\s@]+@[^\s@]+\.[^\s@]+$/';
-
     /** Benutzername: Buchstaben, Zahlen, Unterstrich, Bindestrich. */
     private const USERNAME_PATTERN = '/^[\w-]+$/';
 
-    private const MSG_EMAIL = 'Bitte eine gueltige E-Mail-Adresse angeben.';
+    private const MSG_EMAIL = ValidEmail::MESSAGE;
 
     private const MSG_USERNAME_FORMAT = 'Der Benutzername ist ungueltig (3-30 Zeichen, nur Buchstaben/Zahlen/-_).';
 
     private const MSG_PASSWORD = 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.';
+
+    private const MSG_EMAIL_NEEDS_STEP_UP = 'Die E-Mail-Adresse lässt sich nur mit deinem Passwort ändern – nutze „E-Mail-Adresse ändern" in den Einstellungen.';
+
+    /**
+     * Longest name: users.name is VARCHAR(255) (server/schema.sql). Laravel's `max` counts a string
+     * in characters (mb_strlen), as MySQL counts a utf8mb4 VARCHAR. Checked before the word filter
+     * (F-02), so a longer name is refused without being scanned and never reaches the database.
+     */
+    private const NAME_MAX = 255;
+
+    private const MSG_NAME_TOO_LONG = 'Der Name fasst hoechstens 255 Zeichen.';
+
+    /** Sign-up without the current terms version (F-14). */
+    public const MSG_TERMS = 'Bitte stimme den aktuellen Nutzungsbedingungen zu.';
+
+    /** Sign-up without the confirmation of the minimum age (F-14); the age from shared/legal.json. */
+    public static function minAgeMessage(): string
+    {
+        return 'Bitte bestätige, dass du mindestens '.Legal::minAge().' Jahre alt bist.';
+    }
 
     /** POST /api/register */
     public function register(Request $request): JsonResponse
@@ -59,21 +83,40 @@ class AuthController extends Controller
              * Format-Meldung, und dank `bail` steht nie beides da. Die Meldung ist
              * dieselbe, die die App vorab am Feld zeigt.
              */
-            'name' => ['bail', 'required', 'string', new NoBlockedTerms('name')],
-            'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, new NoBlockedTerms('username')],
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'name' => ['bail', 'required', 'string', 'max:'.self::NAME_MAX, new NoBlockedTerms('name')],
+            // Names and addresses the system creates for itself are refused (F-05,
+            // shared/reserved-accounts.json), before anyone can take them ahead of the seed.
+            'username' => ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, self::notReservedUsername(null), new NoBlockedTerms('username')],
+            // The former pattern, in linear time and capped at 254 characters (App\Support\EmailAddress).
+            'email' => ['bail', 'required', new ValidEmail, self::notReservedEmail()],
             'password' => ['bail', 'required', $this->passwordRule()],
+            /**
+             * F-14: the sign-up records on the server that the person accepted the CURRENT terms
+             * and confirmed the minimum age, both from shared/legal.json (App\Support\Legal).
+             * Without them, or with an older version or another age, the sign-up is refused.
+             * Appended after the existing fields, so the first message of every other failure
+             * stays what it was. How age is verified beyond this confirmation is an operator
+             * decision, not made in code.
+             */
+            'terms_version' => ['bail', 'required', 'string', Rule::in([Legal::termsVersion()])],
+            'confirmed_min_age' => ['bail', 'required', 'integer', Rule::in([Legal::minAge()])],
         ], [
             'name.required' => 'Der Name ist erforderlich.',
             'name.string' => 'Der Name ist erforderlich.',
+            'name.max' => self::MSG_NAME_TOO_LONG,
             'username.required' => 'Der Benutzername ist erforderlich.',
             'username.string' => 'Der Benutzername ist erforderlich.',
             'username.min' => self::MSG_USERNAME_FORMAT,
             'username.max' => self::MSG_USERNAME_FORMAT,
             'username.regex' => self::MSG_USERNAME_FORMAT,
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
             'password.required' => self::MSG_PASSWORD,
+            'terms_version.required' => self::MSG_TERMS,
+            'terms_version.string' => self::MSG_TERMS,
+            'terms_version.in' => self::MSG_TERMS,
+            'confirmed_min_age.required' => self::minAgeMessage(),
+            'confirmed_min_age.integer' => self::minAgeMessage(),
+            'confirmed_min_age.in' => self::minAgeMessage(),
         ]);
 
         /**
@@ -94,7 +137,7 @@ class AuthController extends Controller
             }
 
             $email = $request->input('email');
-            if (! $v->errors()->has('email') && is_string($email) && preg_match(self::EMAIL_PATTERN, $email) === 1) {
+            if (! $v->errors()->has('email') && EmailAddress::isValid($email)) {
                 if (User::where('email', $email)->exists()) {
                     $v->errors()->add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
                 }
@@ -121,22 +164,15 @@ class AuthController extends Controller
         $user->password = Hash::make((string) $request->input('password'));
 
         /**
-         * Stand der Nutzungsbedingungen, dem zugestimmt wurde.
-         *
-         * Kommt aus der App (`LEGAL_VERSION` in src/domain/legal.ts) und wird hier
-         * NICHT geprueft: Der Server kennt den Text nicht und soll ihn nicht kennen -
-         * er haelt fest, WAS bestaetigt wurde, damit sich nach einer Aenderung
-         * erkennen laesst, wer noch dem alten Stand zugestimmt hat. Fehlt die
-         * Angabe (aeltere App-Fassung), bleibt die Spalte NULL, und die App fragt
-         * beim naechsten Start nach.
+         * The confirmations checked above (F-14), each with the time it was given: which terms
+         * version was accepted - so that after a change of the terms it is known who accepted an
+         * older one - and which minimum age was confirmed. Only the current values from
+         * shared/legal.json get this far.
          */
-        $terms = $request->input('terms_version');
-        $termsVersion = (is_string($terms) && trim($terms) !== '')
-            ? mb_substr(trim($terms), 0, 20)
-            : null;
-
-        $user->terms_version = $termsVersion;
-        $user->terms_accepted_at = $termsVersion !== null ? now() : null;
+        $user->terms_version = Legal::termsVersion();
+        $user->terms_accepted_at = now();
+        $user->min_age_confirmed = Legal::minAge();
+        $user->min_age_confirmed_at = now();
         $user->save();
 
         $interests = $this->interestIds($request->input('interests'));
@@ -151,20 +187,17 @@ class AuthController extends Controller
     public function login(Request $request): JsonResponse
     {
         Validator::make($request->all(), [
-            'email' => ['bail', 'required', 'regex:'.self::EMAIL_PATTERN],
+            'email' => ['bail', 'required', new ValidEmail],
             'password' => ['required'],
         ], [
             'email.required' => self::MSG_EMAIL,
-            'email.regex' => self::MSG_EMAIL,
             'password.required' => 'Das Passwort ist erforderlich.',
         ])->validate();
 
         $user = User::where('email', $request->input('email'))->first();
 
         if ($user === null || ! Passwords::check((string) $request->input('password'), $user->password)) {
-            throw ValidationException::withMessages([
-                'email' => ['Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.'],
-            ]);
+            throw self::wrongCredentials();
         }
 
         // Gesperrte Konten kommen nicht rein - mit Details (Grund/Dauer) fuer das Popup.
@@ -185,7 +218,26 @@ class AuthController extends Controller
             return TwoFactor::startLogin($user);
         }
 
-        return $this->tokenResponse($request, $user);
+        /**
+         * The token only for the credentials just checked (F-09, F-20): a password reset or
+         * change, an e-mail change or switching two-factor sign-in on may have committed while
+         * the password was being checked. Then the account no longer has what was checked, and
+         * the answer is the one for a wrong password (App\Support\Sessions, "Sign-ins under way").
+         */
+        $token = Sessions::issueIfUnchanged($user, $request->input('device_name'));
+        if ($token === null) {
+            throw self::wrongCredentials();
+        }
+
+        return $this->tokenPayload($request, $user, $token);
+    }
+
+    /** Unknown address or wrong password: one answer for both. */
+    private static function wrongCredentials(): ValidationException
+    {
+        return ValidationException::withMessages([
+            'email' => ['Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.'],
+        ]);
     }
 
     /** POST /api/logout (geschuetzt) */
@@ -235,13 +287,14 @@ class AuthController extends Controller
         };
 
         if ($request->has('name')) {
-            $rules['name'] = ['bail', 'required', 'string', $blockedTermsRule('name', $user->name)];
+            $rules['name'] = ['bail', 'required', 'string', 'max:'.self::NAME_MAX, $blockedTermsRule('name', $user->name)];
             $messages['name.required'] = 'Der Name ist erforderlich.';
             $messages['name.string'] = 'Der Name ist erforderlich.';
+            $messages['name.max'] = self::MSG_NAME_TOO_LONG;
         }
 
         if ($request->has('username')) {
-            $rules['username'] = ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, $blockedTermsRule('username', $user->username)];
+            $rules['username'] = ['bail', 'required', 'string', 'min:3', 'max:30', 'regex:'.self::USERNAME_PATTERN, self::notReservedUsername($user->username), $blockedTermsRule('username', $user->username)];
             $messages['username.required'] = 'Der Benutzername ist erforderlich.';
             $messages['username.string'] = 'Der Benutzername ist erforderlich.';
             $messages['username.min'] = self::MSG_USERNAME_FORMAT;
@@ -249,10 +302,18 @@ class AuthController extends Controller
             $messages['username.regex'] = self::MSG_USERNAME_FORMAT;
         }
 
+        /**
+         * The e-mail address is no longer changed here (F-04): it takes the current password, and
+         * the code with two-factor sign-in, at PUT /user/email (AccountController::updateEmail),
+         * and then the code mailed to the new address (AccountController::confirmEmail).
+         * Sending the unchanged address stays valid: profile forms send the whole profile.
+         */
         if ($request->has('email')) {
-            $rules['email'] = ['bail', 'required', 'regex:'.self::EMAIL_PATTERN];
-            $messages['email.required'] = self::MSG_EMAIL;
-            $messages['email.regex'] = self::MSG_EMAIL;
+            $rules['email'] = ['bail', static function (string $attribute, mixed $value, Closure $fail) use ($user): void {
+                if ($value !== $user->email) {
+                    $fail(self::MSG_EMAIL_NEEDS_STEP_UP);
+                }
+            }];
         }
 
         $interests = null;
@@ -266,14 +327,6 @@ class AuthController extends Controller
             if (! $v->errors()->has('username') && is_string($username) && $username !== '' && $username !== $user->username) {
                 if (User::where('username', $username)->where('id', '<>', $user->id)->exists()) {
                     $v->errors()->add('username', 'Dieser Benutzername ist bereits vergeben.');
-                }
-            }
-
-            $email = $request->input('email');
-            if (! $v->errors()->has('email') && is_string($email) && $email !== $user->email
-                && preg_match(self::EMAIL_PATTERN, $email) === 1) {
-                if (User::where('email', $email)->where('id', '<>', $user->id)->exists()) {
-                    $v->errors()->add('email', 'Diese E-Mail-Adresse ist bereits registriert.');
                 }
             }
 
@@ -302,7 +355,7 @@ class AuthController extends Controller
             $touched = true;
         }
         if ($request->has('email')) {
-            $user->email = $request->input('email');
+            // Unchanged (checked above); counts as a sent field, as before.
             $touched = true;
         }
 
@@ -341,13 +394,13 @@ class AuthController extends Controller
      */
     private function tokenResponse(Request $request, User $user, int $status = 200): JsonResponse
     {
-        $deviceName = $request->input('device_name');
-        $name = (is_string($deviceName) && $deviceName !== '') ? $deviceName : 'mobile';
+        // With an expiry date (App\Support\Sessions, the one place that issues tokens).
+        return $this->tokenPayload($request, $user, Sessions::issue($user, $request->input('device_name')), $status);
+    }
 
-        // Sanctum erzeugt genau das Format, das schon in der Tabelle steht:
-        // "{id}|{40 Zeichen}", gespeichert als sha256-Hex, abilities ["*"].
-        $token = $user->createToken($name)->plainTextToken;
-
+    /** The answer that carries a token already issued for $user. */
+    private function tokenPayload(Request $request, User $user, string $token, int $status = 200): JsonResponse
+    {
         return response()->json([
             'user' => (new UserResource($user))->withInterests()->toArray($request),
             'token' => $token,
@@ -373,6 +426,34 @@ class AuthController extends Controller
             is_string($username) ? $username : null,
             is_string($email) ? $email : null,
         );
+    }
+
+    /**
+     * A username the system reserves for itself (shared/reserved-accounts.json) is refused, unless
+     * it is the account's current one (the admin may keep sending its own name with a profile).
+     */
+    public static function notReservedUsername(?string $current): Closure
+    {
+        return static function (string $attribute, mixed $value, Closure $fail) use ($current): void {
+            $unchanged = is_string($value) && $current !== null
+                && mb_strtolower($value, 'UTF-8') === mb_strtolower($current, 'UTF-8');
+            if (! $unchanged && ReservedAccounts::default()->isReservedUsername($value)) {
+                $fail(ReservedAccounts::MSG_USERNAME);
+            }
+        };
+    }
+
+    /**
+     * An address in a domain the system reserves for its own accounts is refused, including the
+     * spellings the database treats as the same address (ReservedAccounts::isReservedEmailInDatabase).
+     */
+    public static function notReservedEmail(): Closure
+    {
+        return static function (string $attribute, mixed $value, Closure $fail): void {
+            if (ReservedAccounts::default()->isReservedEmailInDatabase($value, DB::connection())) {
+                $fail(ReservedAccounts::MSG_EMAIL);
+            }
+        };
     }
 
     /** Kategorie-IDs aus der Anfrage - alles Unbrauchbare fliegt raus. */

@@ -4,6 +4,7 @@ node_modules/
 # Hochgeladene Dateien sind Laufzeit-Daten, keine Quellen: echte Nutzerbilder
 # (und unter evidence/ gerade die abgelehnten) gehoeren nicht in die Historie.
 # Die Ordner legt der Server bei Bedarf selbst an (fs.mkdirSync recursive).
+storage-private/
 storage/avatars/
 storage/evidence/
 storage/posts/

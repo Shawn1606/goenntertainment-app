@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Support\PasswordPolicy;
 use PHPUnit\Framework\TestCase;
+use Tests\AppFeatureTestCase;
 
 /**
  * Die Passwortregel - genau so, wie die App sie nachbaut (nicht strenger, nicht
@@ -31,8 +32,22 @@ class PasswordPolicyTest extends TestCase
             $this->assertContains($must, $list);
         }
 
-        // Die Bestandstests (server/test/api.test.js) registrieren damit.
-        $this->assertNotContains('geheim1234', $list);
+        // The server tests register with this password: a mirror of TEST_PASSWORD in
+        // server/test/support/fixtures.js, lower-cased like the list.
+        $this->assertNotContains('fixture-only-pass-2468', $list);
+    }
+
+    /**
+     * The test accounts of both test suites use TEST_PASSWORD (tests/AppFeatureTestCase.php, equal to
+     * server/test/support/fixtures.js) with usernames '<prefix><stamp>' and @example.invalid
+     * addresses. Moved from server/test/test-support.test.js, which checked it against Node's copy
+     * of this rule; that copy is gone with Node's sign-up route.
+     */
+    public function test_the_test_password_passes_the_rule_for_a_fixture_identity(): void
+    {
+        $username = 'zfapw023567023567';
+
+        $this->assertNull(PasswordPolicy::problem(AppFeatureTestCase::TEST_PASSWORD, $username, $username.'@example.invalid'));
     }
 
     public function test_grundregel_mit_unveraenderter_meldung(): void
@@ -57,7 +72,7 @@ class PasswordPolicyTest extends TestCase
         $this->assertSame(PasswordPolicy::MSG_COMMON, PasswordPolicy::problem('qwertz123'));
 
         // Nur der GANZE Eintrag zaehlt - kein Wortstamm, kein Leetspeak.
-        $this->assertNull(PasswordPolicy::problem('geheim1234'));
+        $this->assertNull(PasswordPolicy::problem('geheimtipp42'));
         $this->assertNull(PasswordPolicy::problem('passwort1x'));
         $this->assertNull(PasswordPolicy::problem('p4ssw0rt1'));
     }

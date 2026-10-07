@@ -9,7 +9,6 @@ import { InterestPicker, type InterestPickerPalette } from '@/components/interes
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ListNote, ListRow, ListSection, ListSwitch } from '@/components/ui/list-row';
-import { TextField } from '@/components/ui/text-field';
 import { Links, supportMailto } from '@/constants/links';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
 import { initialsOf } from '@/domain/initials';
@@ -19,7 +18,7 @@ import { ApiError } from '@/lib/api';
 import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
-import { clearCredentials } from '@/lib/credential-store';
+import { clearSavedEmail } from '@/lib/credential-store';
 import { previewSound } from '@/lib/feedback';
 import { useThemePreference } from '@/lib/theme-preference';
 
@@ -50,7 +49,7 @@ async function openLink(url: string) {
 export default function SettingsScreen() {
   const router = useRouter();
   const colors = useTheme();
-  const { user, logout, updateProfile } = useAuth();
+  const { user, logout } = useAuth();
   const { preference, isDark, setDark, followSystem } = useThemePreference();
   const { settings, update } = useAppSettings();
 
@@ -58,14 +57,14 @@ export default function SettingsScreen() {
 
   const onForgetDevice = async () => {
     const ok = await confirmAction(
-      'Zugangsdaten löschen',
-      'Die auf diesem Gerät gespeicherte E-Mail und das Passwort werden entfernt. Beim nächsten Login musst du sie neu eingeben.',
+      'E-Mail-Adresse löschen',
+      'Die auf diesem Gerät gemerkte E-Mail-Adresse wird entfernt. Beim nächsten Login gibst du sie neu ein.',
       'Löschen',
       true,
     );
     if (!ok) return;
-    await clearCredentials();
-    await notifyUser('Erledigt', 'Auf diesem Gerät sind keine Zugangsdaten mehr gespeichert.');
+    await clearSavedEmail();
+    await notifyUser('Erledigt', 'Auf diesem Gerät ist keine E-Mail-Adresse mehr gespeichert.');
   };
 
   const onLogout = async () => {
@@ -90,7 +89,9 @@ export default function SettingsScreen() {
         </ListSection>
 
         <ListSection title="Anmeldung & Sicherheit">
-          <EmailRow email={user?.email ?? ''} onSave={(email) => updateProfile({ email })} />
+          {/* The e-mail address changes on its own screen: with the password (and a code), and
+              only after the code sent to the new address comes back (security/email.tsx). */}
+          <ListRow first icon="mail" title="E-Mail-Adresse ändern" hint={user?.email ?? '—'} onPress={() => router.push('/security/email')} />
           <ListRow icon="lock" title="Passwort ändern" hint="Mit altem Passwort bestätigen" onPress={() => router.push('/security/password')} />
           <ListRow
             icon={user?.two_factor_method ? 'shield-check' : 'shield'}
@@ -99,7 +100,7 @@ export default function SettingsScreen() {
             hint={user?.two_factor_method === 'totp' ? 'Code aus der Authenticator-App' : user?.two_factor_method === 'email' ? 'Code per E-Mail' : 'Zusätzlicher Code beim Anmelden'}
             onPress={() => router.push('/security/two-factor')}
           />
-          <ListRow icon="key" title="Gespeicherte Zugangsdaten löschen" hint="Entfernt E-Mail und Passwort von diesem Gerät" onPress={onForgetDevice} />
+          <ListRow icon="key" title="Gespeicherte E-Mail-Adresse löschen" hint="Entfernt die gemerkte E-Mail-Adresse von diesem Gerät" onPress={onForgetDevice} />
         </ListSection>
 
         <InterestsSection />
@@ -193,68 +194,6 @@ function ProfileThumb() {
   );
 }
 
-/** E-Mail: Zeile zum Antippen, darunter klappt ein Feld mit Speichern/Abbrechen auf. */
-function EmailRow({ email, onSave }: { email: string; onSave: (email: string) => Promise<void> }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(email);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    const value = draft.trim();
-    if (!value) {
-      setError('Bitte eine E-Mail angeben.');
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      await onSave(value);
-      setEditing(false);
-    } catch (e) {
-      setError(e instanceof ApiError ? e.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (!editing) {
-    return (
-      <ListRow
-        first
-        icon="mail"
-        title="E-Mail"
-        value={email}
-        onPress={() => {
-          setDraft(email);
-          setError(null);
-          setEditing(true);
-        }}
-      />
-    );
-  }
-  return (
-    <View style={styles.editBox}>
-      <TextField
-        label="E-Mail"
-        value={draft}
-        onChangeText={setDraft}
-        autoFocus
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="email-address"
-        editable={!saving}
-        onSubmitEditing={save}
-        error={error ?? undefined}
-      />
-      <View style={styles.editActions}>
-        <Button title="Abbrechen" variant="ghost" size="small" onPress={() => setEditing(false)} disabled={saving} />
-        <Button title="Speichern" size="small" icon="check" onPress={save} loading={saving} />
-      </View>
-    </View>
-  );
-}
-
 /** Interessen: was dir auf der Startseite zuerst vorgeschlagen wird. */
 function InterestsSection() {
   const colors = useTheme();
@@ -341,7 +280,6 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.four, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.six },
   thumb: { width: 40, height: 40, borderRadius: 20, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   thumbText: { fontFamily: FontFamily.bold, fontSize: 14 },
-  editBox: { padding: Spacing.three, gap: Spacing.two },
   editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: Spacing.two },
   section: { gap: Spacing.two },
   sectionTitle: { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 0.8, marginLeft: Spacing.two },

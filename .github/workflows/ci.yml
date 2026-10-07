@@ -1,0 +1,404 @@
+# CI for every pull request (any base branch, so stacked pull requests are checked too) and
+# every push to main: client tests, typecheck and lint; server and API tests against MySQL 8.4;
+# the schema drift check; the workflow policy, version mirrors, repository guardrails and
+# actionlint; a dependency audit. README.md "Tests and checks" lists the same commands for
+# a local run.
+#
+# Security: read-only token, every action pinned by commit SHA (Dependabot keeps the pins
+# fresh), checkout keeps no credentials, no secrets are used. Pull requests from forks run with
+# the same read-only token (there is no pull_request_target trigger). The passwords below are
+# public and fake, only for the throw-away CI databases, and carry the marker "not-a-secret"
+# (checked by scripts/ci/check-workflows.mjs).
+#
+# Every check prints how many things it examined and fails on zero (scripts/ci/test-report.mjs
+# for the test suites). Steps after an install run even when an earlier check failed, so one
+# red step does not hide the others.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Mirrors, compared by scripts/ci/check-mirrors.mjs: server/Dockerfile (Node major);
+  # api/Dockerfile and the "php" constraint in api/composer.json (PHP minor).
+  NODE_VERSION: '22'
+  PHP_VERSION: '8.4'
+
+jobs:
+  client:
+    name: Client (tests, typecheck, lint)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      # Expo CLI without telemetry and without network calls to Expo.
+      EXPO_NO_TELEMETRY: '1'
+      EXPO_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install
+        id: install
+        run: npm ci --ignore-scripts
+      - name: Tests (npm test)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/client.tap
+        run: npm test
+      - name: Test count
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/ci/test-report.mjs tap client "$RUNNER_TEMP/client.tap"
+      - name: Expo SDK compatibility
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const sdk = require("expo/bundledNativeModules.json");
+            const deps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+            const managed = deps.filter((name) => Object.hasOwn(sdk, name));
+            console.log(managed.length + " of " + deps.length + " dependencies are versioned by the installed Expo SDK");
+            if (managed.length === 0) process.exit(1);
+          '
+          npx expo install --check
+      # expo-env.d.ts and the typed-route declarations are git-ignored; tsconfig.json includes
+      # them. The command must not change any tracked file.
+      - name: Generate Expo's type declarations
+        id: expo-types
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          npx expo customize tsconfig.json
+          test -f expo-env.d.ts
+          git diff --exit-code
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.expo-types.outcome == 'success' }}
+        run: npx tsc --noEmit --diagnostics
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          count=$(git ls-files -- src app components | grep -cE '\.[cm]?[jt]sx?$' || true)
+          echo "lint: $count tracked JS/TS files under src/, app/, components/ (the default inputs of expo lint)"
+          test "$count" -gt 0
+          npm run lint
+
+  server:
+    name: Server tests (MySQL 8.4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      mysql:
+        # The same tag and digest as deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs).
+        # Dependabot does not update service images in workflow files: when it moves the
+        # compose's pin, the mirror check fails until these three lines follow.
+        image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_DATABASE: goenntertainment
+          MYSQL_USER: goenn
+          MYSQL_PASSWORD: ci-only-not-a-secret-db
+          MYSQL_ROOT_PASSWORD: ci-only-not-a-secret-root
+        ports:
+          - 3306
+        # No password on the health-check command line: mysqladmin ping reports a running
+        # server even when it refuses the login.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --tmpfs /var/lib/mysql
+    env:
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      # Must equal MYSQL_PASSWORD above; a mismatch fails loudly (access denied).
+      DB_PASSWORD: ci-only-not-a-secret-db
+      # No key, and server/test/test.env switches AI moderation off for the suites (loaded by
+      # `npm test`); test/moderation.test.js uses a local stand-in. Nothing contacts the provider.
+      ANTHROPIC_API_KEY: ''
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install
+        id: install
+        run: npm --prefix server ci --ignore-scripts
+      - name: Load server/schema.sql and count its tables
+        id: schema
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+          MYSQL_PWD: ci-only-not-a-secret-db
+        run: |
+          docker exec -i -e MYSQL_PWD "$MYSQL_CONTAINER" mysql -u goenn goenntertainment < server/schema.sql
+          expected=$(grep -ciE '^CREATE TABLE' server/schema.sql)
+          actual=$(docker exec -e MYSQL_PWD "$MYSQL_CONTAINER" mysql -N -u goenn -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()" goenntertainment)
+          echo "server/schema.sql declares $expected tables; the test database has $actual."
+          test "$expected" -gt 0
+          test "$actual" -eq "$expected"
+      - name: Tests (npm --prefix server test)
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.schema.outcome == 'success' }}
+        # A test file that leaks a handle never exits; this limit turns that into a red run
+        # (the report below then says the run was cut off).
+        timeout-minutes: 15
+        env:
+          DB_PORT: ${{ job.services.mysql.ports['3306'] }}
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/server.tap
+        run: npm --prefix server test
+      - name: Test count
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && steps.schema.outcome == 'success' }}
+        run: node scripts/ci/test-report.mjs tap server "$RUNNER_TEMP/server.tap"
+
+  api:
+    name: API tests (Laravel, PHP 8.4, MySQL 8.4)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: api
+    services:
+      mysql:
+        # Same tag and digest as the server job and deploy/docker-compose.yml (scripts/ci/check-mirrors.mjs).
+        image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_DATABASE: goenntertainment
+          MYSQL_USER: goenn
+          MYSQL_PASSWORD: ci-only-not-a-secret-db
+          MYSQL_ROOT_PASSWORD: ci-only-not-a-secret-root
+        ports:
+          - 3306
+        # No password on the health-check command line: mysqladmin ping reports a running
+        # server even when it refuses the login.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --tmpfs /var/lib/mysql
+    # The database feature tests (api/tests/AppFeatureTestCase.php) run against this MySQL,
+    # loaded from server/schema.sql below. Values from the environment win over phpunit.xml and
+    # api/.env; without them those tests fail (they are never skipped).
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_DATABASE: goenntertainment
+      DB_USERNAME: goenn
+      # Must equal MYSQL_PASSWORD above; a mismatch fails loudly (access denied).
+      DB_PASSWORD: ci-only-not-a-secret-db
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          # pdo_mysql for the database feature tests; pdo_sqlite for the unit test that shows
+          # what those tests do without MySQL; gd and exif for the image check of every upload
+          # (App\Support\ImageCheck), as in api/Dockerfile.
+          extensions: intl, mbstring, pdo_mysql, pdo_sqlite, sqlite3, bcmath, gd, exif
+          coverage: none
+          tools: composer:v2
+      - name: composer.lock matches composer.json
+        run: composer validate --no-check-publish --strict
+      - name: Install
+        id: install
+        run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Load server/schema.sql and count its tables
+        id: schema
+        working-directory: .
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+          MYSQL_PWD: ci-only-not-a-secret-db
+        run: |
+          docker exec -i -e MYSQL_PWD "$MYSQL_CONTAINER" mysql -u goenn goenntertainment < server/schema.sql
+          expected=$(grep -ciE '^CREATE TABLE' server/schema.sql)
+          actual=$(docker exec -e MYSQL_PWD "$MYSQL_CONTAINER" mysql -N -u goenn -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()" goenntertainment)
+          echo "server/schema.sql declares $expected tables; the test database has $actual."
+          test "$expected" -gt 0
+          test "$actual" -eq "$expected"
+      # Mail goes to the array mailer (phpunit.xml); Laravel still needs an application key,
+      # generated fresh for this run.
+      - name: Test environment
+        id: test-env
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: |
+          cp .env.example .env
+          php artisan key:generate --no-interaction
+      - name: Tests (php artisan test)
+        if: ${{ !cancelled() && steps.test-env.outcome == 'success' && steps.schema.outcome == 'success' }}
+        env:
+          DB_PORT: ${{ job.services.mysql.ports['3306'] }}
+        run: php artisan test --log-junit "$RUNNER_TEMP/api-junit.xml"
+      - name: Test count
+        if: ${{ !cancelled() && steps.test-env.outcome == 'success' && steps.schema.outcome == 'success' }}
+        working-directory: .
+        run: node scripts/ci/test-report.mjs junit api "$RUNNER_TEMP/api-junit.xml"
+
+  # server/schema.sql is the source of truth; scripts/schema-drift/check.mjs compares it with
+  # the other four schema copies (db.js, seed.js, import/store.js, the Laravel migrations)
+  # against an empty MySQL 8.4, and fails on any difference outside its allow-list.
+  schema-drift:
+    name: Schema drift
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      mysql:
+        # Same tag and digest as the server job and deploy/docker-compose.yml.
+        image: mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242
+        env:
+          MYSQL_ROOT_PASSWORD: ci-only-not-a-secret-root
+        ports:
+          - 3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+          --tmpfs /var/lib/mysql
+    env:
+      SCHEMA_DRIFT_DB_HOST: 127.0.0.1
+      SCHEMA_DRIFT_DB_USER: root
+      # Must equal MYSQL_ROOT_PASSWORD above. The check creates and drops its own databases.
+      SCHEMA_DRIFT_DB_PASSWORD: ci-only-not-a-secret-root
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The ratchet reads the allow-list at the base commit, so the history is needed.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - name: Install server dependencies
+        run: npm --prefix server ci --ignore-scripts
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: intl, mbstring, pdo_mysql
+          coverage: none
+          tools: composer:v2
+      - name: Install API dependencies (the check runs the Laravel migrations)
+        working-directory: api
+        run: composer install --no-interaction --no-progress --prefer-dist
+      - name: Drift tool unit tests
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/schema-drift.tap
+        run: node --test "scripts/schema-drift/*.test.mjs"
+      - name: Test count
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/test-report.mjs tap schema-drift-tool "$RUNNER_TEMP/schema-drift.tap"
+      - name: Schema drift check
+        if: ${{ !cancelled() }}
+        env:
+          SCHEMA_DRIFT_DB_PORT: ${{ job.services.mysql.ports['3306'] }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          ratchet=""
+          if [ "$EVENT" = pull_request ]; then
+            ratchet="origin/$BASE_REF"
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != 0000000000000000000000000000000000000000 ]; then
+            ratchet="$BEFORE"
+          fi
+          if [ -n "$ratchet" ]; then
+            echo "The allow-list may not grow compared with $ratchet."
+            node scripts/schema-drift/check.mjs --ratchet "$ratchet"
+          else
+            echo "No earlier commit to compare the allow-list with ($EVENT)."
+            node scripts/schema-drift/check.mjs
+          fi
+      - name: The check changed no tracked file
+        if: ${{ !cancelled() }}
+        run: git diff --exit-code
+
+  workflows:
+    name: Workflows and CI scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Tooling tests (npm run test:tooling)
+        env:
+          NODE_OPTIONS: --test-reporter=spec --test-reporter-destination=stdout --test-reporter=tap --test-reporter-destination=${{ runner.temp }}/tooling.tap
+        run: npm run test:tooling
+      - name: Test count
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/test-report.mjs tap tooling "$RUNNER_TEMP/tooling.tap"
+      - name: Workflow policy
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-workflows.mjs .github/workflows --ci-env deploy/ci.env
+      - name: Values written in several places (scripts/ci/check-mirrors.mjs)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-mirrors.mjs
+      - name: Repository guardrails
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/check-repo.mjs
+      # The file list is explicit: actionlint's own discovery needs a .git directory, which a
+      # git worktree does not have, and the same command then works locally.
+      - name: actionlint
+        if: ${{ !cancelled() }}
+        run: |
+          docker build --quiet --tag goenn-actionlint .github/actionlint
+          shopt -s nullglob
+          files=(.github/workflows/*.yml .github/workflows/*.yaml)
+          echo "actionlint: checking ${#files[@]} workflow files"
+          test "${#files[@]}" -gt 0
+          docker run --rm --network none -v "$PWD:/repo:ro" -w /repo goenn-actionlint -color "${files[@]}"
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Blocking: every advisory is fixed with a compatible update or listed with its reason in
+    # .github/audit-allowlist.json; scripts/ci/audit.mjs fails on any other advisory and on an
+    # entry that no longer matches one. The advisory databases change without a commit, so a
+    # new advisory can turn this job red on unchanged code: fix it, or list it with a reason.
+    # scripts/ci/audit-job.test.mjs keeps this job blocking and covering every lock file.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+          tools: composer:v2
+      - name: npm (package-lock.json)
+        run: node scripts/ci/audit.mjs npm .
+      - name: npm (server/package-lock.json)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/audit.mjs npm server
+      - name: composer (api/composer.lock)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/audit.mjs composer api

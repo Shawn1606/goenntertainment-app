@@ -1,16 +1,20 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
+import { endsSession, signOutLocally } from '@/domain/session';
 import {
   api,
   ApiError,
   needsTwoFactor,
+  sessionWatch,
   type RegisterInput,
   type TwoFactorChallenge,
   type UpdateProfileInput,
   type User,
 } from '@/lib/api';
+import { notifyUser } from '@/lib/confirm';
+import { migrateSavedLogin } from '@/lib/credential-store';
 import { clearOfflineCache } from '@/lib/offline-cache';
-import { clearToken, loadToken, saveToken } from '@/lib/token-store';
+import { clearToken, loadToken, saveSessionUserId, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
   /** true, solange beim App-Start der gespeicherte Token geprüft wird. */
@@ -23,6 +27,7 @@ type AuthContextValue = {
    * `null` heißt: angemeldet.
    */
   login: (email: string, password: string) => Promise<TwoFactorChallenge | null>;
+  /** Zweiter Schritt der Anmeldung: Code (oder Wiederherstellungscode) eingeben. */
   completeTwoFactor: (challenge: string, code: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
@@ -45,15 +50,70 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
 
+  /**
+   * The token of the current session, for the 401 listener below (it must not re-subscribe on
+   * every sign-in). Updated in an effect, never during render (React Compiler rules); logout and
+   * endLocalSession clear it first, so their own requests cannot report the session as ended.
+   */
+  const tokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  /**
+   * The one way this device signs out (F-20): deliberate logout and a 401 during a session both
+   * end here, so whatever else must leave the device at sign-out is added in this one place.
+   * `notify` marks the 401 case and tells the person why. The order and the handling of a
+   * storage error are in signOutLocally (src/domain/session.ts): memory first, then storage; a
+   * storage error rejects only a deliberate logout. The offline copy of the bookings and the pass
+   * (src/lib/offline-cache.ts) goes too (F-44), on every path - logout, the 401, and the logout
+   * after deleting the account - and never fails it.
+   */
+  const endLocalSession = useCallback((notify: boolean) => {
+    return signOutLocally(
+      {
+        forget: () => {
+          tokenRef.current = null;
+          setToken(null);
+          setUser(null);
+        },
+        clearStorage: clearToken,
+        clearHistory: () => clearOfflineCache(),
+        notice: () =>
+          notifyUser(
+            'Abgemeldet',
+            'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
+          ),
+      },
+      notify,
+    );
+  }, []);
+
+  // A 401 to a request with the current token: the server no longer accepts this session.
+  // Nothing to report if the notice fails: the session is already gone on this device.
+  useEffect(
+    () =>
+      sessionWatch.subscribe((rejected) => {
+        if (endsSession(401, rejected, tokenRef.current)) void endLocalSession(true).catch(() => {});
+      }),
+    [endLocalSession],
+  );
+
   // Beim Start: gespeicherten Token laden und gegen /api/user prüfen.
   useEffect(() => {
     let active = true;
 
     (async () => {
+      // First of all: an earlier version may have stored the password on this device; it goes
+      // now, even if the sign-in screen is never shown (src/lib/credential-store.ts).
+      await migrateSavedLogin();
+
       const stored = await loadToken();
       if (stored) {
         try {
           const { user: me } = await api.me(stored);
+          // Kept beside the token, also for a session from before this version (F-44).
+          await saveSessionUserId(me.id);
           if (active) {
             setToken(stored);
             setUser(me);
@@ -63,7 +123,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // reinem Netzfehler behalten, damit man offline nicht abgemeldet wird.
           if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             await clearToken();
-          } else if (active) {
+            // The session ended while the app was closed (the account deleted, the token
+            // revoked): its offline copy goes too (F-44).
+            await clearOfflineCache().catch(() => undefined);
+          } else if (active && stored) {
             setToken(stored);
           }
         }
@@ -78,6 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function applyAuth(result: { token: string; user: User }) {
     await saveToken(result.token);
+    await saveSessionUserId(result.user.id);
     setToken(result.token);
     setUser(result.user);
   }
@@ -94,10 +158,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return null;
       },
       completeTwoFactor: async (challenge, code) => {
-        await applyAuth(await api.loginTwoFactor(challenge, code));
+        const result = await api.loginTwoFactor(challenge, code);
+        await applyAuth(result);
       },
       register: async (input) => {
-        await applyAuth(await api.register(input));
+        const result = await api.register(input);
+        await applyAuth(result);
       },
       updateProfile: async (input) => {
         if (!token) throw new Error('Nicht angemeldet.');
@@ -112,10 +178,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const { user: me } = await api.me(token);
           setUser(me);
         } catch {
-          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen.
+          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. A rejected token (401)
+          // has already ended the session through sessionWatch (endLocalSession).
         }
       },
       logout: async () => {
+        // Clear the ref first: the server's answer to this logout must not count as a 401
+        // during the session (after an account deletion the token is already gone).
+        tokenRef.current = null;
         if (token) {
           try {
             await api.logout(token);
@@ -123,13 +193,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // egal – lokal trotzdem abmelden
           }
         }
-        await clearToken();
-        await clearOfflineCache().catch(() => undefined);
-        setToken(null);
-        setUser(null);
+        await endLocalSession(false);
       },
     }),
-    [isBootstrapping, token, user],
+    [isBootstrapping, token, user, endLocalSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

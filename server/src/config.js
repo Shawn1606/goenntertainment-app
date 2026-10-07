@@ -1,0 +1,313 @@
+/**
+ * Settings the server checks before it starts, in one place.
+ *
+ * index.js asks startupProblems() once, before it builds the app, and exits with the NAMES of
+ * every missing or invalid setting. Values are never printed: some of them are secrets. Later
+ * settings that the server cannot run without belong in this function too, so that one gate
+ * decides the start (and a test that starts the server with server/test/support/startup-env.js
+ * changes exactly one input).
+ *
+ * Required in production (NODE_ENV=production, set by server/Dockerfile and the compose):
+ *   - NODE_TRUST_PROXY: the address of Laravel (api/), the one hop whose X-Forwarded-For Node
+ *     believes (see trustProxySetting). Outside production the default is 'loopback'.
+ *   - NODE_INTERNAL_SECRET: shared with Laravel (api/), which sends it on the internal routes
+ *     (routes/internal.js), at least INTERNAL_SECRET_MIN_LENGTH characters. Outside production
+ *     it may be empty; the internal routes then refuse every call (fail closed).
+ *   - ANTHROPIC_API_KEY: the AI moderation's key (F-06, moderation.js). Production also refuses
+ *     MODERATION_ENABLED=false: the only production switch for an outage is the explicit
+ *     MODERATION_FAIL_OPEN=true. Outside production a missing key means every checked content is
+ *     refused (fail closed), unless MODERATION_ENABLED=false says moderation is off on purpose.
+ *   - MODERATION_DAILY_CALL_LIMIT: the global budget of AI moderation calls per UTC day (F-07,
+ *     moderationDailyCallLimit). Outside production it may be unset: then there is no cap.
+ *   - The four retention settings (RETENTION_SETTINGS, F-16): how many days data that is no
+ *     longer needed is kept. Outside production they are all set or all unset; unset means the
+ *     retention prune (retention.js) does not run, so nothing is deleted by default.
+ *
+ * Optional, checked when set:
+ *   - WRITE_LIMIT_<CLASS>, the write limits per class (rate-limit.js);
+ *   - SANCTUM_EXPIRATION, the access-token lifetime in minutes (tokenLifetimeMinutes);
+ *   - MODERATION_ENABLED and MODERATION_FAIL_OPEN: exactly 'true' or 'false' (moderationSettings);
+ *   - ANTHROPIC_BASE_URL, the model provider's address: in production only the provider's own
+ *     https address or a loopback address (modelBaseUrlAllowed). The production compose does not
+ *     pass it at all; the CI compose sets a closed loopback port.
+ */
+import express from 'express';
+import { writeLimitSettingProblems } from './rate-limit.js';
+
+/** Shortest accepted NODE_INTERNAL_SECRET (`openssl rand -hex 32` gives 64 characters). */
+export const INTERNAL_SECRET_MIN_LENGTH = 32;
+
+/**
+ * The access-token lifetime when SANCTUM_EXPIRATION is unset: 30 days, in minutes. Named mirror of
+ * DEFAULT_LIFETIME_MINUTES in api/app/Support/Sessions.php (scripts/ci/check-mirrors.mjs).
+ */
+export const DEFAULT_TOKEN_LIFETIME_MINUTES = 43200;
+
+/**
+ * An accepted SANCTUM_EXPIRATION: a positive whole number of minutes, at most seven digits. Named
+ * mirror of the pattern in Sessions::lifetimeFromEnv (scripts/ci/check-mirrors.mjs).
+ */
+export const TOKEN_LIFETIME_PATTERN = /^[1-9]\d{0,6}$/;
+
+/**
+ * The access-token lifetime in minutes (F-20), from SANCTUM_EXPIRATION - the setting Laravel reads
+ * for the same purpose (App\Support\Sessions::lifetimeFromEnv, the same rule): unset or empty means
+ * the default; a value that is not a positive whole number gives null, and the server does not
+ * start with it (startupProblems). Expiry is never switched off.
+ */
+export function tokenLifetimeMinutes(env = process.env) {
+  const raw = env.SANCTUM_EXPIRATION;
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_TOKEN_LIFETIME_MINUTES;
+  const trimmed = String(raw).trim();
+  return TOKEN_LIFETIME_PATTERN.test(trimmed) ? Number(trimmed) : null;
+}
+
+/** True when the server runs as the production build. */
+export function isProduction(env = process.env) {
+  return env.NODE_ENV === 'production';
+}
+
+/** The shared secret for the internal routes, or '' when none is set. */
+export function internalSecret(env = process.env) {
+  return String(env.NODE_INTERNAL_SECRET ?? '');
+}
+
+/**
+ * Express's 'trust proxy' value: whose X-Forwarded-For (and -Proto, -Host) Node believes (F-31).
+ *
+ * Node sits behind Laravel, and Laravel sends the client address it established itself. So Node
+ * trusts exactly that one hop: NODE_TRUST_PROXY, addresses or ranges in the syntax of Express's
+ * 'trust proxy' (e.g. 172.30.42.20, or 'loopback'). Then `req.ip` is the client's address and
+ * not Laravel's, and per-address rate limits count clients. From any other peer the headers are
+ * ignored and `req.ip` is the peer itself.
+ *
+ * Not set: 'loopback' in development (`php artisan serve` calls Node on 127.0.0.1); in
+ * production nobody (false) - but production does not start without it (startupProblems).
+ */
+export function trustProxySetting(env = process.env) {
+  const value = String(env.NODE_TRUST_PROXY ?? '').trim();
+  if (value !== '') return value;
+  return isProduction(env) ? false : 'loopback';
+}
+
+/** Public documentation addresses: a 'trust proxy' value that trusts them trusts the internet. */
+const PUBLIC_PROBES = ['203.0.113.1', '2001:db8::1'];
+
+/**
+ * Whether a NODE_TRUST_PROXY value is usable: Express accepts it, and it does not trust every
+ * address (such as 0.0.0.0/0), which would let any client choose its own address again. A bare
+ * number is refused too: it reads like a hop count, but from the environment it is a string,
+ * which Express takes as an address.
+ */
+export function trustProxyValid(value) {
+  if (/^\s*\d+\s*$/.test(String(value))) return false;
+  let trust;
+  try {
+    trust = express().set('trust proxy', value).get('trust proxy fn');
+  } catch {
+    return false;
+  }
+  return !PUBLIC_PROBES.some((address) => trust(address, 0));
+}
+
+/** The values a boolean moderation setting may have; empty means unset. */
+const SWITCH_VALUES = ['', 'true', 'false'];
+
+/**
+ * The AI moderation's switches (F-06), read where they are used, never cached at import, so the
+ * process always acts on its current environment.
+ *
+ *   enabled   off only with exactly MODERATION_ENABLED=false (development and tests; refused in
+ *             production by startupProblems).
+ *   hasKey    ANTHROPIC_API_KEY is set. Without it moderation cannot check anything; that counts
+ *             as "the model is unavailable", which is the next switch's case.
+ *   failOpen  only exactly MODERATION_FAIL_OPEN=true lets content through when the model cannot
+ *             be asked (no key, network error, timeout, an overloaded or failing provider,
+ *             unreadable reply). Unset, 'false' and every other value keep it closed: the content
+ *             is refused. A request the provider refuses is never let through (moderation.js).
+ */
+export function moderationSettings(env = process.env) {
+  return {
+    enabled: env.MODERATION_ENABLED !== 'false',
+    hasKey: String(env.ANTHROPIC_API_KEY ?? '').trim() !== '',
+    failOpen: env.MODERATION_FAIL_OPEN === 'true',
+  };
+}
+
+/**
+ * An accepted MODERATION_DAILY_CALL_LIMIT: a whole number from 1, at most nine digits (the
+ * counter, moderation_call_counts.calls, is an INT UNSIGNED).
+ */
+const DAILY_CALL_LIMIT_PATTERN = /^[1-9]\d{0,8}$/;
+
+const dailyCallLimitRaw = (env) => String(env.MODERATION_DAILY_CALL_LIMIT ?? '').trim();
+
+/**
+ * MODERATION_DAILY_CALL_LIMIT (F-07): the most AI moderation calls per UTC day across all
+ * accounts, a global budget on top of the per-account write limits (rate-limit.js). How much the
+ * operator spends on the provider is their decision, so the code has no default: production does
+ * not start without it (startupProblems), and the compose requires it. moderation.js reads it on
+ * every check and refuses a check beyond it, whatever MODERATION_FAIL_OPEN says. Returns
+ *   - the limit, a whole number of at least 1;
+ *   - null when it is unset outside production: no cap, and nothing is counted;
+ *   - 0 when it is missing in production or invalid: no call is allowed (fail closed). The startup
+ *     gate keeps such a server from starting, so a running server never sees 0.
+ */
+export function moderationDailyCallLimit(env = process.env) {
+  const raw = dailyCallLimitRaw(env);
+  if (raw === '') return isProduction(env) ? 0 : null;
+  return DAILY_CALL_LIMIT_PATTERN.test(raw) ? Number(raw) : 0;
+}
+
+/** The provider's own address: what the SDK uses when ANTHROPIC_BASE_URL is empty. */
+const PROVIDER_BASE_URL = 'https://api.anthropic.com';
+
+/** A local address: http on 127.0.0.1, [::1] or localhost, any port. */
+const LOOPBACK_BASE_URL = /^http:\/\/(127\.0\.0\.1|\[::1\]|localhost)(:\d{1,5})?\/?$/i;
+
+/**
+ * Whether ANTHROPIC_BASE_URL is acceptable in production: empty, the provider's own address, or a
+ * loopback address (the CI stack points it at a closed local port, tests at a local stand-in). Any
+ * other address would receive every checked text and image and the production key, and nothing
+ * else would show it, so production refuses to start with one.
+ */
+function modelBaseUrlAllowed(value) {
+  const url = String(value ?? '').trim();
+  return url === '' || url === PROVIDER_BASE_URL || url === `${PROVIDER_BASE_URL}/` || LOOPBACK_BASE_URL.test(url);
+}
+
+/** The moderation settings' startup problems (part of startupProblems). */
+function moderationProblems(env, production) {
+  const problems = [];
+  const enabled = String(env.MODERATION_ENABLED ?? '');
+  if (!SWITCH_VALUES.includes(enabled) || (production && enabled === 'false')) {
+    problems.push("MODERATION_ENABLED (optional; 'true' or 'false', and never 'false' in production)");
+  }
+  if (production && !moderationSettings(env).hasKey) {
+    problems.push('ANTHROPIC_API_KEY (required in production: the AI moderation checks every upload and post)');
+  }
+  if (production && !modelBaseUrlAllowed(env.ANTHROPIC_BASE_URL)) {
+    problems.push("ANTHROPIC_BASE_URL (optional; in production only the provider's own https address or a loopback address)");
+  }
+  if (!SWITCH_VALUES.includes(String(env.MODERATION_FAIL_OPEN ?? ''))) {
+    problems.push("MODERATION_FAIL_OPEN (optional; 'true' or 'false')");
+  }
+  const callLimit = dailyCallLimitRaw(env);
+  if (callLimit === '' ? production : !DAILY_CALL_LIMIT_PATTERN.test(callLimit)) {
+    problems.push(
+      'MODERATION_DAILY_CALL_LIMIT (required in production: the most AI moderation calls per UTC day, a whole number of at least 1)',
+    );
+  }
+  return problems;
+}
+
+/**
+ * The smallest accepted USAGE_RETENTION_DAYS: the streak window. The app shows active days of the
+ * last ACTIVE_DAYS_WINDOW days (server/src/streak.js, api/app/Support/Streak.php), so a shorter
+ * retention would silently cut streaks. Named mirror of both, checked by scripts/ci/check-mirrors.mjs.
+ */
+export const USAGE_RETENTION_MIN_DAYS = 120;
+
+/**
+ * Retention settings (F-16), in whole days. How long data that is no longer needed is kept is an
+ * operator decision, so the code has no defaults: production does not start without
+ * all four (startupProblems), and the compose requires them. What each one covers (retention.js):
+ *
+ *   EVIDENCE_RETENTION_DAYS           evidence images of bans and AI moderation reports
+ *                                     (ban_evidence, moderation_reports): the image goes, the row stays;
+ *   MODERATION_REPORT_RETENTION_DAYS  the AI moderation log (moderation_reports), which copies every
+ *                                     checked text and image;
+ *   TOKEN_RETENTION_DAYS              sign-in tokens, two-factor and reset challenges and the former
+ *                                     reset links, counted from the moment they stopped being valid;
+ *   USAGE_RETENTION_DAYS              event views and active days (activity_views,
+ *                                     user_active_days), at least USAGE_RETENTION_MIN_DAYS.
+ *
+ * The smallest values are technical guards, not decisions: at least one day, so that a clock
+ * difference between Laravel and the database can never make a token look expired while it is
+ * still valid; the usage minimum keeps the streak whole.
+ */
+export const RETENTION_SETTINGS = Object.freeze([
+  Object.freeze({ key: 'EVIDENCE_RETENTION_DAYS', field: 'evidenceDays', min: 1 }),
+  Object.freeze({ key: 'MODERATION_REPORT_RETENTION_DAYS', field: 'moderationReportDays', min: 1 }),
+  Object.freeze({ key: 'TOKEN_RETENTION_DAYS', field: 'tokenDays', min: 1 }),
+  Object.freeze({ key: 'USAGE_RETENTION_DAYS', field: 'usageDays', min: USAGE_RETENTION_MIN_DAYS }),
+]);
+
+/** A retention value: whole days, written as digits only (at most five). */
+const RETENTION_DAYS_PATTERN = /^\d{1,5}$/;
+
+const retentionRaw = (env, key) => String(env[key] ?? '').trim();
+
+/** The days of one setting, or null when the value is not acceptable. */
+function retentionDays(env, setting) {
+  const raw = retentionRaw(env, setting.key);
+  if (!RETENTION_DAYS_PATTERN.test(raw)) return null;
+  const days = Number(raw);
+  return days >= setting.min ? days : null;
+}
+
+/**
+ * Names (never values) of the retention settings that are missing or invalid. `required`: all
+ * four must be set (production, and `npm run prune`). Otherwise none or all four may be set: a
+ * half-configured prune is refused rather than guessed.
+ */
+export function retentionSettingProblems(env = process.env, { required = isProduction(env) } = {}) {
+  const anySet = RETENTION_SETTINGS.some((s) => retentionRaw(env, s.key) !== '');
+  if (!required && !anySet) return [];
+  return RETENTION_SETTINGS.filter((s) => retentionDays(env, s) === null).map(
+    (s) =>
+      `${s.key} (whole days, at least ${s.min}; required in production, elsewhere all four retention settings or none)`,
+  );
+}
+
+/**
+ * The retention settings as `{ evidenceDays, moderationReportDays, tokenDays, usageDays }`, or
+ * null when none is set (outside production: no pruning). Call it after the settings were checked
+ * (startupProblems or retentionSettingProblems); a missing or invalid value throws, naming the
+ * setting only.
+ */
+export function retentionConfig(env = process.env) {
+  if (!RETENTION_SETTINGS.some((s) => retentionRaw(env, s.key) !== '')) return null;
+  const config = {};
+  for (const setting of RETENTION_SETTINGS) {
+    const days = retentionDays(env, setting);
+    if (days === null) throw new Error(`Retention setting missing or invalid: ${setting.key}`);
+    config[setting.field] = days;
+  }
+  return Object.freeze(config);
+}
+
+/**
+ * Names (never values) of the settings that keep the server from starting, with a short hint
+ * where a name alone would not say what is wrong. An empty list means: start.
+ */
+export function startupProblems(env = process.env) {
+  const problems = [];
+  const production = isProduction(env);
+
+  const trustProxy = String(env.NODE_TRUST_PROXY ?? '').trim();
+  if (trustProxy === '' ? production : !trustProxyValid(trustProxy)) {
+    problems.push("NODE_TRUST_PROXY (required in production: Laravel's address, never all addresses)");
+  }
+
+  const secret = internalSecret(env);
+  if (secret === '' ? production : secret.length < INTERNAL_SECRET_MIN_LENGTH) {
+    problems.push(`NODE_INTERNAL_SECRET (required in production, at least ${INTERNAL_SECRET_MIN_LENGTH} characters)`);
+  }
+
+  // Optional everywhere (the code has defaults), but a set value must be valid (rate-limit.js).
+  problems.push(...writeLimitSettingProblems(env));
+
+  // Optional too; a set value must be valid, exactly as Laravel requires (tokenLifetimeMinutes).
+  if (tokenLifetimeMinutes(env) === null) {
+    problems.push('SANCTUM_EXPIRATION (optional; when set, a positive whole number of minutes)');
+  }
+
+  // AI moderation (F-06): fail closed, and production never runs without it or its daily call
+  // budget (F-07).
+  problems.push(...moderationProblems(env, production));
+  // Retention (F-16): required in production; elsewhere all four or none (retentionSettingProblems).
+  problems.push(...retentionSettingProblems(env, { required: production }));
+
+  return problems;
+}

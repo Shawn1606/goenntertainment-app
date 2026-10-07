@@ -11,8 +11,10 @@
     "Schreibweise: normal, mit Umlauten und Akzenten - die Normalisierung macht aus 'kuemmeltuerke' und 'Kümmeltürke' dasselbe. Nicht mitgedacht wird die Schreibweise OHNE e ('kummelturke'), die steht eigens da, wo sie ueblich ist.",
     "Buchstaben-Wiederholungen muss man nicht auffuehren: 'nigger' greift auch bei 'niiiggger', aber NICHT bei 'Niger' - doppelte Buchstaben im Begriff muessen mindestens doppelt vorkommen.",
     "Zahlen-Codes: '88' allein ist bewusst NICHT gesperrt - in Benutzernamen ist es meist ein Geburtsjahr. Gesperrt sind die eindeutigen Kombinationen 1488 und HH88 (im Benutzernamen auch mitten im Wort, sonst nur als eigenes Wort - '14,88 Euro' ist ein Preis).",
-    "Gemeinsame Pruefbeispiele fuer alle drei Umsetzungen: shared/blocked-terms.fixtures.json."
+    "Gemeinsame Pruefbeispiele fuer alle drei Umsetzungen: shared/blocked-terms.fixtures.json.",
+    "max_input_length: the longest text, in Unicode code points, that the filter examines. All three implementations treat longer input as a hit of kind 'length' before any pattern runs (fail closed), because the patterns get slow on very long input. Every route caps its own fields first; the longest text a route accepts is an event description (2000 characters)."
   ],
+  "max_input_length": 2000,
   "messages": {
     "username": "Dieser Benutzername ist nicht erlaubt – bitte wähle einen anderen.",
     "name": "Dieser Name ist nicht erlaubt.",

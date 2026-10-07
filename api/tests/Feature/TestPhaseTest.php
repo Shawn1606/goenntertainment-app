@@ -204,7 +204,12 @@ class TestPhaseTest extends MarketplaceTestCase
         if ($done !== null) {
             $this->postJson('/api/admin/testphase/claim', ['key' => 'bingo:line:'.$done['index']])->assertOk()->assertJsonPath('credits', 50);
         }
-        $this->postJson('/api/admin/testphase/claim', ['key' => 'bingo:full'])->assertStatus(422);
+        // The two task cells are drawn per account id and period, and the visits above complete
+        // some of them (two partners in one day, a first visit): whether the board is full depends
+        // on the draw, so the claim is checked against the board.
+        $full = collect($bingo['cells'])->every(fn ($cell) => $cell['done']);
+        $claim = $this->postJson('/api/admin/testphase/claim', ['key' => 'bingo:full']);
+        $full ? $claim->assertOk() : $claim->assertStatus(422);
         unset($partners);
     }
 

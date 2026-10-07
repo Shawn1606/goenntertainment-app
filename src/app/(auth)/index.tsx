@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Animated, Dimensions, PanResponder, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -12,6 +12,48 @@ type Mode = 'welcome' | 'login';
 
 // Auf dem Handy nativer Treiber (flüssig, 60fps); im Web JS-Treiber.
 const NATIVE = Platform.OS !== 'web';
+
+/**
+ * The swipe-up gesture, outside React: plain closure variables instead of refs,
+ * so the React Compiler can check and memoise the screen. Created once on the
+ * first render and kept, exactly like the previous `useRef(PanResponder.create())`.
+ */
+function createWelcomePan(
+  progress: Animated.Value,
+  height: number,
+  settle: (open: boolean) => void,
+) {
+  /** Last value of `progress`, fed by the listener in the screen's effect. */
+  let progressVal = 0;
+  /** `progress` at the start of the current drag. */
+  let startProg = 0;
+
+  // Hochwischen auf dem Start-Screen zieht Start + Login gemeinsam nach oben.
+  // Nur echte vertikale Drags (ab 14px) übernehmen die Geste – Taps bleiben unberührt.
+  const responder = PanResponder.create({
+    onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dy) > 14 && Math.abs(g.dy) > Math.abs(g.dx),
+    onPanResponderGrant: () => {
+      startProg = progressVal;
+    },
+    onPanResponderMove: (_e, g) => {
+      if (Math.abs(g.dy) < 14) return;
+      const p = Math.min(1, Math.max(0, startProg + -g.dy / height));
+      progress.setValue(p);
+    },
+    onPanResponderRelease: (_e, g) => {
+      if (Math.abs(g.dy) < 14) return;
+      const p = Math.min(1, Math.max(0, startProg + -g.dy / height));
+      settle(p > 0.35 || g.vy < -0.4);
+    },
+  });
+
+  return {
+    panHandlers: responder.panHandlers,
+    trackProgress: (value: number) => {
+      progressVal = value;
+    },
+  };
+}
 
 export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
@@ -30,16 +72,7 @@ export default function WelcomeScreen() {
   // progress: 0 = Start-Screen sichtbar, 1 = Login sichtbar.
   // Start- und Login-Ebene sind gekoppelt: Start wird nach oben weggeschoben,
   // während der Login von unten hochkommt – beide bewegen sich gleichzeitig.
-  const progress = useRef(new Animated.Value(0)).current;
-  const progressVal = useRef(0);
-  const startProg = useRef(0);
-
-  useEffect(() => {
-    const id = progress.addListener(({ value }) => {
-      progressVal.current = value;
-    });
-    return () => progress.removeListener(id);
-  }, [progress]);
+  const [progress] = useState(() => new Animated.Value(0));
 
   const welcomeTranslate = useMemo(
     () => progress.interpolate({ inputRange: [0, 1], outputRange: [0, -height] }),
@@ -63,27 +96,14 @@ export default function WelcomeScreen() {
   const openLogin = () => animateTo(1, 'login');
   const backToWelcome = () => animateTo(0, 'welcome');
 
-  // Hochwischen auf dem Start-Screen zieht Start + Login gemeinsam nach oben.
-  // Nur echte vertikale Drags (ab 14px) übernehmen die Geste – Taps bleiben unberührt.
-  const pan = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_e, g) => Math.abs(g.dy) > 14 && Math.abs(g.dy) > Math.abs(g.dx),
-      onPanResponderGrant: () => {
-        startProg.current = progressVal.current;
-      },
-      onPanResponderMove: (_e, g) => {
-        if (Math.abs(g.dy) < 14) return;
-        const p = Math.min(1, Math.max(0, startProg.current + -g.dy / height));
-        progress.setValue(p);
-      },
-      onPanResponderRelease: (_e, g) => {
-        if (Math.abs(g.dy) < 14) return;
-        const p = Math.min(1, Math.max(0, startProg.current + -g.dy / height));
-        const goOpen = p > 0.35 || g.vy < -0.4;
-        animateTo(goOpen ? 1 : 0, goOpen ? 'login' : 'welcome');
-      },
-    }),
-  ).current;
+  const [pan] = useState(() =>
+    createWelcomePan(progress, height, (goOpen) => animateTo(goOpen ? 1 : 0, goOpen ? 'login' : 'welcome')),
+  );
+
+  useEffect(() => {
+    const id = progress.addListener(({ value }) => pan.trackProgress(value));
+    return () => progress.removeListener(id);
+  }, [progress, pan]);
 
   return (
     <GoennBackground>

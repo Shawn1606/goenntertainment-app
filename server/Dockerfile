@@ -1,7 +1,15 @@
-# Backend-Abbild fuer den Server. Node 22 = aktuelles LTS (dein PC laeuft auf 26,
-# aber auf einem Server will man die Version, die zwei Jahre Sicherheits-Updates
-# bekommt).
-FROM node:22-alpine
+# Image of the Node backend (server/).
+#
+# Node 22 is a long-term-support line: it gets security fixes until 2027-04-30 (its end of
+# life in the Node.js release schedule). Move to the next LTS line before that date; CI's
+# NODE_VERSION (.github/workflows/ci.yml) moves with it, and scripts/ci/check-mirrors.mjs fails
+# while the two differ.
+#
+# The base image is pinned by digest (the multi-arch index of node:22-alpine), so every build
+# starts from the same bytes; Dependabot proposes new digests (.github/dependabot.yml). By hand:
+# `docker buildx imagetools inspect node:22-alpine` prints the current one; every copy of a pin
+# moves in the same change.
+FROM node:22-alpine@sha256:0a7108bf6c7bf5de370ffb1a3ed6be93d405b43ff159f681a8d18c0e2bc2e402
 
 WORKDIR /app
 
@@ -24,15 +32,21 @@ COPY . .
 #   docker build --build-context shared=../shared .
 COPY --from=shared . /shared/
 
-# storage/ liegt im Compose als Bind-Mount darueber. Das Anlegen hier ist fuer den
-# Fall, dass jemand das Abbild ohne Mount startet – sonst wirft express.static
-# beim ersten Bild-Aufruf.
-RUN mkdir -p storage/avatars storage/banners storage/evidence \
-             storage/posts storage/stories storage/user-banners
+# In the compose, the named volumes uploads and private-media lie over storage/ and
+# storage-private/. Das Anlegen hier ist fuer den Fall, dass jemand das Abbild ohne
+# Mount startet – sonst wirft express.static beim ersten Bild-Aufruf.
+# storage-private/ holds evidence and story images (F-11, src/storage.js): never served as static
+# files, never mounted into a web server.
+RUN mkdir -p storage/avatars storage/banners storage/posts storage/user-banners \
+             storage-private/evidence storage-private/stories
 
 # Nicht als root laufen. Das Abbild bringt den Benutzer `node` schon mit; er
 # braucht Schreibrecht auf storage/, weil dort die Uploads landen.
-RUN chown -R node:node /app/storage
+RUN chown -R node:node /app/storage /app/storage-private
+
+# Production build: the server checks its required settings before it starts and refuses to
+# run without them (src/config.js). The compose sets the same value.
+ENV NODE_ENV=production
 USER node
 
 EXPOSE 8000

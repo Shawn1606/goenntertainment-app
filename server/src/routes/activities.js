@@ -1,9 +1,6 @@
-import { Router } from 'express';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import fs from 'node:fs';
-import multer from 'multer';
+import { createRouter } from '../router.js';
 import { pool, first, toIso } from '../db.js';
+import { pageQuery, parseListQuery, splitPage } from '../activity-pages.js';
 import { requireAuth } from '../auth.js';
 import { Validator, HttpError, missingIds } from '../validate.js';
 import { rejectBlockedTerms } from '../blocked-terms.js';
@@ -12,17 +9,31 @@ import { abilitiesFor } from '../accounts.js';
 import { accountTiersEnabled, hideImportedSql } from '../features.js';
 import { awardActivityPoints } from '../rewards.js';
 import { mediaUrl, publicBase } from '../media.js';
-import { notifyFollowers } from '../notifications.js';
-import { blockExistsBetween, transformUser } from '../people.js';
+import { forgetCommentNotification, notifyFollowers, notifyQuietly } from '../notifications.js';
+import { blockExistsBetween, notBlockedWith, transformUser } from '../people.js';
+import { logError } from '../log.js';
+import { singleUpload } from '../uploads.js';
+import { rateLimit } from '../rate-limit.js';
+import { ALLOWED_MIME, processImageOr422 } from '../images.js';
+import { removeStored, storeImage } from '../storage.js';
 
-const router = Router();
+const router = createRouter();
 
-const BANNER_DIR = path.join(process.cwd(), 'storage', 'banners');
-const ALLOWED_MIME = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB, wie Laravel (max:5120 KB)
+const MSG_BANNER_TYPE = 'Das Banner muss ein Bild sein (jpeg, png, webp).';
+
+/**
+ * The banner (5 MB, uploads.js) and the form's text fields: title, description, location,
+ * starts_at, max_participants and at most 5 each of `interests[]` and `custom_interests[]`
+ * (src/lib/api.ts createActivity), with some headroom.
+ */
+const uploadBanner = singleUpload('banner', {
+  maxFields: 20,
+  sizeMessage: 'Das Banner-Bild darf hoechstens 5 MB gross sein.',
 });
+
+/** Interests per event (chosen plus typed ones): the app's MAX_INTERESTS in create-activity.tsx. */
+const MAX_INTERESTS = 5;
+const MSG_TOO_MANY_INTERESTS = 'Du kannst hoechstens 5 Interessen auswaehlen.';
 
 /** Laenge eines Kommentars – dieselbe Zahl wie die Spalte in schema.sql. */
 const MAX_COMMENT = 500;
@@ -51,6 +62,7 @@ function transform(
   viewsCount = 0,
   saved = false,
   social = {},
+  participantsCount = participants.length,
 ) {
   return {
     id: activity.id,
@@ -93,7 +105,9 @@ function transform(
       username: p.username,
       avatar_url: mediaUrl(req, p.avatar),
     })),
-    participants_count: participants.length,
+    // The true number, also when faces are left out of `participants` for the viewer (a block,
+    // F-13): it is capacity, and capacity must stay honest.
+    participants_count: participantsCount,
     is_joined: participants.some((p) => p.id === currentUserId),
     // Beitritts-Zeitpunkt der:des aktuellen Nutzer:in (fuer den Verlauf in „Meine
     // Aktivitaeten"). null, wenn nicht beigetreten.
@@ -132,6 +146,7 @@ function transformLoaded(req, activity, rel, currentUserId) {
       commentsCount: rel.comments.get(activity.id) ?? 0,
       likedByMe: rel.liked.has(activity.id),
     },
+    rel.participantCounts.get(activity.id) ?? 0,
   );
 }
 
@@ -149,6 +164,7 @@ async function loadRelations(ids, userId = null) {
       hosts: new Map(),
       interests: new Map(),
       participants: new Map(),
+      participantCounts: new Map(),
       views: new Map(),
       saved: new Set(),
       likes: new Map(),
@@ -184,11 +200,19 @@ async function loadRelations(ids, userId = null) {
       ORDER BY ai.\`rank\`, i.name`,
     ids,
   );
+  // The faces the viewer may see: nobody in a block relation with them (F-13; the viewer is
+  // never in one with themselves). The count below stays the true number.
   const [participantRows] = await pool.query(
     `SELECT au.activity_id, au.created_at AS joined_at, u.id, u.name, u.username, u.avatar
        FROM activity_user au
        JOIN users u ON u.id = au.user_id
-      WHERE au.activity_id IN (${ph})`,
+      WHERE au.activity_id IN (${ph})
+        ${userId ? `AND ${notBlockedWith('u.id')}` : ''}`,
+    userId ? [...ids, userId, userId] : ids,
+  );
+  const [participantCountRows] = await pool.query(
+    `SELECT activity_id, COUNT(*) AS c FROM activity_user
+      WHERE activity_id IN (${ph}) GROUP BY activity_id`,
     ids,
   );
 
@@ -238,13 +262,14 @@ async function loadRelations(ids, userId = null) {
   interestRows.forEach((r) => interests.get(r.activity_id)?.push(r));
   const participants = new Map(ids.map((id) => [id, []]));
   participantRows.forEach((r) => participants.get(r.activity_id)?.push(r));
+  const participantCounts = new Map(participantCountRows.map((r) => [r.activity_id, Number(r.c)]));
   const views = new Map(viewRows.map((r) => [r.activity_id, Number(r.c)]));
   const saved = new Set(savedRows.map((r) => r.activity_id));
   const likes = new Map(likeRows.map((r) => [r.activity_id, Number(r.c)]));
   const comments = new Map(commentRows.map((r) => [r.activity_id, Number(r.c)]));
   const liked = new Set(likedRows.map((r) => r.activity_id));
 
-  return { hosts, interests, participants, views, saved, likes, comments, liked };
+  return { hosts, interests, participants, participantCounts, views, saved, likes, comments, liked };
 }
 
 /** Ein Event fertig in API-Form – oder ein 404. */
@@ -322,28 +347,26 @@ export async function pruneHistory() {
     if (!banner_path) continue;
     const inActivities = await first('SELECT 1 AS ok FROM activities WHERE banner_path = ? LIMIT 1', [banner_path]);
     const inHistory = await first('SELECT 1 AS ok FROM activity_history WHERE banner_path = ? LIMIT 1', [banner_path]);
-    if (!inActivities && !inHistory) {
-      try {
-        fs.unlinkSync(path.join(process.cwd(), 'storage', banner_path));
-      } catch {
-        /* Datei evtl. schon weg – ignorieren. */
-      }
-    }
+    // Best effort, never throws; foreign addresses are left alone (storage.js).
+    if (!inActivities && !inHistory) await removeStored(banner_path);
   }
 }
 
 // GET /api/activities  (geschuetzt)
+//
+// One page of events (F-12): the upcoming ones by default, the viewer's own with `mine=1`, the
+// viewer's own past ones with `past=1`; at most `limit` per page, and `next_cursor` names the
+// next page. The rules and their reasons: src/activity-pages.js.
 router.get('/', requireAuth, async (req, res, next) => {
   try {
+    const query = parseListQuery(req.query);
     // Importierte Veranstaltungen sind gerade ausgeblendet (siehe features.js).
-    const hidden = hideImportedSql('activities');
-    const [activities] = await pool.query(
-      `SELECT * FROM activities ${hidden ? `WHERE ${hidden}` : ''} ORDER BY starts_at`,
-    );
-    const ids = activities.map((a) => a.id);
-    const rel = await loadRelations(ids, req.user.id);
-    const data = activities.map((a) => transformLoaded(req, a, rel, req.user.id));
-    res.json({ data });
+    const { sql, params } = pageQuery(query, req.user.id, hideImportedSql('a'));
+    const [rows] = await pool.query(sql, params);
+    const { page, nextCursor } = splitPage(rows, query.limit);
+    const rel = await loadRelations(page.map((a) => a.id), req.user.id);
+    const data = page.map((a) => transformLoaded(req, a, rel, req.user.id));
+    res.json({ data, next_cursor: nextCursor });
   } catch (err) {
     next(err);
   }
@@ -408,7 +431,7 @@ router.get('/saved', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/activities  (geschuetzt, multipart wegen Banner)
-router.post('/', requireAuth, upload.single('banner'), async (req, res, next) => {
+router.post('/', requireAuth, rateLimit('moderated'), uploadBanner, async (req, res, next) => {
   try {
     // Events erstellen gibt es erst ab Creator. Die App blendet den ＋-Knopf
     // bei Standard-Konten aus – hier steht der Riegel, der auch dann haelt,
@@ -424,15 +447,20 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     const b = req.body ?? {};
     const v = new Validator(b);
 
-    if (!b.title || b.title.length > 255) v.add('title', 'Der Titel ist erforderlich (max. 255 Zeichen).');
-    if (!b.description || b.description.length > 2000) {
+    // Text fields are strings (F-06): an array or object here would skip the length check (its
+    // own .length) and reach the database as something else. Any other type gets the field's
+    // message, before the word filter and long before SQL.
+    const isText = (value) => typeof value === 'string';
+    if (!isText(b.title) || !b.title || b.title.length > 255) v.add('title', 'Der Titel ist erforderlich (max. 255 Zeichen).');
+    if (!isText(b.description) || !b.description || b.description.length > 2000) {
       v.add('description', 'Die Beschreibung ist erforderlich (max. 2000 Zeichen).');
     }
-    if (!b.location || b.location.length > 255) v.add('location', 'Der Ort ist erforderlich (max. 255 Zeichen).');
+    if (!isText(b.location) || !b.location || b.location.length > 255) {
+      v.add('location', 'Der Ort ist erforderlich (max. 255 Zeichen).');
+    }
 
-    // Gesperrte Begriffe – die feste Liste VOR der KI-Moderation. Die KI ist ohne
-    // Schluessel aus und laesst bei einem Ausfall alles durch; diese Pruefung
-    // greift immer. Nur an Feldern ohne Laengenfehler: Eine Meldung je Feld.
+    // Gesperrte Begriffe – die feste Liste VOR der KI-Moderation. It applies always, also when
+    // the model cannot be asked. Nur an Feldern ohne Laengenfehler: Eine Meldung je Feld.
     for (const field of ['title', 'description', 'location']) {
       if (!v.errors[field]) rejectBlockedTerms(v, field, b[field], 'text');
     }
@@ -451,30 +479,42 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
       }
     }
 
-    // interests[] kommt bei multipart als String oder Array
+    // interests[] kommt bei multipart als String oder Array.
+    // The list length is checked BEFORE anything loops over it (F-02): a list longer than the
+    // app can send is refused as a whole, never mapped or looked up entry by entry.
     let interests = [];
-    if (Array.isArray(b.interests)) interests = b.interests.map(Number);
+    if (Array.isArray(b.interests) && b.interests.length > MAX_INTERESTS) v.add('interests', MSG_TOO_MANY_INTERESTS);
+    else if (Array.isArray(b.interests)) interests = b.interests.map(Number);
     else if (b.interests !== undefined) interests = [Number(b.interests)];
-    if (interests.length > 5) v.add('interests', 'Du kannst hoechstens 5 Interessen auswaehlen.');
     if (interests.length > 0 && (await missingIds('interests', interests)).length > 0) {
       v.add('interests', 'Mindestens ein Interesse existiert nicht.');
     }
 
     // Selbst eingetippte Interessen: gehen NICHT in die DB, werden aber
     // mitgeprueft – sie sind freier Text und damit der eigentliche Risiko-Teil.
+    // Same length check first: the app sends at most MAX_INTERESTS in total.
     let customInterests = [];
-    if (Array.isArray(b.custom_interests)) customInterests = b.custom_interests;
+    if (Array.isArray(b.custom_interests) && b.custom_interests.length > MAX_INTERESTS) {
+      v.add('interests', MSG_TOO_MANY_INTERESTS);
+    } else if (Array.isArray(b.custom_interests)) customInterests = b.custom_interests;
     else if (b.custom_interests !== undefined) customInterests = [b.custom_interests];
     customInterests = customInterests
       .map((name) => String(name).trim())
       .filter(Boolean)
-      .slice(0, 5);
+      .slice(0, MAX_INTERESTS);
+    // Free text like the title (F-06): the model reads them, so the fixed list checks them first,
+    // as they came (any JSON type, findBlockedTermInValue).
+    if (!v.errors.interests) rejectBlockedTerms(v, 'interests', b.custom_interests, 'text');
 
     if (req.file && !ALLOWED_MIME.includes(req.file.mimetype)) {
-      v.add('banner', 'Das Banner muss ein Bild sein (jpeg, png, webp).');
+      v.add('banner', MSG_BANNER_TYPE);
     }
 
     v.throwIfFails();
+
+    // Only a real image gets further, and only as a fresh encoding without metadata (F-11): the
+    // moderation sees and the disk keeps exactly that, never the uploaded bytes (images.js).
+    const banner = req.file ? await processImageOr422(req.file, 'banner', MSG_BANNER_TYPE) : null;
 
     // KI-Verifizierung (Jugendschutz) VOR dem Speichern: nicht jugendfreie
     // Inhalte kommen so gar nicht erst in die DB bzw. auf die Platte. Ab der
@@ -483,8 +523,10 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
       user: req.user,
       title: b.title,
       description: b.description,
+      // The place is user text too, and as visible as the title (F-06).
+      location: b.location,
       interests: [...(await interestNames(interests)), ...customInterests],
-      image: req.file ? { buffer: req.file.buffer, mimetype: req.file.mimetype } : null,
+      image: banner,
     });
 
     if (!check.allowed) {
@@ -506,14 +548,7 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     }
 
     // Banner speichern
-    let bannerPath = null;
-    if (req.file) {
-      fs.mkdirSync(BANNER_DIR, { recursive: true });
-      const ext = { 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[req.file.mimetype];
-      const name = `${crypto.randomBytes(20).toString('hex')}.${ext}`;
-      fs.writeFileSync(path.join(BANNER_DIR, name), req.file.buffer);
-      bannerPath = `banners/${name}`;
-    }
+    const bannerPath = banner ? await storeImage('banners', banner) : null;
 
     // starts_at als UTC 'YYYY-MM-DD HH:MM:SS'
     const startsAtSql = startsAt.toISOString().slice(0, 19).replace('T', ' ');
@@ -556,7 +591,7 @@ router.post('/', requireAuth, upload.single('banner'), async (req, res, next) =>
     // Nutzer:in einen Fehler fuer etwas, das geklappt hat. Fehlende Punkte holt
     // der Nachtrag beim naechsten Blick auf die Praemien nach (src/rewards.js).
     await awardActivityPoints(req.user.id, result.insertId).catch((err) =>
-      console.error('[rewards] Punkte konnten nicht gebucht werden:', err),
+      logError('[rewards] Punkte konnten nicht gebucht werden', err),
     );
 
     // Follower informieren. Aus demselben Grund wie die Punkte darueber nach dem
@@ -587,7 +622,7 @@ router.get('/:id', requireAuth, async (req, res, next) => {
 // DELETE /api/activities/:id  – loescht ein Event.
 // Erlaubt fuer Admins (jedes Event) ODER die:den Ersteller:in (nur das eigene).
 // Die Verknuepfungen (Teilnehmer, Interessen) raeumt die DB per ON DELETE CASCADE.
-router.delete('/:id', requireAuth, async (req, res, next) => {
+router.delete('/:id', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id, user_id, banner_path FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -613,13 +648,7 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
         'SELECT 1 AS ok FROM activity_history WHERE banner_path = ? LIMIT 1',
         [activity.banner_path],
       );
-      if (!inHistory) {
-        try {
-          fs.unlinkSync(path.join(process.cwd(), 'storage', activity.banner_path));
-        } catch {
-          /* Datei evtl. schon weg – ignorieren. */
-        }
-      }
+      if (!inHistory) await removeStored(activity.banner_path);
     }
 
     res.json({ message: 'Aktivitaet geloescht.' });
@@ -629,13 +658,20 @@ router.delete('/:id', requireAuth, async (req, res, next) => {
 });
 
 // POST /api/activities/:id/join  (geschuetzt, idempotent)
-router.post('/:id/join', requireAuth, async (req, res, next) => {
+router.post('/:id/join', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first(
-      'SELECT id, max_participants, title, location, starts_at, banner_path FROM activities WHERE id = ?',
+      'SELECT id, user_id, max_participants, title, location, starts_at, banner_path FROM activities WHERE id = ?',
       [req.params.id],
     );
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
+
+    // Joining creates contact with the host (their event chat, their participant list): refused
+    // when a block stands between the two, in either direction, with the same neutral answer as
+    // a like or a comment (F-13). The event itself stays visible (an open product decision).
+    if (await blockExistsBetween(req.user.id, activity.user_id)) {
+      throw new HttpError(403, 'Das geht mit diesem Konto nicht.');
+    }
 
     // Kapazitaet pruefen (nur wenn ein Limit gesetzt ist). Bereits beigetretene
     // Nutzer:innen duerfen bleiben – der Beitritt ist idempotent.
@@ -673,7 +709,7 @@ router.post('/:id/join', requireAuth, async (req, res, next) => {
 // Zaehlt einen Aufruf des Detail-Popups. Pro Person genau einmal – so ist die
 // Zahl "wie viele Leute haben es gesehen" und nicht "wie oft wurde geklickt".
 // Aufrufe der:des Erstellenden zaehlen nicht mit.
-router.post('/:id/view', requireAuth, async (req, res, next) => {
+router.post('/:id/view', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id, user_id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -698,7 +734,7 @@ router.post('/:id/view', requireAuth, async (req, res, next) => {
 //
 // Bewusst OHNE Kapazitaets-Pruefung: Merken belegt keinen Platz. Man darf auch ein
 // volles Event merken – vielleicht wird ein Platz frei.
-router.post('/:id/save', requireAuth, async (req, res, next) => {
+router.post('/:id/save', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -716,7 +752,7 @@ router.post('/:id/save', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/activities/:id/save  (geschuetzt) – nicht mehr merken.
-router.delete('/:id/save', requireAuth, async (req, res, next) => {
+router.delete('/:id/save', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -732,7 +768,7 @@ router.delete('/:id/save', requireAuth, async (req, res, next) => {
 });
 
 // DELETE /api/activities/:id/join  (geschuetzt)
-router.delete('/:id/join', requireAuth, async (req, res, next) => {
+router.delete('/:id/join', requireAuth, rateLimit('state'), async (req, res, next) => {
   try {
     const activity = await first('SELECT id FROM activities WHERE id = ?', [req.params.id]);
     if (!activity) throw new HttpError(404, 'Aktivitaet nicht gefunden.');
@@ -752,8 +788,9 @@ router.delete('/:id/join', requireAuth, async (req, res, next) => {
 //
 // Dasselbe Muster wie bei Beitraegen (routes/profile.js). Alle Pfade haben zwei
 // Segmente (/:id/like, /:id/comments, …) und kommen '/history' und '/saved'
-// deshalb nicht in die Quere. Benachrichtigungen gibt es hier bewusst keine:
-// Die Glocke ist in der App gerade ausgeblendet.
+// deshalb nicht in die Quere. A new comment leaves the host a notification row (F-08), like a
+// comment under a post; the bell that shows it is currently hidden in the app (a product
+// decision), so the row waits there until it is shown.
 
 /** Das Event zu :id – oder ein 404. Traegt den Host fuer Block- und Rechtepruefung. */
 async function loadActivityOr404(id) {
@@ -801,7 +838,7 @@ function transformComment(req, row, viewer, hostId) {
 //
 // Der Host darf sein eigenes Event moegen – anders als bei den Aufrufen verfaelscht
 // das keine Statistik, es ist eine sichtbare Geste wie jede andere.
-router.post('/:id/like', requireAuth, async (req, res, next) => {
+router.post('/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, activity.user_id)) {
@@ -823,7 +860,7 @@ router.post('/:id/like', requireAuth, async (req, res, next) => {
 //
 // Ohne Block-Pruefung, wie bei Beitraegen: Das eigene Gefaellt-mir zurueckzuziehen
 // muss auch dann gehen, wenn man inzwischen blockiert (wurde).
-router.delete('/:id/like', requireAuth, async (req, res, next) => {
+router.delete('/:id/like', requireAuth, rateLimit('reaction'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     await pool.query('DELETE FROM activity_likes WHERE activity_id = ? AND user_id = ?', [
@@ -871,7 +908,7 @@ router.get('/:id/comments', requireAuth, async (req, res, next) => {
 // Kommentieren darf jedes Konto, unabhaengig von Stufe und Teilnahme – wie
 // unter Beitraegen. Pruefung in derselben Reihenfolge: Laenge, feste
 // Begriffsliste, dann die KI-Verifizierung.
-router.post('/:id/comments', requireAuth, async (req, res, next) => {
+router.post('/:id/comments', requireAuth, rateLimit('comment'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     if (await blockExistsBetween(req.user.id, activity.user_id)) {
@@ -883,7 +920,7 @@ router.post('/:id/comments', requireAuth, async (req, res, next) => {
     if (!body) v.add('body', 'Schreib etwas, bevor du kommentierst.');
     else if (body.length > MAX_COMMENT) {
       v.add('body', `Ein Kommentar fasst hoechstens ${MAX_COMMENT} Zeichen.`);
-    } else rejectBlockedTerms(v, 'body', body, 'text');
+    } else rejectBlockedTerms(v, 'body', req.body?.body, 'text'); // as it came, any JSON type (F-06)
     v.throwIfFails();
 
     // Gleicher Kontext wie Kommentare unter Beitraegen ('post' = kurzer Text
@@ -919,6 +956,18 @@ router.post('/:id/comments', requireAuth, async (req, res, next) => {
       [activity.id, req.user.id, body],
     );
 
+    // The host hears about it (F-08): never about their own comment (notify skips the actor),
+    // and a host in a block relation never gets here (refused above). After the insert and
+    // without failing it, like every notification (notifications.js).
+    await notifyQuietly({
+      userId: activity.user_id,
+      actorId: req.user.id,
+      type: 'activity_comment',
+      refId: activity.id,
+      title: `${req.user.name} hat dein Event kommentiert`,
+      body,
+    });
+
     const row = await first(
       `SELECT c.id, c.body, c.created_at, ${COMMENT_USER_COLUMNS}
          FROM activity_comments c JOIN users u ON u.id = c.user_id WHERE c.id = ?`,
@@ -936,13 +985,13 @@ router.post('/:id/comments', requireAuth, async (req, res, next) => {
 
 // DELETE /api/activities/:id/comments/:commentId  (geschuetzt)
 // Erlaubt fuer die:den Verfasser:in, den Host des Events und Admins.
-router.delete('/:id/comments/:commentId', requireAuth, async (req, res, next) => {
+router.delete('/:id/comments/:commentId', requireAuth, rateLimit('content'), async (req, res, next) => {
   try {
     const activity = await loadActivityOr404(req.params.id);
     // Nur Kommentare DIESES Events: Eine fremde Kommentar-ID unter der eigenen
     // Event-ID darf den Host-Status nicht auf ein anderes Event uebertragen.
     const comment = await first(
-      'SELECT id, user_id FROM activity_comments WHERE id = ? AND activity_id = ?',
+      'SELECT id, user_id, body, created_at FROM activity_comments WHERE id = ? AND activity_id = ?',
       [Number(req.params.commentId) || 0, activity.id],
     );
     if (!comment) throw new HttpError(404, 'Diesen Kommentar gibt es nicht.');
@@ -954,6 +1003,15 @@ router.delete('/:id/comments/:commentId', requireAuth, async (req, res, next) =>
     if (!mayDelete) throw new HttpError(403, 'Das darfst du nicht.');
 
     await pool.query('DELETE FROM activity_comments WHERE id = ?', [comment.id]);
+    // The host's notification copied the text (F-08): it goes with the comment.
+    await forgetCommentNotification({
+      userId: activity.user_id,
+      actorId: comment.user_id,
+      type: 'activity_comment',
+      refId: activity.id,
+      body: comment.body,
+      createdAt: comment.created_at,
+    });
     res.json({
       message: 'Kommentar geloescht.',
       activity: await loadSingle(req, activity.id, req.user.id),

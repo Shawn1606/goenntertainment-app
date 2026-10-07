@@ -4,6 +4,7 @@ import { API_URL } from '@/constants/config';
 import type { ClubPlan, GroupTier, PlanKey } from '@/domain/club';
 import type { AdminFeatureState, BingoState, FeatureKey, FeatureState, PreviewMode } from '@/domain/features';
 import type { NewChallengeInput, TestphaseState } from '@/domain/testphase';
+import { createSessionWatch } from '@/domain/session';
 
 /**
  * Die Schnittstelle zum Laravel-Backend (api/). Typen hier, Regeln in
@@ -62,7 +63,11 @@ export function needsTwoFactor(result: LoginResult): result is { two_factor: Two
   return 'two_factor' in result && !!result.two_factor;
 }
 
-export type SecondFactorProof = { password: string } | { code: string };
+/**
+ * Bestätigung zum Abschalten der 2FA / neuen Codes: Passwort UND aktueller Code (F-19). Eines
+ * allein reicht nicht mehr – sonst genügte ein gemailter Code oder das Passwort allein.
+ */
+export type SecondFactorProof = { password: string; code: string };
 
 export type RegisterInput = {
   name: string;
@@ -70,14 +75,23 @@ export type RegisterInput = {
   email: string;
   password: string;
   interests?: number[];
-  /** Stand der Nutzungsbedingungen, dem zugestimmt wurde (src/domain/legal.ts). */
-  terms_version?: string;
+  /**
+   * Stand der Nutzungsbedingungen, dem zugestimmt wurde (src/domain/legal.ts). Required (F-14):
+   * the server refuses a sign-up without the current version.
+   */
+  terms_version: string;
+  /** The minimum age the person confirmed (`MIN_AGE`); required, see `registrationConsent()`. */
+  confirmed_min_age: number;
 };
 
+/**
+ * Edit the profile. The e-mail address is not part of it: it changes only with the password (and
+ * the code with two-factor sign-in) through `api.changeEmail`.
+ */
 export type UpdateProfileInput = {
   name?: string;
   username?: string;
-  email?: string;
+  /** Vollständige neue Interessen-Liste (IDs); ersetzt die bisherigen. */
   interests?: number[];
 };
 
@@ -631,7 +645,22 @@ type RequestOptions = {
 
 const OFFLINE = 'Keine Verbindung zum Server. Bist du online?';
 
-async function parse<T>(response: Response): Promise<T> {
+/**
+ * Every answer to an authenticated request is reported here (F-20): a 401 means the server no
+ * longer accepts the session (expired, or signed out by a password, e-mail or two-factor change
+ * elsewhere), and the auth state signs out on this device (src/lib/auth-context.tsx). Logic and
+ * tests: src/domain/session.ts.
+ */
+export const sessionWatch = createSessionWatch();
+
+/**
+ * Reads an answer: reports its status with the token the request carried, parses JSON, and
+ * throws an ApiError with the full body (bans put their details there) when the request failed.
+ * Every fetch site of this file goes through here.
+ */
+async function parseResponse<T>(response: Response, token: string | null | undefined): Promise<T> {
+  sessionWatch.report(response.status, token);
+
   const isJson = response.headers.get('content-type')?.includes('application/json');
   const data = isJson ? await response.json() : null;
   if (!response.ok) {
@@ -656,7 +685,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   } catch {
     throw new ApiError(OFFLINE, 0);
   }
-  return parse<T>(response);
+  return parseResponse<T>(response, token);
 }
 
 /** multipart/form-data – den Content-Type samt Boundary setzt `fetch` selbst. */
@@ -671,7 +700,7 @@ async function upload<T>(token: string, path: string, form: FormData): Promise<T
   } catch {
     throw new ApiError(OFFLINE, 0);
   }
-  return parse<T>(response);
+  return parseResponse<T>(response, token);
 }
 
 /**
@@ -708,8 +737,24 @@ export const api = {
   resendTwoFactor: (challenge: string) =>
     request<{ message: string; expires_in: number }>('/login/two-factor/resend', { method: 'POST', body: { challenge } }),
 
+  /**
+   * Fordert eine „Passwort vergessen"-Mail an. It carries a 6-digit code, no link (F-09).
+   * Antwortet immer neutral (die API verrät nicht, ob die Adresse registriert ist) – ein 422
+   * kommt nur bei einer ungültigen E-Mail-Eingabe. Also the way to get a new code; the server
+   * sends at most one mail a minute per account.
+   */
   forgotPassword: (email: string) =>
     request<{ status: string; message: string }>('/forgot-password', { method: 'POST', body: { email } }),
+
+  /**
+   * Sets a new password with the code from the "Passwort vergessen" mail (signed out). Signs out
+   * every device. A wrong, expired or used code and an unknown address get the same 422 on `code`.
+   */
+  resetPassword: (input: { email: string; code: string; password: string; password_confirmation: string }) =>
+    request<{ status: string; message: string }>('/reset-password', {
+      method: 'POST',
+      body: input,
+    }),
 
   logout: (token: string) => request<{ message: string }>('/logout', { method: 'POST', token }),
 
@@ -727,9 +772,11 @@ export const api = {
 
   /* ----------------------------------------------------------- Sicherheit */
 
-  twoFactorEmailStart: (token: string) =>
+  /** 2FA per E-Mail einrichten, Schritt 1: mit dem Passwort bestätigen, Code an die Konto-Adresse. */
+  twoFactorEmailStart: (token: string, password: string) =>
     request<{ message: string; destination: string; expires_in: number; challenge: string }>('/user/two-factor/email', {
       method: 'POST',
+      body: { password },
       token,
     }),
 
@@ -740,8 +787,9 @@ export const api = {
       token,
     }),
 
-  twoFactorTotpStart: (token: string) =>
-    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', { method: 'POST', token }),
+  /** Authenticator-App einrichten, Schritt 1: mit dem Passwort bestätigen, Geheimnis + otpauth-Link holen. */
+  twoFactorTotpStart: (token: string, password: string) =>
+    request<{ secret: string; otpauth_url: string }>('/user/two-factor/totp', { method: 'POST', body: { password }, token }),
 
   twoFactorTotpConfirm: (token: string, code: string) =>
     request<{ user: User; recovery_codes: string[] }>('/user/two-factor/totp/confirm', { method: 'POST', body: { code }, token }),
@@ -749,14 +797,43 @@ export const api = {
   twoFactorSendCode: (token: string) =>
     request<{ message: string; destination: string; expires_in: number }>('/user/two-factor/code', { method: 'POST', token }),
 
+  /** 2FA abschalten – mit Passwort und aktuellem Code bestätigt. Meldet andere Geräte ab. */
   twoFactorDisable: (token: string, proof: SecondFactorProof) =>
     request<{ user: User }>('/user/two-factor', { method: 'DELETE', body: proof, token }),
 
   twoFactorRecoveryCodes: (token: string, proof: SecondFactorProof) =>
     request<{ recovery_codes: string[] }>('/user/two-factor/recovery-codes', { method: 'POST', body: proof, token }),
 
+  /**
+   * Change the e-mail address (signed in), step 1: with the current password, and with two-factor
+   * sign-in also a current code. Changes nothing yet: the server mails a one-time code to the NEW
+   * address (at most one mail a minute).
+   */
+  changeEmail: (token: string, input: { email: string; current_password: string; code?: string }) =>
+    request<{ message: string; destination: string; expires_in: number }>('/user/email', { method: 'PUT', body: input, token }),
+
+  /**
+   * Change the e-mail address, step 2: the code from the mail to the new address, with that same
+   * address. Only now does it take effect; every other device is signed out and a notice goes to
+   * the previous address.
+   */
+  confirmEmailChange: (token: string, input: { email: string; code: string }) =>
+    request<{ user: User; profile_complete: boolean }>('/user/email/confirm', { method: 'POST', body: input, token }),
+
+  /** Passwort ändern (angemeldet). Meldet alle anderen Geräte ab. */
   changePassword: (token: string, currentPassword: string, password: string) =>
     request<{ message: string }>('/user/password', { method: 'PUT', body: { current_password: currentPassword, password }, token }),
+
+  /**
+   * An account without a password (former Google sign-in), step 1: a one-time code to the
+   * account's own address (at most one mail a minute).
+   */
+  requestFirstPasswordCode: (token: string) =>
+    request<{ message: string; destination: string; expires_in: number }>('/user/password/code', { method: 'POST', token }),
+
+  /** An account without a password, step 2: the first password, with the mailed code. */
+  setFirstPassword: (token: string, code: string, password: string) =>
+    request<{ message: string }>('/user/password', { method: 'PUT', body: { code, password }, token }),
 
   deleteAccount: (token: string, input: { password?: string; confirm?: string; code?: string }) =>
     request<{ message: string }>('/me', { method: 'DELETE', body: input, token }),
@@ -1097,6 +1174,7 @@ export async function fetchText(token: string, path: string): Promise<string> {
   } catch {
     throw new ApiError(OFFLINE, 0);
   }
+  sessionWatch.report(response.status, token);
   if (!response.ok) throw new ApiError('Download fehlgeschlagen.', response.status);
   return response.text();
 }
