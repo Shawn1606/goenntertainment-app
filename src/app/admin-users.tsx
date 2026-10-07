@@ -1,62 +1,65 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { AdminScreen, numberOrNull } from '@/components/admin-ui';
+import { AdminScreen, SectionTitle } from '@/components/admin-ui';
 import { PlanBadge } from '@/components/plan-badge';
-import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Icon } from '@/components/ui/icon';
+import { PressableScale } from '@/components/ui/pressable-scale';
 import { TextField } from '@/components/ui/text-field';
 import { FontFamily, Spacing } from '@/constants/theme';
 import { formatCredits } from '@/domain/club';
-import { formatDateTimeCompact } from '@/domain/date-format';
+import { initialsOf } from '@/domain/initials';
 import { useTheme } from '@/hooks/use-theme';
 import { api, errorMessage, type AdminUser } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { confirmAction, notifyUser } from '@/lib/confirm';
-import { pickImage } from '@/lib/pick-image';
-
-/** Kurze Sperren als Schnellwahl – alles andere ist ein Bann. */
-const TIMEOUTS = [
-  { label: '1 Tag', minutes: 60 * 24 },
-  { label: '7 Tage', minutes: 60 * 24 * 7 },
-  { label: '30 Tage', minutes: 60 * 24 * 30 },
-];
+import { notifyUser } from '@/lib/confirm';
 
 /**
- * Nutzer suchen und verwalten: Credits gutschreiben (Kulanz, Gewinnspiel),
- * umbenennen, auf Zeit oder dauerhaft sperren, löschen.
+ * Nutzer finden. Jede Zeile öffnet die Detailseite (admin-user.tsx) – dort
+ * stehen Credits, Stempel, Kontoauszug und alle Aktionen.
+ *
+ * Oben steht immer das eigene Konto: Credits und Stempel lassen sich auch dort
+ * korrigieren.
  */
 export default function AdminUsers() {
   const colors = useTheme();
-  const { token } = useAuth();
+  const router = useRouter();
+  const { token, user: me } = useAuth();
   const [query, setQuery] = useState('');
   const [users, setUsers] = useState<AdminUser[]>([]);
-  const [open, setOpen] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const load = useCallback(
-    async (q = query) => {
+    async (q: string) => {
       if (!token) return;
+      setLoading(true);
       try {
         setUsers((await api.admin.users(token, q)).data);
       } catch (e) {
         await notifyUser('Laden fehlgeschlagen', errorMessage(e));
+      } finally {
+        setLoading(false);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [token],
   );
 
   useFocusEffect(
     useCallback(() => {
-      void load('');
+      void load(query);
+      // Nur beim Zurückkommen neu laden – nicht bei jedem Tastendruck.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [load]),
   );
 
-  const replace = (u: AdminUser) => setUsers((prev) => prev.map((x) => (x.id === u.id ? u : x)));
+  const open = (id: number) => router.push({ pathname: '/admin-user', params: { id: String(id) } });
+  const self = users.find((u) => u.id === me?.id);
+  const others = users.filter((u) => u.id !== me?.id);
 
   return (
-    <AdminScreen title="Nutzer">
+    <AdminScreen title="Nutzer" refreshing={loading} onRefresh={() => load(query)}>
       <TextField
         label="Suchen"
         value={query}
@@ -66,140 +69,102 @@ export default function AdminUsers() {
         returnKeyType="search"
         onSubmitEditing={() => load(query)}
       />
-      {users.map((u) => (
-        <Card key={u.id} onPress={() => setOpen(open === u.id ? null : u.id)} accessibilityLabel={u.name}>
-          <View style={styles.head}>
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={[styles.name, { color: colors.text }]}>
-                {u.name}
-                {u.is_admin ? ' · Admin' : ''}
-              </Text>
-              <Text style={[styles.meta, { color: colors.textSecondary }]}>
-                {u.username ? `@${u.username} · ` : ''}
-                {u.email}
-              </Text>
-              <Text style={[styles.meta, { color: colors.textSecondary }]}>
-                {formatCredits(u.credits_balance)} Credits · {u.bookings_count} Buchungen · {u.groups_count} Gruppen · seit {formatDateTimeCompact(u.created_at)}
-              </Text>
-              {u.banned ? (
-                <Text style={[styles.meta, { color: '#e11d48' }]}>
-                  {u.banned_permanent ? 'Gebannt' : `Gesperrt bis ${formatDateTimeCompact(u.banned_until)}`}: {u.ban_reason}
-                </Text>
-              ) : null}
-            </View>
-            <PlanBadge plan={u.club_plan} size="small" />
-          </View>
-          {open === u.id && token ? <Actions user={u} token={token} onChanged={replace} onDeleted={() => setUsers((p) => p.filter((x) => x.id !== u.id))} /> : null}
+
+      {me ? (
+        <>
+          <SectionTitle>Dein Konto</SectionTitle>
+          <UserRow user={self ?? null} fallbackName={me.name} onPress={() => open(me.id)} highlight />
+        </>
+      ) : null}
+
+      <SectionTitle>{query.trim() ? `Treffer (${others.length})` : `Neueste (${others.length})`}</SectionTitle>
+      {others.length === 0 && !loading ? (
+        <Text style={[styles.empty, { color: colors.textSecondary }]}>Niemand gefunden.</Text>
+      ) : (
+        <Card padded={false}>
+          {others.map((u, i) => (
+            <UserRow key={u.id} user={u} onPress={() => open(u.id)} divider={i > 0} />
+          ))}
         </Card>
-      ))}
+      )}
     </AdminScreen>
   );
 }
 
-function Actions({ user, token, onChanged, onDeleted }: { user: AdminUser; token: string; onChanged: (u: AdminUser) => void; onDeleted: () => void }) {
+function UserRow({
+  user,
+  fallbackName,
+  onPress,
+  divider = false,
+  highlight = false,
+}: {
+  user: AdminUser | null;
+  fallbackName?: string;
+  onPress: () => void;
+  divider?: boolean;
+  highlight?: boolean;
+}) {
   const colors = useTheme();
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [reason, setReason] = useState('');
-  const [username, setUsername] = useState(user.username ?? '');
-
-  const grant = async () => {
-    try {
-      onChanged((await api.admin.grantCredits(token, user.id, numberOrNull(amount) ?? 0, note.trim())).data);
-      setAmount('');
-      setNote('');
-    } catch (e) {
-      await notifyUser('Nicht gebucht', errorMessage(e));
-    }
-  };
-
-  const sanction = async (minutes: number | null) => {
-    if (reason.trim().length < 3) {
-      await notifyUser('Grund fehlt', 'Bitte einen Grund angeben (wird der Person beim Login gezeigt).');
-      return;
-    }
-    const withImage = await confirmAction('Beweisbild anhängen?', 'Ein Screenshot hilft, die Sperre später nachzuvollziehen.', 'Bild wählen');
-    const image = withImage ? await pickImage('Beweisbild', 'beweis') : null;
-    try {
-      if (minutes === null) await api.admin.banUser(token, user.id, reason.trim(), image);
-      else await api.admin.timeoutUser(token, user.id, minutes, reason.trim(), image);
-      onChanged({ ...user, banned: true, banned_permanent: minutes === null, ban_reason: reason.trim() });
-    } catch (e) {
-      await notifyUser('Nicht gesperrt', errorMessage(e));
-    }
-  };
-
-  const unban = async () => {
-    await api.admin.unbanUser(token, user.id);
-    onChanged({ ...user, banned: false, banned_until: null, ban_reason: null });
-  };
-
-  const rename = async () => {
-    try {
-      const res = await api.admin.renameUser(token, user.id, username.trim());
-      onChanged({ ...user, username: res.username });
-    } catch (e) {
-      await notifyUser('Nicht umbenannt', errorMessage(e));
-    }
-  };
-
-  const remove = async () => {
-    if (!(await confirmAction(`${user.name} löschen?`, 'Konto, Credits und Stempel verschwinden endgültig. Buchungen bleiben als Beleg.', 'Endgültig löschen', true))) return;
-    try {
-      await api.admin.deleteUser(token, user.id);
-      onDeleted();
-    } catch (e) {
-      await notifyUser('Nicht gelöscht', errorMessage(e));
-    }
-  };
-
-  return (
-    <View style={[styles.actions, { borderTopColor: colors.border }]}>
-      <Text style={[styles.label, { color: colors.text }]}>Credits gutschreiben (Minus = abziehen)</Text>
-      <View style={styles.pair}>
-        <View style={{ width: 110 }}>
-          <TextField label="Credits" value={amount} onChangeText={setAmount} keyboardType="numbers-and-punctuation" />
-        </View>
-        <View style={{ flex: 1 }}>
-          <TextField label="Grund (steht im Auszug)" value={note} onChangeText={setNote} />
-        </View>
+  const name = user?.name ?? fallbackName ?? '';
+  const row = (
+    <PressableScale
+      onPress={onPress}
+      scaleTo={0.99}
+      accessibilityRole="button"
+      accessibilityLabel={`${name} öffnen`}
+      style={[styles.row, divider && { borderTopWidth: 1, borderTopColor: colors.border }]}>
+      <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
+        <Text style={[styles.initials, { color: colors.tint }]}>{initialsOf(name)}</Text>
       </View>
-      <Button title="Buchen" icon="coin" variant="secondary" size="small" onPress={grant} disabled={!amount || note.trim().length < 3} />
-
-      <Text style={[styles.label, { color: colors.text }]}>Benutzername</Text>
-      <View style={styles.pair}>
-        <View style={{ flex: 1 }}>
-          <TextField value={username} onChangeText={setUsername} autoCapitalize="none" />
+      <View style={styles.rowText}>
+        <View style={styles.nameRow}>
+          <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>
+            {name}
+          </Text>
+          {user?.is_admin ? <Icon name="shield" size={14} color={colors.tint} /> : null}
+          {user?.banned ? <Icon name="ban" size={14} color="#e11d48" /> : null}
         </View>
-        <Button title="Ändern" size="small" variant="secondary" onPress={rename} disabled={!username.trim() || username === user.username} />
-      </View>
-
-      <Text style={[styles.label, { color: colors.text }]}>Sperren</Text>
-      {user.banned ? (
-        <Button title="Sperre aufheben" size="small" variant="secondary" onPress={unban} />
-      ) : (
-        <>
-          <TextField label="Grund" value={reason} onChangeText={setReason} />
-          <View style={styles.wrap}>
-            {TIMEOUTS.map((t) => (
-              <Button key={t.label} title={t.label} size="small" variant="secondary" onPress={() => sanction(t.minutes)} />
-            ))}
-            <Button title="Dauerhaft" size="small" variant="danger" onPress={() => sanction(null)} />
+        {user ? (
+          <Text style={[styles.meta, { color: colors.textSecondary }]} numberOfLines={1}>
+            {user.username ? `@${user.username} · ` : ''}
+            {user.email}
+          </Text>
+        ) : null}
+        {user ? (
+          <View style={styles.chips}>
+            <Chip icon="coin" text={formatCredits(user.credits_balance)} />
+            <Chip icon="stamp" text={`${user.stamps_total}`} />
+            <Chip icon="ticket" text={`${user.bookings_count}`} />
           </View>
-        </>
-      )}
+        ) : null}
+      </View>
+      {user ? <PlanBadge plan={user.club_plan} size="small" /> : null}
+      <Icon name="chevron-right" size={18} color={colors.textSecondary} />
+    </PressableScale>
+  );
+  return highlight ? <Card padded={false}>{row}</Card> : row;
+}
 
-      <Button title="Konto löschen" variant="danger" size="small" icon="trash" onPress={remove} />
+function Chip({ icon, text }: { icon: 'coin' | 'stamp' | 'ticket'; text: string }) {
+  const colors = useTheme();
+  return (
+    <View style={[styles.chip, { backgroundColor: colors.backgroundSelected }]}>
+      <Icon name={icon} size={12} color={colors.textSecondary} />
+      <Text style={[styles.chipText, { color: colors.text }]}>{text}</Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  head: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.two },
-  name: { fontFamily: FontFamily.bold, fontSize: 15.5 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingVertical: 12, paddingHorizontal: Spacing.three },
+  avatar: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  initials: { fontFamily: FontFamily.bold, fontSize: 15 },
+  rowText: { flex: 1, gap: 2 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  name: { fontFamily: FontFamily.bold, fontSize: 15, flexShrink: 1 },
   meta: { fontFamily: FontFamily.medium, fontSize: 12.5 },
-  actions: { borderTopWidth: 1, marginTop: Spacing.three, paddingTop: Spacing.three, gap: Spacing.two },
-  label: { fontFamily: FontFamily.bold, fontSize: 13.5, marginTop: Spacing.two },
-  pair: { flexDirection: 'row', gap: Spacing.two, alignItems: 'flex-end' },
-  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  chips: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  chipText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  empty: { fontFamily: FontFamily.medium, fontSize: 14 },
 });

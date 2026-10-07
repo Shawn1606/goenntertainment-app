@@ -7,7 +7,8 @@ import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { FontFamily, Radius, Spacing } from '@/constants/theme';
 import { formatCredits, formatEuro } from '@/domain/club';
-import { formatDateTimeCompact, formatDayShort } from '@/domain/date-format';
+import { BOOKING_STATUS_LABEL, expiryInfo } from '@/domain/booking-status';
+import { formatDateTimeCompact, formatDay, formatDayShort } from '@/domain/date-format';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
 import { api, errorMessage, type AdminBooking, type AdminStats, type AdminStatsPoint } from '@/lib/api';
@@ -48,6 +49,9 @@ export default function AdminDashboard() {
     { title: 'Nutzer', hint: 'Suchen, Credits gutschreiben, sperren', icon: 'users', href: '/admin-users' },
     { title: 'Meldungen', hint: 'Was Nutzer:innen gemeldet haben', icon: 'flag', href: '/admin-reports', badge: t?.open_reports },
     { title: 'Beweise', hint: 'Sperren mit Grund und Bild', icon: 'folder', href: '/admin-evidence' },
+    { title: 'Funktionen für alle', hint: 'Für ALLE Nutzer an/aus: Stadt-Bingo, Saison-Thema', icon: 'users', href: '/admin-features' },
+    { title: 'Nur für mich', hint: 'Vorschau fürs eigene Konto – niemand sonst sieht es', icon: 'eye', href: '/admin-preview' },
+    { title: 'Test', hint: 'Testphase: Challenges, Check-in-Serie und mehr', icon: 'trophy', href: '/admin-test' },
   ];
 
   return (
@@ -108,22 +112,48 @@ export default function AdminDashboard() {
       {bookings.length > 0 ? (
         <>
           <SectionTitle>Letzte Buchungen</SectionTitle>
+          <Text style={[styles.linkHint, { color: colors.textSecondary }]}>
+            Was Kund:innen zuletzt gebucht haben: Angebot und Partner, wer, wie viele, Status, Code zum Einlösen und bis wann es gilt.
+          </Text>
           <Card padded={false}>
-            {bookings.map((b, i) => (
-              <View key={b.id} style={[styles.booking, i > 0 && { borderTopWidth: 1, borderTopColor: colors.border }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.linkTitle, { color: colors.text }]} numberOfLines={1}>
-                    {b.offer_title} · {b.partner_name}
-                  </Text>
-                  <Text style={[styles.linkHint, { color: colors.textSecondary }]} numberOfLines={1}>
-                    {b.user?.name ?? 'gelöschtes Konto'} · {b.people} P. · {formatDateTimeCompact(b.created_at)}
-                  </Text>
+            {bookings.map((b, i) => {
+              const open = b.status === 'confirmed';
+              const expiry = open ? expiryInfo(b.valid_until, new Date()) : null;
+              const urgent = expiry?.tone === 'urgent';
+              return (
+                <View key={b.id} style={[styles.booking, i > 0 && { borderTopWidth: 1, borderTopColor: colors.border }]}>
+                  <View style={styles.bookingTop}>
+                    <View style={[styles.bookingIcon, { backgroundColor: colors.backgroundSelected }]}>
+                      <Icon name="ticket" size={16} color={colors.tint} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.linkTitle, { color: colors.text }]} numberOfLines={1}>
+                        {b.offer_title}
+                      </Text>
+                      <Text style={[styles.linkHint, { color: colors.textSecondary }]} numberOfLines={1}>
+                        {b.partner_name} · {b.user?.name ?? 'gelöschtes Konto'} · {b.people} {b.people === 1 ? 'Person' : 'Personen'}
+                      </Text>
+                    </View>
+                    <Text style={[styles.amount, { color: colors.text }]}>
+                      {b.pay_method === 'money' ? formatEuro(b.total_cents) : `${formatCredits(b.total_credits)} Cr`}
+                    </Text>
+                  </View>
+                  <View style={styles.bookingFacts}>
+                    <View style={[styles.statusChip, { backgroundColor: open ? 'rgba(16,185,129,0.12)' : colors.backgroundSelected }]}>
+                      <Text style={[styles.statusText, { color: open ? '#059669' : colors.textSecondary }]}>{BOOKING_STATUS_LABEL[b.status]}</Text>
+                    </View>
+                    {b.code ? <Text style={[styles.bookingCode, { color: colors.text, borderColor: colors.border }]}>{b.code}</Text> : null}
+                    <Text style={[styles.linkHint, { color: colors.textSecondary }]}>Gekauft {formatDateTimeCompact(b.created_at)}</Text>
+                    {open ? (
+                      <Text style={[styles.linkHint, { color: urgent ? '#e11d48' : colors.textSecondary, fontFamily: urgent ? FontFamily.bold : FontFamily.medium }]}>
+                        Verfällt {formatDay(b.valid_until)}
+                        {expiry ? ` (${expiry.label.replace('Noch ', 'noch ').replace(' gültig', '')})` : ''}
+                      </Text>
+                    ) : null}
+                  </View>
                 </View>
-                <Text style={[styles.amount, { color: colors.text }]}>
-                  {b.pay_method === 'money' ? formatEuro(b.total_cents) : `${formatCredits(b.total_credits)} Cr`}
-                </Text>
-              </View>
-            ))}
+              );
+            })}
           </Card>
         </>
       ) : null}
@@ -166,7 +196,13 @@ const styles = StyleSheet.create({
   linkHint: { fontFamily: FontFamily.medium, fontSize: 12.5 },
   badge: { minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
   badgeText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 11 },
-  booking: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, padding: Spacing.three },
+  booking: { gap: Spacing.two, padding: Spacing.three },
+  bookingTop: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
+  bookingIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  bookingFacts: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: Spacing.two, rowGap: 4, paddingLeft: 32 + Spacing.three },
+  statusChip: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  statusText: { fontFamily: FontFamily.bold, fontSize: 11.5 },
+  bookingCode: { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 0.8, borderWidth: 1, borderStyle: 'dashed', borderRadius: 6, paddingHorizontal: 6, paddingVertical: 1 },
   amount: { fontFamily: FontFamily.bold, fontSize: 14 },
   barsHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   bars: { flexDirection: 'row', alignItems: 'flex-end', gap: 3, height: 62 },

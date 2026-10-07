@@ -85,6 +85,10 @@ export default function PartnerScreen() {
               <Row icon="map-pin" text={[partner.address, partner.city].filter(Boolean).join(', ') + (distance ? ` · ${distance}` : '')} />
             ) : null}
             {partner.opening_hours ? <Row icon="clock" text={partner.opening_hours} /> : null}
+            {partner.wheelchair_accessible === true ? <Row icon="user-check" text="Rollstuhlgerecht" /> : null}
+            {partner.wheelchair_accessible === false ? <Row icon="user-check" text="Nicht rollstuhlgerecht" /> : null}
+            {partner.kid_friendly ? <Row icon="balloon" text="Kinderfreundlich" /> : null}
+            {partner.quiet_times ? <Row icon="moon" text={`Ruhige Zeiten: ${partner.quiet_times}`} /> : null}
             {partner.phone ? <Row icon="phone" text={partner.phone} onPress={() => Linking.openURL(`tel:${partner.phone}`)} /> : null}
             {partner.website ? <Row icon="link" text={partner.website.replace(/^https?:\/\//, '')} onPress={() => Linking.openURL(partner.website!)} /> : null}
             {partner.instagram ? (
@@ -101,7 +105,7 @@ export default function PartnerScreen() {
             <View style={styles.stampHint}>
               <Icon name="stamp" size={22} color={colors.tint} />
               <Text style={[styles.stampText, { color: colors.text }]}>
-                Bei jedem Besuch hier gibt&apos;s einen Stempel – Handy an den GÖ4Fun-Aufkleber an der Kasse halten.
+                Jeder Besuch hier bringt einen Stempel auf deine GÖ4Fun-Stempelkarte – dieselbe Karte bei allen Partnern. Handy an den Aufkleber an der Kasse halten.
               </Text>
             </View>
           </Card>
@@ -136,7 +140,15 @@ export default function PartnerScreen() {
   );
 }
 
-function Row({ icon, text, onPress }: { icon: 'map-pin' | 'clock' | 'phone' | 'link' | 'camera'; text: string; onPress?: () => void }) {
+function Row({
+  icon,
+  text,
+  onPress,
+}: {
+  icon: 'map-pin' | 'clock' | 'phone' | 'link' | 'camera' | 'user-check' | 'balloon' | 'moon';
+  text: string;
+  onPress?: () => void;
+}) {
   const colors = useTheme();
   return (
     <View style={styles.row}>

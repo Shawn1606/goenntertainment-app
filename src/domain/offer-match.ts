@@ -32,7 +32,26 @@ export type MatchableOffer = {
   interest_id: number | null;
   indoor: boolean | null;
   max_discount_percent: number | null;
+  /** Angaben des Partners zur Barrierefreiheit (null/fehlt = unbekannt). */
+  partner?: { wheelchair_accessible?: boolean | null; kid_friendly?: boolean | null; quiet_times?: string | null } | null;
 };
+
+/**
+ * Barrierefreie Filter: Wer einen anhakt, sieht nur Partner, die das
+ * ausdrücklich angegeben haben – „unbekannt" fällt dann heraus, weil darauf
+ * kein Verlass ist.
+ */
+export type AccessNeeds = { wheelchair: boolean; quiet: boolean; kids: boolean };
+
+export const NO_ACCESS_NEEDS: AccessNeeds = { wheelchair: false, quiet: false, kids: false };
+
+export function meetsAccessNeeds(partner: MatchableOffer['partner'], needs: AccessNeeds | undefined): boolean {
+  if (!needs) return true;
+  if (needs.wheelchair && partner?.wheelchair_accessible !== true) return false;
+  if (needs.kids && partner?.kid_friendly !== true) return false;
+  if (needs.quiet && !partner?.quiet_times?.trim()) return false;
+  return true;
+}
 
 export type Setting = 'any' | 'indoor' | 'outdoor';
 
@@ -45,6 +64,8 @@ export type FinderCriteria = {
   interestIds: number[];
   setting: Setting;
   maxDistanceKm: number | null;
+  /** Barrierefreie Filter – fehlt = keine. */
+  access?: AccessNeeds;
 };
 
 export const DEFAULT_CRITERIA: FinderCriteria = {
@@ -99,6 +120,7 @@ export function matchOffer<T extends MatchableOffer>(
     return null;
   }
   if (criteria.setting !== 'any' && offer.indoor !== null && offer.indoor !== (criteria.setting === 'indoor')) return null;
+  if (!meetsAccessNeeds(offer.partner, criteria.access)) return null;
   if (criteria.maxDistanceKm !== null && context.distanceKm !== null && context.distanceKm > criteria.maxDistanceKm) {
     return null;
   }

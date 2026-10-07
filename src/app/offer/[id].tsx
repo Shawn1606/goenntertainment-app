@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCreditsSheet } from '@/components/credits-sheet';
 import { MascotError } from '@/components/mascot';
 import { PartnerLogo } from '@/components/partner-logo';
+import { useCelebrate } from '@/components/celebration';
 import { ReportSheet } from '@/components/report-sheet';
 import { ShareOfferSheet } from '@/components/share-offer-sheet';
 import { Button } from '@/components/ui/button';
@@ -17,11 +18,11 @@ import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Stepper } from '@/components/ui/stepper';
 import { BrandGradient, FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
-import { formatCredits, formatEuro, formatPercent, planFor, quoteCredits, quoteMoney } from '@/domain/club';
+import { applyHappyHour, formatCredits, formatEuro, formatPercent, happyHourPercent, planFor, quoteCredits, quoteMoney } from '@/domain/club';
 import { formatDistance } from '@/domain/distance';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import { api, errorMessage, type Offer, type PayMethod } from '@/lib/api';
+import { api, errorMessage, type Availability, type Offer, type PayMethod } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
 import { confirmAction, notifyUser } from '@/lib/confirm';
@@ -52,6 +53,7 @@ export default function OfferScreen() {
   const insets = useSafeAreaInsets();
   const { token, user } = useAuth();
   const market = useMarket();
+  const celebrate = useCelebrate();
   const credits = useCreditsSheet();
 
   const id = Number(params.id);
@@ -66,6 +68,8 @@ export default function OfferScreen() {
   const [booking, setBooking] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [sharing, setSharing] = useState(false);
+  /** Testphase: freie Plätze am gewählten Tag (nur bei Angeboten mit Tageskontingent). */
+  const [seats, setSeats] = useState<{ date: string; data: Availability } | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -77,6 +81,23 @@ export default function OfferScreen() {
       })
       .catch((e) => setError(errorMessage(e, 'Dieses Angebot konnten wir nicht laden.')));
   }, [token, id]);
+
+  const capacity = offer?.daily_capacity ?? null;
+  useEffect(() => {
+    if (!token || capacity === null || !date) return;
+    let live = true;
+    api
+      .availability(token, id, date)
+      .then(({ data }) => {
+        if (live) setSeats({ date, data });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [token, id, capacity, date]);
+  // Nur die Antwort zum gerade gewählten Tag zählt.
+  const availability = seats && seats.date === date ? seats.data : null;
 
   const plan = planFor(CLUB_RULES, user?.club_plan);
   // Personenzahl in den Grenzen des Angebots – gerechnet, nicht gespeichert: So
@@ -103,7 +124,9 @@ export default function OfferScreen() {
           maxDiscountPercent: offer.max_discount_percent,
         })
       : null;
-  const creditQuote =
+  // Testphase (nur Admins): Happy Hour an ruhigen Tagen – rechnet der Server genauso.
+  const happy = user?.is_admin ? happyHourPercent(CLUB_RULES, plan.key, date) : 0;
+  const creditBase =
     offer.price_credits !== null
       ? quoteCredits(CLUB_RULES, {
           plan: plan.key,
@@ -112,6 +135,23 @@ export default function OfferScreen() {
           maxDiscountPercent: offer.max_discount_percent,
         })
       : null;
+  const creditQuote = creditBase && happy > 0 ? { ...creditBase, totalCredits: applyHappyHour(creditBase.totalCredits, happy) } : creditBase;
+  const happyHint =
+    user?.is_admin && plan.key !== 'free' && offer.price_credits !== null && CLUB_RULES.testphase?.happyHour
+      ? `Happy Hour (Testphase): Di–Do kostet es mit ${plan.name} ${formatPercent(CLUB_RULES.testphase.happyHour.percent[plan.key] ?? 0)} weniger Credits.`
+      : null;
+  const seatsHint =
+    capacity === null
+      ? null
+      : !date
+        ? 'Begrenzte Plätze – wähl einen Tag, dann siehst du, was frei ist.'
+        : !availability
+          ? null
+          : availability.available === 0
+            ? 'An diesem Tag ist alles ausgebucht.'
+            : (availability.available_for_you ?? 0) < people
+              ? `Die letzten ${availability.reserved} Plätze sind für Platinum-Mitglieder reserviert.`
+              : `Noch ${availability.available_for_you} ${availability.available_for_you === 1 ? 'Platz' : 'Plätze'} frei an diesem Tag.`;
   const quote = payMethod === 'money' ? money : creditQuote;
   const balance = user?.credits_balance ?? 0;
   const missingCredits = payMethod === 'credits' && creditQuote ? Math.max(0, creditQuote.totalCredits - balance) : 0;
@@ -170,7 +210,11 @@ export default function OfferScreen() {
       });
       market.setCredits(result.credits_balance);
       void market.refreshBookings();
-      feedback.joined();
+      celebrate({
+        title: 'Gebucht!',
+        subtitle: `${offer.title} – dein Ticket ist da. Vor Ort einfach Handy an den Aufkleber halten.`,
+        kind: 'confetti',
+      });
       router.replace({
         pathname: '/booking/[id]',
         params: { id: String(result.data.id), fresh: '1' },
@@ -340,6 +384,8 @@ export default function OfferScreen() {
                   <Pick key={c.key} label={c.label} active={date === c.value} onPress={() => setDate(c.value)} />
                 ))}
               </View>
+              {seatsHint ? <Text style={[styles.hintLine, { color: colors.textSecondary }]}>{seatsHint}</Text> : null}
+              {happyHint && payMethod === 'credits' ? <Text style={[styles.hintLine, { color: colors.tint }]}>{happyHint}</Text> : null}
             </View>
 
             {/* Preisaufstellung */}
@@ -352,6 +398,7 @@ export default function OfferScreen() {
                 {quote.clubPercent > 0 ? <Line label={`${plan.name}`} value={`−${formatPercent(quote.clubPercent)}`} good /> : null}
                 {quote.groupPercent > 0 ? <Line label={`Gruppenrabatt (${people} Pers.)`} value={`−${formatPercent(quote.groupPercent)}`} good /> : null}
                 {quote.capped ? <Line label="Höchstrabatt dieses Angebots" value={formatPercent(quote.percent)} muted /> : null}
+                {payMethod === 'credits' && happy > 0 ? <Line label="Happy Hour (Testphase)" value={`−${formatPercent(happy)}`} good /> : null}
                 <View style={[styles.divider, { backgroundColor: colors.border }]} />
                 <View style={styles.totalRow}>
                   <Text style={[styles.totalLabel, { color: colors.text }]}>Zusammen</Text>
@@ -473,6 +520,7 @@ function Line({ label, value, good, muted }: { label: string; value: string; goo
 }
 
 const styles = StyleSheet.create({
+  hintLine: { fontFamily: FontFamily.semibold, fontSize: 13, marginTop: Spacing.two },
   flex: { flex: 1 },
   center: {
     flex: 1,

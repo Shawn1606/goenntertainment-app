@@ -217,7 +217,7 @@ export default function ChatScreen() {
                 <MascotEmpty mood="cheer" size={88} gesture="wave">
                   <Text style={[styles.emptyTitle, { color: colors.text }]}>Noch nichts geschrieben.</Text>
                   <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                    Schreib den ersten Satz – oder teile ein Angebot aus dem Finder in diese Runde.
+                    Schreib den ersten Satz – oder teile ein Angebot aus „Entdecken“ in diese Runde.
                   </Text>
                 </MascotEmpty>
               </View>

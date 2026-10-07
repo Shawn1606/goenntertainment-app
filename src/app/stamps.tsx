@@ -15,8 +15,8 @@ import { useTheme } from '@/hooks/use-theme';
 import { useMarket } from '@/lib/market-context';
 
 /**
- * Die Stempelkarte in groß – mit den Partnern, bei denen man schon war, und der
- * Erklärung, wie man stempelt.
+ * Die Stempelkarte in groß – EINE Karte für alle Partner –, darunter der
+ * Verlauf (wo die Stempel herkommen) und wie man stempelt.
  *
  * `?fresh=<index>` lässt das gerade verdiente Feld mit einem Aufdrücken landen
  * (kommt vom Check-in).
@@ -34,10 +34,10 @@ export default function StampsScreen() {
   }, []);
 
   const steps: { icon: UiIconName; text: string }[] = [
-    { icon: 'map-pin', text: 'Geh zu einem GÖ4Fun-Partner.' },
+    { icon: 'map-pin', text: 'Geh zu irgendeinem GÖ4Fun-Partner – die Karte gilt bei allen.' },
     { icon: 'nfc', text: 'Halte dein Handy an den Aufkleber an der Kasse – oder scanne den QR-Code darauf.' },
     { icon: 'qr', text: 'Klappt das nicht? Zeig deinen Pass, der Partner scannt ihn.' },
-    { icon: 'gift', text: `Pro Partner und Tag gibt es einen Stempel. Zehn Stempel = ${card?.reward_credits ?? 100} Credits.` },
+    { icon: 'gift', text: `Bei jedem Partner gibt es einen Stempel am Tag – bei drei Partnern also drei. Zehn Stempel = ${card?.reward_credits ?? 100} Credits.` },
   ];
 
   return (
@@ -51,7 +51,10 @@ export default function StampsScreen() {
                 card.remaining === 1
                   ? { line: 'Nur noch EIN Stempel – dann regnet es Credits!', mood: 'cheer' }
                   : { line: `Noch ${card.remaining} Stempel bis ${card.reward_credits} Credits.`, mood: 'happy' },
-                { line: 'Schau, wie die glitzern! Jeder Stempel ist ein Besuch bei einem Partner.', mood: 'happy' },
+                { line: 'Schau, wie die glitzern! Eine Karte für alle Partner – jeder Besuch zählt.', mood: 'happy' },
+                { line: 'Siehst du die Sterne in der Mitte? Die drehen sich vor Freude.', mood: 'cheer' },
+                { line: 'Pro Partner gibt’s einen Stempel am Tag – drei Partner, drei Stempel!', mood: 'idle' },
+                { line: 'Halt mich gedrückt, dann tanz ich für deine Stempel.', mood: 'happy' },
                 ...(card.completed_cards > 0 ? [{ line: `Du hast schon ${card.completed_cards}× eine volle Karte geschafft!`, mood: 'cheer' as const }] : []),
               ]}
             />
@@ -66,16 +69,22 @@ export default function StampsScreen() {
 
         {card && card.stamps.length > 0 ? (
           <>
-            <Text style={[styles.section, { color: colors.text }]}>Auf dieser Karte</Text>
+            <Text style={[styles.section, { color: colors.text }]}>Verlauf dieser Karte</Text>
             <Card padded={false}>
               {card.stamps
                 .slice()
                 .reverse()
                 .map((s, i) => (
                   <View key={s.id} style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: colors.border }]}>
-                    <PartnerLogo name={s.partner?.name ?? '?'} uri={s.partner?.logo_url} size={36} />
+                    {s.partner ? (
+                      <PartnerLogo name={s.partner.name} uri={s.partner.logo_url} size={36} />
+                    ) : (
+                      <View style={[styles.giftIcon, { backgroundColor: colors.backgroundSelected }]}>
+                        <Icon name="gift" size={18} color={colors.tint} />
+                      </View>
+                    )}
                     <Text style={[styles.rowTitle, { color: colors.text }]} numberOfLines={1}>
-                      {s.partner?.name ?? 'Partner'}
+                      {s.partner?.name ?? 'Geschenkt vom GÖ4Fun-Team'}
                     </Text>
                     <Text style={[styles.rowMeta, { color: colors.textSecondary }]}>{formatDay(s.day)}</Text>
                   </View>
@@ -109,6 +118,7 @@ const styles = StyleSheet.create({
   section: { fontFamily: FontFamily.bold, fontSize: 17, marginTop: Spacing.two },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, padding: Spacing.three },
   rowTitle: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 14.5 },
+  giftIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   rowMeta: { fontFamily: FontFamily.medium, fontSize: 13 },
   steps: { gap: Spacing.three },
   step: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },

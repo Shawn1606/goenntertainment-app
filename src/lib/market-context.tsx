@@ -11,6 +11,7 @@ import {
   type Offer,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { loadOfflineBookings, saveOfflineBookings } from '@/lib/offline-cache';
 import { useLocation, type Coords } from '@/lib/use-location';
 
 /**
@@ -99,9 +100,14 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const refreshBookings = useCallback(async () => {
     if (!token) return;
     try {
-      setBookings((await api.bookings(token)).data);
+      const { data } = await api.bookings(token);
+      setBookings(data);
+      // Offline-Pass: offene Buchungen mit Code fürs Vorzeigen ohne Netz.
+      void saveOfflineBookings(data).catch(() => undefined);
     } catch {
-      // wie oben
+      // Kein Netz? Dann wenigstens die zuletzt gespeicherten offenen Buchungen.
+      const cached = await loadOfflineBookings();
+      if (cached) setBookings((current) => (current.length > 0 ? current : cached.bookings));
     }
   }, [token]);
 

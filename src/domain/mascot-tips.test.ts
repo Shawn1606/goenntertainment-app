@@ -15,6 +15,15 @@ const base: TipContext = {
   groups: 0,
 };
 
+test('bald verfallende Credits kommen ganz nach vorn', () => {
+  const soon = homeTips({ ...base, openBookings: 1, expiringCredits: 120, expiringDays: 5 });
+  assert.equal(soon[0].line, '120 Credits verfallen in 5 Tagen – lös sie ein, bevor sie weg sind!');
+  assert.equal(soon[0].mood, 'oops');
+  assert.match(homeTips({ ...base, expiringCredits: 50, expiringDays: 1 })[0].line, /morgen/);
+  // Noch weit weg: kein Hinweis.
+  assert.ok(!homeTips({ ...base, expiringCredits: 50, expiringDays: 90 }).some((t) => t.line.includes('verfallen')));
+});
+
 test('offene Buchung kommt zuerst', () => {
   const tips = homeTips({ ...base, openBookings: 1 });
   assert.match(tips[0].line, /offene Buchung/);
@@ -45,4 +54,20 @@ test('tipAt läuft im Kreis', () => {
   const tips = homeTips(base);
   assert.equal(tipAt(tips, tips.length).line, tips[0].line);
   assert.equal(tipAt([], 3).line, 'Hi!');
+});
+
+test('jeder Tipp passt in die Blase auf der Startseite (drei Zeilen, ~80 Zeichen)', () => {
+  const variants: Partial<TipContext>[] = [
+    { openBookings: 1 },
+    { openBookings: 3 },
+    { stampsFilled: 9, stampsRemaining: 1 },
+    { stampsFilled: 4, stampsRemaining: 6 },
+    { groups: 2, credits: 1250 },
+    { plan: 'gold' },
+  ];
+  for (const v of variants) {
+    for (const t of homeTips({ ...base, ...v, firstName: 'Maximiliane', season: 'advent', weekday: 5, hour: 18 })) {
+      assert.ok(t.line.length <= 80, `zu lang (${t.line.length}): „${t.line}“`);
+    }
+  }
 });

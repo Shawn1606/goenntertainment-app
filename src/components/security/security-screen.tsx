@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { HomeBackground } from '@/components/home-background';
 import { useHeaderBackFallback } from '@/components/ui/header-back';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
 import { FontFamily, Spacing } from '@/constants/theme';
@@ -29,26 +28,16 @@ export function SecurityScreen({
   const insets = useSafeAreaInsets();
   const backFallback = useHeaderBackFallback('/settings');
   return (
-    <HomeBackground>
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          title,
-          headerBackTitle: 'Zurück',
-          headerTintColor: colors.text,
-          headerStyle: { backgroundColor: colors.background },
-          headerTitleStyle: { color: colors.text },
-          headerShadowVisible: false,
-          headerLeft: backFallback,
-        }}
-      />
+    <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
+      {/* Zurück-Knopf: der des App-Kopfes – ohne Verlauf (direkt geöffnet) führt er in die Einstellungen. */}
+      <Stack.Screen options={{ headerShown: true, title, headerLeft: backFallback }} />
       <View style={styles.flex}>
         <KeyboardForm contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + Spacing.five }]}>
           {intro ? <Text style={[styles.intro, { color: colors.textSecondary }]}>{intro}</Text> : null}
           {children}
         </KeyboardForm>
       </View>
-    </HomeBackground>
+    </View>
   );
 }
 

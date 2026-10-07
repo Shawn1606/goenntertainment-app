@@ -79,8 +79,11 @@ function Round({ icon, onPress, disabled, label, compact }: { icon: 'plus' | 'mi
 }
 
 const styles = StyleSheet.create({
-  box: { flex: 1, borderWidth: Stroke, borderRadius: Radius.card, padding: Spacing.three, gap: Spacing.two },
-  boxCompact: { padding: 12 },
+  // Kein flex: 1 hier: In einer Spalte mit automatischer Höhe fiele der Kasten
+  // sonst auf seine Polsterung zusammen, und die Knöpfe lägen auf dem Rahmen.
+  box: { borderWidth: Stroke, borderRadius: Radius.card, padding: Spacing.three, gap: Spacing.two },
+  /** Zwei nebeneinander teilen sich die Breite. */
+  boxCompact: { flex: 1, minWidth: 0, padding: 12 },
   label: { fontFamily: FontFamily.semibold, fontSize: 13 },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   value: { fontFamily: FontFamily.bold, fontSize: 24, minWidth: 64, textAlign: 'center' },

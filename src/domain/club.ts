@@ -12,8 +12,11 @@
  *
  * ## Die Regel in einem Satz
  *
- *   Rabatt = Club-Rabatt + Gruppenrabatt × Club-Faktor, höchstens der Deckel
+ *   Rabatt = Club-Rabatt + Gruppenrabatt der Stufe, höchstens der Deckel
  *   des Angebots (sonst der allgemeine Deckel).
+ *
+ * Den Gruppenrabatt gibt es in jeder Stufe; Gold und Platinum haben je
+ * Personenzahl einen eigenen, höheren Wert (Tabelle in club.json).
  *
  * Er gilt für Euro- UND Credit-Preise gleich, damit „du sparst 20 %" nicht davon
  * abhängt, wie man bezahlt. Euro wird kaufmännisch auf den Cent gerundet,
@@ -26,20 +29,48 @@ export type ClubPlan = {
   key: PlanKey;
   name: string;
   priceCents: number;
+  /** Jahresabo: Preis für ein Jahr (zehn Monatspreise). */
+  yearlyPriceCents?: number;
   discountPercent: number;
-  groupBoost: number;
   monthlyCredits: number;
+  /** Wie lange Gutschriften in dieser Stufe gelten. */
+  creditValidity: CreditValidity;
   perks: string[];
 };
 
+/** Gültigkeit einer Gutschrift: Tage ODER Monate (Verfall rechnet der Server). */
+export type CreditValidity = { days?: number; months?: number };
+
 export type ClubRules = {
   currency: string;
-  credits: { centsPerTenCredits: number; packs: number[] };
+  credits: {
+    centsPerTenCredits: number;
+    packs: number[];
+    packBonus?: Record<string, number>;
+    /** Einmalig beim allerersten Paket: so viel Prozent der Paketgröße extra. */
+    firstPurchaseBonusPercent?: number;
+    refundGraceDays: number;
+  };
   plans: ClubPlan[];
-  groupDiscount: { tiers: { minPeople: number; percent: number }[] };
+  groupDiscount: { tiers: GroupTier[] };
   discountCap: { defaultPercent: number };
-  stampCard: { fields: number; rewardCredits: number; perPartnerPerDay: number };
+  /** Ideen in der Testphase (nur Admins). */
+  testphase?: {
+    happyHour?: { weekdays: number[]; percent: Record<string, number> };
+  };
+  stampCard: {
+    fields: number;
+    rewardCreditsByPlan: Record<string, number>;
+    /** Jede so-vielte volle Karte ist golden … */
+    goldenEvery: number;
+    /** … und bringt so viel mal mehr. */
+    goldenMultiplier: number;
+    perPartnerPerDay: number;
+  };
 };
+
+/** Ab `minPeople` Personen gilt je Stufe dieser Gruppenrabatt (Schlüssel = plan.key). */
+export type GroupTier = { minPeople: number; percent: Record<string, number> };
 
 export const PLAN_KEYS: readonly PlanKey[] = ['free', 'gold', 'platinum'];
 
@@ -48,18 +79,23 @@ export function planFor(rules: ClubRules, key: string | null | undefined): ClubP
   return rules.plans.find((p) => p.key === key) ?? rules.plans[0];
 }
 
-/** Grundrabatt nach Personenzahl – ohne Club-Faktor. */
-export function groupBasePercent(rules: ClubRules, people: number): number {
+/**
+ * Gruppenrabatt einer Stufe nach Personenzahl: die höchste Zeile, deren
+ * `minPeople` erreicht ist. Unbekannte Stufen rechnen wie Free.
+ */
+export function groupPercentFor(rules: ClubRules, planKey: string | null | undefined, people: number): number {
+  const key = planFor(rules, planKey).key;
   let percent = 0;
   for (const tier of rules.groupDiscount.tiers) {
-    if (people >= tier.minPeople && tier.percent > percent) percent = tier.percent;
+    const value = tier.percent[key] ?? 0;
+    if (people >= tier.minPeople && value > percent) percent = value;
   }
   return percent;
 }
 
 /**
  * Zwei Nachkommastellen, ohne das Rauschen der Fließkommazahlen.
- * 10 + 5 × 1,5 soll 17.5 sein und nicht 17.499999999.
+ * 5 + 10,5 soll 15.5 sein und nicht 15.499999999.
  */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
@@ -68,7 +104,7 @@ function round2(value: number): number {
 export type DiscountBreakdown = {
   /** Anteil aus der Club-Stufe. */
   clubPercent: number;
-  /** Anteil aus der Gruppengröße, schon mit Club-Faktor. */
+  /** Anteil aus der Gruppengröße, mit dem Wert der Stufe. */
   groupPercent: number;
   /** Was tatsächlich gilt – nach dem Deckel. */
   percent: number;
@@ -85,7 +121,7 @@ export function discountFor(
   const plan = planFor(rules, planKey);
   const count = Math.max(1, Math.floor(people));
   const clubPercent = plan.discountPercent;
-  const groupPercent = round2(groupBasePercent(rules, count) * plan.groupBoost);
+  const groupPercent = round2(groupPercentFor(rules, plan.key, count));
   const cap = maxDiscountPercent ?? rules.discountCap.defaultPercent;
   const raw = round2(clubPercent + groupPercent);
   const percent = Math.max(0, Math.min(raw, cap));
@@ -142,9 +178,92 @@ export function packPriceCents(rules: ClubRules, credits: number): number {
   return Math.round((credits * rules.credits.centsPerTenCredits) / 10);
 }
 
-/** Was Credits beim Kaufpreis wert sind – für „entspricht 3,75 €". */
-export function creditsValueCents(rules: ClubRules, credits: number): number {
-  return packPriceCents(rules, credits);
+/**
+ * Mengenbonus eines Pakets: gratis obendrauf, z. B. 200 + 50.
+ *
+ * Die App zeigt ihn immer als „200 + 50" – den Umrechnungskurs (Cent je
+ * Credit) dagegen bewusst nirgends.
+ */
+export function packBonus(rules: ClubRules, credits: number): number {
+  return Math.max(0, Math.floor(rules.credits.packBonus?.[String(credits)] ?? 0));
+}
+
+/** Was ein Paket insgesamt aufs Konto bringt: Paket + Bonus. */
+export function packTotalCredits(rules: ClubRules, credits: number): number {
+  return credits + packBonus(rules, credits);
+}
+
+/**
+ * Erstkauf-Bonus: Beim allerersten Paket eines Kontos gibt es einmalig
+ * `firstPurchaseBonusPercent` der Paketgröße dazu (ohne den Mengenbonus).
+ * Ob ein Konto noch Anspruch hat, weiß nur der Server.
+ */
+export function firstPurchaseBonus(rules: ClubRules, credits: number): number {
+  return Math.floor((credits * (rules.credits.firstPurchaseBonusPercent ?? 0)) / 100);
+}
+
+/** Wie lange Gutschriften in einer Stufe gelten. */
+export function creditValidityFor(rules: ClubRules, planKey: string | null | undefined): CreditValidity {
+  return planFor(rules, planKey).creditValidity ?? { days: 365 };
+}
+
+/** „365 Tage", „18 Monate" – für Texte wie „Credits gelten …". */
+export function creditValidityLabel(rules: ClubRules, planKey: string | null | undefined): string {
+  const v = creditValidityFor(rules, planKey);
+  if (v.months) return `${v.months} ${v.months === 1 ? 'Monat' : 'Monate'}`;
+  const days = v.days ?? 365;
+  return `${days} ${days === 1 ? 'Tag' : 'Tage'}`;
+}
+
+/** Ist die n-te volle Karte (ab 1 gezählt) eine goldene? */
+export function isGoldenCard(rules: ClubRules, cardNumber: number): boolean {
+  const every = rules.stampCard.goldenEvery;
+  return every > 0 && cardNumber > 0 && cardNumber % every === 0;
+}
+
+/**
+ * Was die n-te volle Stempelkarte bringt: der Wert der Stufe, auf einer
+ * goldenen Karte mal `goldenMultiplier` (kaufmännisch gerundet).
+ */
+export function stampRewardFor(rules: ClubRules, planKey: string | null | undefined, cardNumber: number): number {
+  const key = planFor(rules, planKey).key;
+  const base = rules.stampCard.rewardCreditsByPlan[key] ?? rules.stampCard.rewardCreditsByPlan.free ?? 0;
+  return isGoldenCard(rules, cardNumber) ? Math.round(base * rules.stampCard.goldenMultiplier) : base;
+}
+
+export type ClubInterval = 'month' | 'year';
+
+/** Preis einer Laufzeit: Monat oder Jahr. */
+export function periodPriceCents(rules: ClubRules, planKey: string | null | undefined, interval: ClubInterval): number {
+  const plan = planFor(rules, planKey);
+  return interval === 'year' ? (plan.yearlyPriceCents ?? plan.priceCents * 12) : plan.priceCents;
+}
+
+/** Was das Jahresabo gegenüber zwölf Monatszahlungen spart. */
+export function yearlySavingsCents(rules: ClubRules, planKey: string | null | undefined): number {
+  const plan = planFor(rules, planKey);
+  return Math.max(0, plan.priceCents * 12 - periodPriceCents(rules, planKey, 'year'));
+}
+
+/**
+ * Testphase: Happy Hour – Credit-Buchungen mit Wunschtermin an ruhigen
+ * Wochentagen kosten Club-Mitglieder weniger (shared/club.json). `day` ist
+ * „JJJJ-MM-TT"; Wochentag nach ISO (1 = Montag … 7 = Sonntag). Dieselbe Regel
+ * rechnet der Server (Club::happyHourPercent) – nur für Admins.
+ */
+export function happyHourPercent(rules: ClubRules, planKey: string | null | undefined, day: string | null | undefined): number {
+  const happy = rules.testphase?.happyHour;
+  if (!happy || !day) return 0;
+  const [y, m, d] = day.split('-').map(Number);
+  if (!y || !m || !d) return 0;
+  const weekday = ((new Date(Date.UTC(y, m - 1, d)).getUTCDay() + 6) % 7) + 1;
+  if (!happy.weekdays.includes(weekday)) return 0;
+  return happy.percent[planFor(rules, planKey).key] ?? 0;
+}
+
+/** Credits nach Happy Hour – aufgerundet wie beim Server. */
+export function applyHappyHour(credits: number, percent: number): number {
+  return percent > 0 ? Math.ceil((credits * (100 - percent)) / 100 - 1e-9) : credits;
 }
 
 export type StampProgress = {

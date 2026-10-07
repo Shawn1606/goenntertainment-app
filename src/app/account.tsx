@@ -1,13 +1,16 @@
 import { Image } from 'expo-image';
-import { Stack, useRouter, type Href } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Stack, useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { Mascot } from '@/components/mascot';
 import { PlanBadge } from '@/components/plan-badge';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
+import { ListRow, ListSection } from '@/components/ui/list-row';
 import { PressableScale } from '@/components/ui/pressable-scale';
-import { FontFamily, MaxContentWidth, Night, PlanLook, Spacing } from '@/constants/theme';
+import { FontFamily, MaxContentWidth, Night, PlanLook, Radius, Spacing, Stroke } from '@/constants/theme';
 import { formatCredits, planFor } from '@/domain/club';
 import { initialsOf } from '@/domain/initials';
 import type { UiIconName } from '@/domain/ui-icon';
@@ -17,13 +20,14 @@ import { CLUB_RULES } from '@/lib/club-rules';
 import { confirmAction } from '@/lib/confirm';
 import { useMarket } from '@/lib/market-context';
 
-type Row = { key: string; icon: UiIconName; title: string; hint?: string; href: Href; badge?: number };
-
 /**
  * Dein Konto – hinter dem Profilbild oben rechts.
  *
- * Ein öffentliches Profil gibt es nicht mehr. Was hier steht, gehört nur dir:
- * Club-Stufe, Credits, Stempel, Buchungen, Gruppen, Pass und Einstellungen.
+ * Oben du selbst (Bild antippen = Profil bearbeiten) und deine drei wichtigsten
+ * Zahlen; darunter in zwei Abschnitten alles, was dir gehört, und ganz unten
+ * Einstellungen und Abmelden. Ein öffentliches Profil gibt es nicht.
+ *
+ * Gruppen und Tickets stehen hier nicht mehr: Sie haben eigene Tabs unten.
  */
 export default function AccountScreen() {
   const router = useRouter();
@@ -42,22 +46,6 @@ export default function AccountScreen() {
   const look = PlanLook[plan.key];
   const stamps = market.club?.stamps;
   const openBookings = market.bookings.filter((b) => b.status === 'confirmed').length;
-  const unread = market.groups.reduce((s, g) => s + g.unread, 0);
-
-  const rows: Row[] = [
-    { key: 'club', icon: 'crown', title: 'Club & Abo', hint: plan.name, href: '/club' },
-    { key: 'wallet', icon: 'coin', title: 'Credits & Gutscheine', hint: `${formatCredits(user.credits_balance)} Credits`, href: '/wallet' },
-    { key: 'stamps', icon: 'stamp', title: 'Stempelkarte', hint: stamps ? `${stamps.filled}/${stamps.fields} Stempel` : undefined, href: '/stamps' },
-    { key: 'bookings', icon: 'ticket', title: 'Buchungen', hint: openBookings ? `${openBookings} offen` : undefined, href: '/bookings', badge: openBookings },
-    { key: 'groups', icon: 'users', title: 'Gruppen', hint: `${market.groups.length}`, href: '/groups', badge: unread },
-    { key: 'pass', icon: 'qr', title: 'Mein Pass', hint: 'Zum Vorzeigen beim Partner', href: { pathname: '/checkin', params: { mode: 'pass' } } },
-  ];
-
-  const extra: Row[] = [
-    ...(user.is_partner_staff ? [{ key: 'partner', icon: 'scan' as const, title: 'Partner-Modus', hint: 'Kunden-Pässe scannen, Buchungen einlösen', href: '/partner-mode' as Href }] : []),
-    ...(user.is_admin ? [{ key: 'admin', icon: 'shield' as const, title: 'Admin-Bereich', hint: 'Partner, Angebote, Gutscheine, Nutzer', href: '/admin-dashboard' as Href }] : []),
-    { key: 'settings', icon: 'gear', title: 'Einstellungen', hint: 'Konto, Sicherheit, Darstellung, Recht', href: '/settings' },
-  ];
 
   const onLogout = async () => {
     if (await confirmAction('Abmelden', 'Möchtest du dich wirklich abmelden?', 'Abmelden', true)) await logout();
@@ -67,31 +55,65 @@ export default function AccountScreen() {
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: 'Konto' }} />
       <ScrollView contentContainerStyle={styles.content}>
-        <Card tone="night" style={styles.hero}>
-          <View style={[styles.avatarRing, { borderColor: look.ring }]}>
-            <View style={styles.avatar}>
-              {user.avatar ? <Image source={{ uri: user.avatar }} style={StyleSheet.absoluteFill} contentFit="cover" /> : <Text style={styles.initials}>{initialsOf(user.name)}</Text>}
+        <LinearGradient colors={[...Night.gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
+          <PressableScale onPress={() => router.push('/profile')} accessibilityRole="button" accessibilityLabel="Profil bearbeiten" scaleTo={0.96}>
+            <View style={[styles.avatarRing, { borderColor: look.ring }]}>
+              <View style={styles.avatar}>
+                {user.avatar ? (
+                  <Image source={{ uri: user.avatar }} style={StyleSheet.absoluteFill} contentFit="cover" />
+                ) : (
+                  <Text style={styles.initials}>{initialsOf(user.name)}</Text>
+                )}
+              </View>
+              <View style={[styles.editBadge, { backgroundColor: colors.tint }]}>
+                <Icon name="camera" size={13} color="#ffffff" />
+              </View>
             </View>
-          </View>
-          <View style={{ flex: 1, gap: 4 }}>
+          </PressableScale>
+          <View style={styles.heroText}>
             <Text style={styles.name} numberOfLines={1}>
               {user.name}
             </Text>
             {user.username ? <Text style={styles.handle}>@{user.username}</Text> : null}
             <PlanBadge plan={plan.key} size="small" tone="night" />
           </View>
-        </Card>
+          <Mascot mood="happy" size={58} lively style={styles.heroMascot} />
+          <PressableScale onPress={() => router.push('/profile')} accessibilityRole="button" accessibilityLabel="Profil bearbeiten" style={styles.editButton}>
+            <Icon name="edit" size={15} color="#ffffff" />
+            <Text style={styles.editText}>Profil bearbeiten</Text>
+          </PressableScale>
+        </LinearGradient>
 
         <View style={styles.stats}>
           <Stat label="Credits" value={formatCredits(user.credits_balance)} icon="coin" onPress={() => router.push('/wallet')} />
           <Stat label="Stempel" value={stamps ? `${stamps.filled}/${stamps.fields}` : '–'} icon="stamp" onPress={() => router.push('/stamps')} />
-          <Stat label="Offen" value={String(openBookings)} icon="ticket" onPress={() => router.push('/bookings')} />
+          <Stat label="Tickets" value={String(openBookings)} icon="ticket" onPress={() => router.dismissTo('/bookings')} />
         </View>
 
-        <RowList rows={rows} />
-        <RowList rows={extra} />
+        <ListSection title="Mein GÖ4Fun">
+          <ListRow first icon="crown" title="Club & Abo" value={plan.name} onPress={() => router.push('/club')} />
+          <ListRow icon="coin" title="Credits & Gutscheine" value={`${formatCredits(user.credits_balance)}`} onPress={() => router.push('/wallet')} />
+          <ListRow icon="stamp" title="Stempelkarte" value={stamps ? `${stamps.filled}/${stamps.fields}` : undefined} onPress={() => router.push('/stamps')} />
+          <ListRow icon="qr" title="Mein Pass" hint="Zum Vorzeigen beim Partner" onPress={() => router.push({ pathname: '/checkin', params: { mode: 'pass' } })} />
+          <ListRow icon="trophy" title="Abzeichen" hint="Deine Meilensteine mit Datum" onPress={() => router.push('/badges')} />
+        </ListSection>
 
-        <PressableScale onPress={onLogout} accessibilityRole="button" style={[styles.logout, { borderColor: '#fecaca' }]}>
+        {user.is_partner_staff || user.is_admin ? (
+          <ListSection title="Verwaltung">
+            {user.is_partner_staff ? (
+              <ListRow first icon="scan" title="Partner-Modus" hint="Kunden-Pässe scannen, Buchungen einlösen" onPress={() => router.push('/partner-mode')} />
+            ) : null}
+            {user.is_admin ? (
+              <ListRow first={!user.is_partner_staff} icon="shield" title="Admin-Bereich" hint="Partner, Angebote, Gutscheine, Nutzer" onPress={() => router.push('/admin-dashboard')} />
+            ) : null}
+          </ListSection>
+        ) : null}
+
+        <ListSection title="App">
+          <ListRow first icon="gear" title="Einstellungen" hint="Anmeldung, Mitteilungen, Darstellung, Hilfe" onPress={() => router.push('/settings')} />
+        </ListSection>
+
+        <PressableScale onPress={onLogout} accessibilityRole="button" style={[styles.logout, { borderColor: 'rgba(225,29,72,0.4)', backgroundColor: colors.background }]}>
           <Icon name="logout" size={18} color="#e11d48" />
           <Text style={styles.logoutText}>Abmelden</Text>
         </PressableScale>
@@ -105,67 +127,60 @@ function Stat({ label, value, icon, onPress }: { label: string; value: string; i
   return (
     <View style={styles.statWrap}>
       <Card onPress={onPress} accessibilityLabel={`${label}: ${value}`} style={styles.stat}>
+        {/* Kleiner Pfeil oben rechts: Die Kachel ist ein Knopf. */}
+        <View style={styles.statArrow}>
+          <Icon name="chevron-right" size={14} color={colors.textSecondary} />
+        </View>
         <Icon name={icon} size={20} color={colors.tint} />
-        <Text style={[styles.statValue, { color: colors.text }]}>{value}</Text>
+        <Text style={[styles.statValue, { color: colors.text }]} numberOfLines={1}>
+          {value}
+        </Text>
         <Text style={[styles.statLabel, { color: colors.textSecondary }]}>{label}</Text>
       </Card>
     </View>
   );
 }
 
-function RowList({ rows }: { rows: Row[] }) {
-  const colors = useTheme();
-  const router = useRouter();
-  return (
-    <Card padded={false}>
-      {rows.map((row, i) => (
-        <PressableScale
-          key={row.key}
-          onPress={() => router.push(row.href)}
-          haptic="tap"
-          scaleTo={0.99}
-          accessibilityRole="button"
-          accessibilityLabel={row.title}
-          style={[styles.row, i > 0 && { borderTopWidth: 1, borderTopColor: colors.border }]}>
-          <View style={[styles.rowIcon, { backgroundColor: colors.backgroundSelected }]}>
-            <Icon name={row.icon} size={19} color={colors.tint} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.rowTitle, { color: colors.text }]}>{row.title}</Text>
-            {row.hint ? <Text style={[styles.rowHint, { color: colors.textSecondary }]}>{row.hint}</Text> : null}
-          </View>
-          {row.badge ? (
-            <View style={[styles.badge, { backgroundColor: colors.tint }]}>
-              <Text style={styles.badgeText}>{row.badge > 9 ? '9+' : row.badge}</Text>
-            </View>
-          ) : null}
-          <Icon name="chevron-right" size={18} color={colors.textSecondary} />
-        </PressableScale>
-      ))}
-    </Card>
-  );
-}
-
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  content: { padding: Spacing.three, gap: Spacing.three, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.six },
-  hero: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
-  avatarRing: { width: 72, height: 72, borderRadius: 36, borderWidth: 3, alignItems: 'center', justifyContent: 'center' },
-  avatar: { width: 62, height: 62, borderRadius: 31, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.15)' },
-  initials: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 22 },
+  content: { padding: Spacing.three, gap: Spacing.four, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.six },
+  hero: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: Spacing.three,
+    borderRadius: Radius.panel,
+    borderWidth: Stroke,
+    borderColor: Night.line,
+    padding: Spacing.three,
+  },
+  avatarRing: { width: 76, height: 76, borderRadius: 38, borderWidth: 3, alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 66, height: 66, borderRadius: 33, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.15)' },
+  initials: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 23 },
+  editBadge: { position: 'absolute', right: -2, bottom: -2, width: 26, height: 26, borderRadius: 13, borderWidth: 2, borderColor: Night.deep, alignItems: 'center', justifyContent: 'center' },
+  heroText: { flex: 1, gap: 4, minWidth: 120 },
   name: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 21 },
   handle: { color: Night.textMuted, fontFamily: FontFamily.medium, fontSize: 13.5 },
+  heroMascot: { marginRight: -Spacing.one },
+  editButton: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: Spacing.two,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  editText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 14 },
   stats: { flexDirection: 'row', gap: Spacing.two },
   statWrap: { flex: 1 },
   stat: { alignItems: 'center', gap: 2 },
+  statArrow: { position: 'absolute', top: 6, right: 6 },
   statValue: { fontFamily: FontFamily.bold, fontSize: 19 },
   statLabel: { fontFamily: FontFamily.medium, fontSize: 12 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingHorizontal: Spacing.three, paddingVertical: 12 },
-  rowIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  rowTitle: { fontFamily: FontFamily.semibold, fontSize: 15.5 },
-  rowHint: { fontFamily: FontFamily.medium, fontSize: 12.5 },
-  badge: { minWidth: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5 },
-  badgeText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 11 },
-  logout: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.two, borderWidth: 1.5, borderRadius: 999, paddingVertical: 12 },
+  logout: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: Spacing.two, borderWidth: 1.5, borderRadius: 999, paddingVertical: 14 },
   logoutText: { color: '#e11d48', fontFamily: FontFamily.bold, fontSize: 15 },
 });

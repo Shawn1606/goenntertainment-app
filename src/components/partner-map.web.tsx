@@ -1,8 +1,8 @@
-import { useRouter } from 'expo-router';
+import { useIsFocused, useRouter } from 'expo-router';
 import { useMemo } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Mascot } from '@/components/mascot';
+import { useDockSuppression } from '@/components/mascot-dock';
 import { PartnerLogo } from '@/components/partner-logo';
 import { TopBar } from '@/components/top-bar';
 import { Card } from '@/components/ui/card';
@@ -24,6 +24,9 @@ export default function PartnerMapWeb() {
   const colors = useTheme();
   const router = useRouter();
   const market = useMarket();
+  // Wie in der App: Auf der Karte bleibt Goenni weg, die Liste soll ruhig sein.
+  const focused = useIsFocused();
+  useDockSuppression('map', focused);
 
   const places = useMemo(() => {
     const list = partnerPlaces(market.offers);
@@ -34,10 +37,9 @@ export default function PartnerMapWeb() {
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
-      <TopBar />
+      <TopBar decor={false} />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.head}>
-          <Mascot mood="thinking" gesture="look" size={56} />
           <View style={{ flex: 1 }}>
             <Text style={[styles.title, { color: colors.text }]}>Partner in der Nähe</Text>
             <Text style={[styles.note, { color: colors.textSecondary }]}>Die Karte mit Pins gibt es in der App. Hier als Liste.</Text>

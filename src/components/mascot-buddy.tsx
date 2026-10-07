@@ -1,24 +1,27 @@
 /**
  * Goenni zum Anfassen: Figur mit Sprechblase, die auf Antippen reagiert.
  *
- * Tippt man ihn an, springt er, schaut kurz begeistert und sagt den nächsten
- * Satz aus `tips` – Hinweise, die zu deinem Stand passen (src/domain/mascot-tips.ts).
- * Nach ein paar Sekunden wechselt er von selbst weiter, aber langsam: Er soll
- * begleiten, nicht ablenken.
+ * Er ist lebendig (zeigt von selbst Kunststücke). Tippt man ihn an, macht er
+ * sofort eines der großen – Salto, Tanz, Drehung, Jubel –, schaut begeistert
+ * und sagt den nächsten Satz aus `tips` – Hinweise, die zu deinem Stand passen (src/domain/mascot-tips.ts).
+ * Von selbst wechselt der Satz NIE: Goenni redet nur, wenn man ihn antippt.
+ *
+ * Jedes dritte Antippen sagt er statt eines Tipps etwas Freches
+ * (`pokeLine`, src/domain/mascot-lines.ts) – so lohnt sich das Stupsen. Hält
+ * man ihn gedrückt, tanzt er.
  */
 import { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
 
-import { Mascot, type MascotMood } from '@/components/mascot';
+import { Mascot, type MascotMood, type MascotTrick } from '@/components/mascot';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { FontFamily, Radius, Spacing, Stroke } from '@/constants/theme';
+import { pokeLine } from '@/domain/mascot-lines';
+import { pokeReaction } from '@/domain/mascot-mood';
 import { tipAt, type Tip } from '@/domain/mascot-tips';
 import { useTheme } from '@/hooks/use-theme';
 import * as haptics from '@/lib/haptics';
-
-/** So lange steht ein Satz, bevor der nächste kommt. */
-const ROTATE_MS = 9000;
 
 export function MascotBuddy({
   tips,
@@ -35,21 +38,19 @@ export function MascotBuddy({
   const colors = useTheme();
   const reduced = useReducedMotion();
   const [step, setStep] = useState(0);
-  const [jumpKey, setJumpKey] = useState(0);
+  const [pokes, setPokes] = useState(0);
   const [excited, setExcited] = useState<MascotMood | null>(null);
+  /** Ein frecher Satz statt des Tipps – nach jedem dritten Antippen. */
+  const [cheeky, setCheeky] = useState<Tip | null>(null);
+  const [trick, setTrick] = useState<MascotTrick>('flip');
+  const [trickKey, setTrickKey] = useState(0);
   const excitedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (reduced || tips.length < 2) return;
-    const timer = setInterval(() => setStep((s) => s + 1), ROTATE_MS);
-    return () => clearInterval(timer);
-  }, [reduced, tips.length]);
 
   useEffect(() => () => {
     if (excitedTimer.current) clearTimeout(excitedTimer.current);
   }, []);
 
-  const tip = tipAt(tips, step);
+  const tip = cheeky ?? tipAt(tips, step);
 
   /**
    * Neuer Satz = kurz einblenden; der erste Satz steht sofort da. Bewusst kein
@@ -59,26 +60,67 @@ export function MascotBuddy({
   const fade = useSharedValue(1);
   useEffect(() => {
     if (reduced || step === 0) return;
-    fade.value = 0;
-    fade.value = withTiming(1, { duration: 260 });
+    fade.set(0);
+    fade.set(withTiming(1, { duration: 260 }));
   }, [step, reduced, fade]);
   const fadeStyle = useAnimatedStyle(() => ({ opacity: fade.value }));
 
   const poke = () => {
     haptics.press();
-    setStep((s) => s + 1);
-    setJumpKey((k) => k + 1);
-    setExcited('cheer');
+    const count = pokes + 1;
+    if (count % 3 === 0) {
+      setCheeky(pokeLine(count / 3));
+    } else {
+      setCheeky(null);
+      setStep((s) => s + 1);
+    }
+    setPokes(count);
+    // Jedes Antippen ein anderes Kunststück mit passendem Gesicht (src/domain/mascot-mood.ts).
+    const reaction = pokeReaction(count);
+    setTrick(reaction.trick);
+    setTrickKey((k) => k + 1);
+    setExcited(reaction.mood);
     if (excitedTimer.current) clearTimeout(excitedTimer.current);
     excitedTimer.current = setTimeout(() => setExcited(null), 1400);
   };
+
+  const dance = () => {
+    haptics.tap();
+    setCheeky({ line: 'Musik an! Ich tanz für dich.', mood: 'cheer' });
+    setTrick('dance');
+    setTrickKey((k) => k + 1);
+    setExcited('cheer');
+    if (excitedTimer.current) clearTimeout(excitedTimer.current);
+    excitedTimer.current = setTimeout(() => setExcited(null), 1600);
+  };
+
+  // Der freche Satz bleibt nicht ewig stehen.
+  useEffect(() => {
+    if (!cheeky) return;
+    const timer = setTimeout(() => setCheeky(null), 5000);
+    return () => clearTimeout(timer);
+  }, [cheeky]);
 
   const night = tone === 'night';
 
   return (
     <View style={[styles.row, style]}>
-      <PressableScale onPress={poke} haptic="none" scaleTo={0.94} accessibilityRole="button" accessibilityLabel={`Goenni: ${tip.line}. Antippen für den nächsten Tipp.`}>
-        <Mascot mood={excited ?? tip.mood} size={size} gesture="wave" jumpKey={jumpKey} waves={excited !== null} />
+      <PressableScale
+        onPress={poke}
+        onLongPress={dance}
+        delayLongPress={450}
+        haptic="none"
+        scaleTo={0.94}
+        accessibilityRole="button"
+        accessibilityLabel={`Goenni: ${tip.line}${/[.!?…]$/.test(tip.line) ? '' : '.'} Antippen für den nächsten Tipp.`}>
+        <Mascot
+          mood={excited ?? tip.mood}
+          size={size}
+          lively
+          trick={trick}
+          trickKey={trickKey}
+          waves={excited !== null}
+        />
       </PressableScale>
       <Animated.View
         style={[
@@ -112,6 +154,10 @@ const styles = StyleSheet.create({
     borderRadius: Radius.card,
     paddingVertical: Spacing.two + 2,
     paddingHorizontal: Spacing.three,
+    // Platz für drei Zeilen, immer: Wechselt der Satz von zwei auf drei Zeilen,
+    // rutschte sonst alles darunter mit.
+    minHeight: 19 * 3 + (Spacing.two + 2) * 2 + Stroke * 2,
+    justifyContent: 'center',
   },
   /** Das Spitzchen zur Figur hin: ein gedrehtes Quadrat mit zwei Kanten. */
   tail: {

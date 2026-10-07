@@ -46,7 +46,8 @@ export function ShareOfferSheet({ offer, visible, onClose }: { offer: Pick<Offer
 
   const toGroups = () => {
     onClose();
-    router.push('/groups');
+    // Die Gruppen sind ein Tab: zurück unter die Tabs, nicht obendrauf stapeln.
+    router.dismissTo('/groups');
   };
 
   return (

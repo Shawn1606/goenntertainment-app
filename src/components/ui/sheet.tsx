@@ -2,13 +2,16 @@ import type { ReactNode } from 'react';
 import { Animated, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { IconButton } from '@/components/ui/icon-button';
 import { useSheetDrag } from '@/components/ui/use-sheet-drag';
 import { FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
 /**
  * Ein Blatt von unten – für kurze Entscheidungen (Credits kaufen, Zahlart,
- * Gruppe wählen). Nach unten wischen oder daneben tippen schließt es.
+ * Gruppe wählen). Schließen geht auf drei Wegen: der Knopf oben rechts (immer
+ * sichtbar – Wischen allein findet nicht jeder), nach unten wischen am Griff,
+ * oder daneben tippen. Der Inhalt scrollt, wenn er höher ist als das Blatt.
  *
  * Bewusst OHNE Texteingabe darin: Tastatur in einem Modal ist auf Android mit
  * edge-to-edge unzuverlässig (siehe KeyboardForm). Wer tippen muss, bekommt
@@ -48,6 +51,10 @@ export function Sheet({
           ]}>
           <View {...drag.headPan.panHandlers} style={styles.head}>
             <View style={[styles.handle, { backgroundColor: colors.borderStrong }]} />
+            {/* Position an einer Hülle: PressableScale legt `style` auf die innere Fläche. */}
+            <View style={styles.close}>
+              <IconButton icon="close" label="Schließen" onPress={onClose} size={36} />
+            </View>
             {title ? (
               <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">
                 {title}
@@ -55,7 +62,7 @@ export function Sheet({
             ) : null}
             {subtitle ? <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{subtitle}</Text> : null}
           </View>
-          <ScrollView bounces={false} contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
+          <ScrollView bounces={false} style={styles.scroll} contentContainerStyle={styles.body} showsVerticalScrollIndicator keyboardShouldPersistTaps="handled">
             {children}
           </ScrollView>
         </Animated.View>
@@ -77,9 +84,12 @@ const styles = StyleSheet.create({
     maxHeight: '88%',
     alignSelf: 'center',
   },
-  head: { paddingTop: Spacing.two, paddingHorizontal: Spacing.four, paddingBottom: Spacing.two, alignItems: 'center', gap: 4 },
+  head: { paddingTop: Spacing.two, paddingHorizontal: Spacing.six, paddingBottom: Spacing.two, alignItems: 'center', gap: 4 },
+  close: { position: 'absolute', top: Spacing.three, right: Spacing.three },
   handle: { width: 44, height: 5, borderRadius: 3, marginBottom: Spacing.two },
   title: { fontFamily: FontFamily.bold, fontSize: 20, textAlign: 'center' },
   subtitle: { fontFamily: FontFamily.regular, fontSize: 14, textAlign: 'center' },
-  body: { paddingHorizontal: Spacing.four, paddingTop: Spacing.two, gap: Spacing.three },
+  // flexShrink: Ohne darf die Liste höher werden als das Blatt – dann scrollt nichts.
+  scroll: { flexShrink: 1 },
+  body: { paddingHorizontal: Spacing.four, paddingTop: Spacing.two, paddingBottom: Spacing.two, gap: Spacing.three },
 });

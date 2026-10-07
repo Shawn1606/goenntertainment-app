@@ -3,6 +3,7 @@ import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-rou
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { useCelebrate } from '@/components/celebration';
 import { Mascot } from '@/components/mascot';
 import { PlanBadge } from '@/components/plan-badge';
 import { StampCard } from '@/components/stamp-card';
@@ -13,6 +14,7 @@ import { PressableScale } from '@/components/ui/pressable-scale';
 import { QrCode } from '@/components/ui/qr-code';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
 import { formatCredits } from '@/domain/club';
+import { formatClock } from '@/domain/date-format';
 import { useTheme } from '@/hooks/use-theme';
 import { api, errorMessage, type CheckinMethod, type CheckinResult } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -20,6 +22,7 @@ import { notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
 import { cancelNfc, nfcState, readSticker, type NfcState } from '@/lib/nfc';
+import { loadOfflinePass, saveOfflinePass } from '@/lib/offline-cache';
 import { currentCoords } from '@/lib/use-location';
 
 type Mode = 'scan' | 'pass';
@@ -78,6 +81,7 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
   const router = useRouter();
   const { token } = useAuth();
   const market = useMarket();
+  const celebrate = useCelebrate();
   const [permission, requestPermission] = useCameraPermissions();
   const [nfc, setNfc] = useState<NfcState>('unsupported');
   const [busy, setBusy] = useState(false);
@@ -123,7 +127,10 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
         setSticker(scanned);
         if (typeof data.credits === 'number') market.setCredits(data.credits);
         void market.refreshClub();
-        if (data.reward_credits > 0 || data.stamped) feedback.achieved();
+        // Volle Karte = der große Moment; ein einzelner Stempel landet auf der Karte selbst.
+        if (data.reward_credits > 0) {
+          celebrate({ title: 'Stempelkarte voll!', credits: data.reward_credits, kind: 'coins', subtitle: 'Die Credits sind schon auf deinem Konto. Die neue Karte wartet.' });
+        } else if (data.stamped) feedback.achieved();
         else feedback.tapped();
 
         // Kam man von einem Ticket: diese Buchung gleich einlösen, wenn sie hierher gehört.
@@ -175,6 +182,9 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
                 ? `Bei ${result.partner.name}. Noch ${result.stamps.remaining} bis ${result.stamps.reward_credits} Credits.`
                 : `Heute hast du bei ${result.partner.name} schon gestempelt – morgen gibt's den nächsten.`}
           </Text>
+          {result.bonus_stamp ? (
+            <Text style={[styles.resultText, { color: colors.tint }]}>Erstbesuch: doppelter Stempel (Testphase)</Text>
+          ) : null}
         </View>
 
         {/* Bei voller Karte zeigt die frische (leere) Karte nichts – dann die alte als voll. */}
@@ -262,6 +272,8 @@ function PassPanel() {
   const [pass, setPass] = useState<string | null>(null);
   const [left, setLeft] = useState(60);
   const [error, setError] = useState<string | null>(null);
+  /** Kein Netz: der länger gültige Offline-Pass – mit seinem Ablauf. */
+  const [offlineUntil, setOfflineUntil] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -270,8 +282,18 @@ function PassPanel() {
       setPass(data.token);
       setLeft(60);
       setError(null);
+      setOfflineUntil(null);
+      void saveOfflinePass(data).catch(() => undefined);
     } catch (e) {
-      setError(errorMessage(e));
+      // Offline-Pass (Keller, Halle, Kino): der zuletzt beiseitegelegte, solange er gilt.
+      const offline = await loadOfflinePass();
+      if (offline) {
+        setPass(offline.token);
+        setOfflineUntil(offline.expires_at);
+        setError(null);
+      } else {
+        setError(errorMessage(e));
+      }
     }
   }, [token]);
 
@@ -302,8 +324,10 @@ function PassPanel() {
         <PlanBadge plan={user?.club_plan} tone="night" />
         <View style={styles.qrBox}>{pass ? <QrCode value={pass} size={230} label="Dein GÖ4Fun-Pass" /> : <View style={{ width: 230, height: 230 }} />}</View>
         <View style={styles.timer}>
-          <Icon name="refresh" size={14} color={Night.textMuted} />
-          <Text style={styles.timerText}>erneuert sich in {left} s</Text>
+          <Icon name={offlineUntil ? 'clock' : 'refresh'} size={14} color={Night.textMuted} />
+          <Text style={styles.timerText}>
+            {offlineUntil ? `Offline-Pass – gilt bis ${formatClock(offlineUntil)} Uhr` : `erneuert sich in ${left} s`}
+          </Text>
         </View>
       </Card>
       {error ? <Text style={[styles.errorText, { color: '#d97706' }]}>{error}</Text> : null}

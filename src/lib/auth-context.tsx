@@ -9,6 +9,7 @@ import {
   type UpdateProfileInput,
   type User,
 } from '@/lib/api';
+import { clearOfflineCache } from '@/lib/offline-cache';
 import { clearToken, loadToken, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
@@ -123,6 +124,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         }
         await clearToken();
+        await clearOfflineCache().catch(() => undefined);
         setToken(null);
         setUser(null);
       },

@@ -10,10 +10,13 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 
+import { CelebrationProvider } from '@/components/celebration';
 import { CreditsSheetProvider } from '@/components/credits-sheet';
+import { MascotDockProvider } from '@/components/mascot-dock';
 import { renderAppHeader } from '@/components/ui/app-header';
 import { AppSettingsProvider } from '@/lib/app-settings';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
+import { FeaturesProvider } from '@/lib/features-context';
 import { MarketProvider } from '@/lib/market-context';
 import { ThemePreferenceProvider, useResolvedScheme } from '@/lib/theme-preference';
 
@@ -37,39 +40,45 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
   return (
     // `header`: Jeder Screen, der seinen Kopf einschaltet, bekommt den der App –
     // runder Zurück-Knopf statt System-Pfeil, überall gleich (app-header.tsx).
+    // `animation`: Jeder neue Screen schiebt sich von rechts herein – auf iOS UND
+    // Android gleich; Zurückwischen geht über die ganze Breite.
     <Stack
       screenOptions={{
         headerShown: false,
         headerBackTitle: 'Zurück',
         headerBackButtonDisplayMode: 'default',
         header: renderAppHeader,
+        animation: 'slide_from_right',
+        gestureEnabled: true,
+        fullScreenGestureEnabled: true,
       }}>
       <Stack.Protected guard={!!token}>
-        {/* Die drei Tabs: Home · Finden · Karte (src/components/app-tabs.tsx). */}
+        {/* Die Tabs: Home · Gruppen · Finden · Tickets · Karte (src/components/app-tabs.tsx). */}
         <Stack.Screen name="(app)" />
 
         {/* Marktplatz */}
         <Stack.Screen name="offer/[id]" />
         <Stack.Screen name="partner/[id]" />
         <Stack.Screen name="booking/[id]" />
-        <Stack.Screen name="bookings" />
 
         {/* Club, Credits, Stempel, Check-in */}
         <Stack.Screen name="club" />
         <Stack.Screen name="wallet" />
         <Stack.Screen name="stamps" />
+        {/* Stadt-Bingo – nur sichtbar, wenn ein Admin es freischaltet. */}
+        <Stack.Screen name="bingo" />
         <Stack.Screen name="checkin" />
         {/* Aufkleber-Link `…/c/<token>` – leitet in den Check-in. */}
         <Stack.Screen name="c/[token]" />
 
-        {/* Gruppen und Gruppen-Chat */}
-        <Stack.Screen name="groups" />
+        {/* Gruppe im Detail und Gruppen-Chat (die Liste ist ein Tab). */}
         <Stack.Screen name="group/[id]" />
         <Stack.Screen name="join/[code]" />
         <Stack.Screen name="chat" />
 
         {/* Konto: hinter dem Profilbild oben rechts. */}
         <Stack.Screen name="account" />
+        <Stack.Screen name="profile" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="security/password" />
         <Stack.Screen name="security/two-factor" />
@@ -86,8 +95,12 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
         <Stack.Screen name="admin-offer" />
         <Stack.Screen name="admin-vouchers" />
         <Stack.Screen name="admin-users" />
+        <Stack.Screen name="admin-user" />
         <Stack.Screen name="admin-reports" />
         <Stack.Screen name="admin-evidence" />
+        {/* Funktions-Schalter: für alle Nutzer bzw. nur für mich. */}
+        <Stack.Screen name="admin-features" />
+        <Stack.Screen name="admin-preview" />
       </Stack.Protected>
       <Stack.Protected guard={!token}>
         <Stack.Screen name="(auth)" />
@@ -124,12 +137,21 @@ export default function RootLayout() {
     <AuthProvider>
       <ThemePreferenceProvider>
         <AppSettingsProvider>
-          {/* Angebote, Club, Gruppen, Buchungen – ein Stand für alle Screens. */}
-          <MarketProvider>
-            <CreditsSheetProvider>
-              <ThemedNavigation fontsReady={fontsLoaded} />
-            </CreditsSheetProvider>
-          </MarketProvider>
+          {/* Admin-Schalter (Bingo, Saison-Thema) – vor allem, was Deko und Goenni zeichnet. */}
+          <FeaturesProvider>
+            {/* Angebote, Club, Gruppen, Buchungen – ein Stand für alle Screens. */}
+            <MarketProvider>
+              {/* Goenni als Begleiter: Zustand hier, Figur in den Tabs. */}
+              <MascotDockProvider>
+                <CreditsSheetProvider>
+                  {/* Feier-Moment (Buchung, Abo, Gutschein) liegt über der Navigation. */}
+                  <CelebrationProvider>
+                    <ThemedNavigation fontsReady={fontsLoaded} />
+                  </CelebrationProvider>
+                </CreditsSheetProvider>
+              </MascotDockProvider>
+            </MarketProvider>
+          </FeaturesProvider>
         </AppSettingsProvider>
       </ThemePreferenceProvider>
     </AuthProvider>

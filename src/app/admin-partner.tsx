@@ -22,7 +22,19 @@ import { pickImage } from '@/lib/pick-image';
 import { shareText } from '@/lib/share';
 
 type Draft = Record<
-  'name' | 'tagline' | 'description' | 'address' | 'city' | 'lat' | 'lng' | 'phone' | 'website' | 'instagram' | 'opening_hours' | 'max_discount_percent',
+  | 'name'
+  | 'tagline'
+  | 'description'
+  | 'address'
+  | 'city'
+  | 'lat'
+  | 'lng'
+  | 'phone'
+  | 'website'
+  | 'instagram'
+  | 'opening_hours'
+  | 'max_discount_percent'
+  | 'quiet_times',
   string
 >;
 
@@ -39,7 +51,15 @@ const EMPTY: Draft = {
   instagram: '',
   opening_hours: '',
   max_discount_percent: '',
+  quiet_times: '',
 };
+
+/** Ja / Nein / Unbekannt – „unbekannt" ist ehrlicher als ein geratenes Nein. */
+const TRI: { value: boolean | null; label: string }[] = [
+  { value: true, label: 'Ja' },
+  { value: false, label: 'Nein' },
+  { value: null, label: 'Unbekannt' },
+];
 
 function draftOf(p: AdminPartner): Draft {
   return {
@@ -55,6 +75,7 @@ function draftOf(p: AdminPartner): Draft {
     instagram: p.instagram ?? '',
     opening_hours: p.opening_hours ?? '',
     max_discount_percent: p.max_discount_percent === null ? '' : String(p.max_discount_percent),
+    quiet_times: p.quiet_times ?? '',
   };
 }
 
@@ -62,6 +83,31 @@ function draftOf(p: AdminPartner): Draft {
  * Einen Partner anlegen oder bearbeiten – mit allem, was dazugehört: Bilder,
  * Kategorie, Standort (für Karte und Check-in), Aufkleber-Code, Team und Angebote.
  */
+function TriRow({ label, value, onChange }: { label: string; value: boolean | null; onChange: (v: boolean | null) => void }) {
+  const colors = useTheme();
+  return (
+    <View style={styles.triRow}>
+      <Text style={[styles.triLabel, { color: colors.text }]}>{label}</Text>
+      <View style={styles.triChips}>
+        {TRI.map((t) => {
+          const on = value === t.value;
+          return (
+            <PressableScale
+              key={t.label}
+              onPress={() => onChange(t.value)}
+              haptic="select"
+              accessibilityRole="radio"
+              accessibilityState={{ selected: on }}
+              style={[styles.chip, { borderColor: on ? colors.tint : colors.border, backgroundColor: on ? colors.tint : colors.background }]}>
+              <Text style={[styles.chipText, { color: on ? '#ffffff' : colors.text }]}>{t.label}</Text>
+            </PressableScale>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export default function AdminPartnerScreen() {
   const { id } = useLocalSearchParams<{ id?: string }>();
   const router = useRouter();
@@ -75,6 +121,8 @@ export default function AdminPartnerScreen() {
   const [interestId, setInterestId] = useState<number | null>(null);
   const [active, setActive] = useState(true);
   const [featured, setFeatured] = useState(false);
+  const [wheelchair, setWheelchair] = useState<boolean | null>(null);
+  const [kids, setKids] = useState<boolean | null>(null);
   const [staffEmail, setStaffEmail] = useState('');
   const [saving, setSaving] = useState(false);
   const [errors, setErrors] = useState<Record<string, string[]>>({});
@@ -85,6 +133,8 @@ export default function AdminPartnerScreen() {
     setInterestId(p.interest_id);
     setActive(p.is_active);
     setFeatured(p.is_featured);
+    setWheelchair(p.wheelchair_accessible ?? null);
+    setKids(p.kid_friendly ?? null);
   };
 
   useFocusEffect(
@@ -117,6 +167,9 @@ export default function AdminPartnerScreen() {
       interest_id: interestId,
       is_active: active,
       is_featured: featured,
+      wheelchair_accessible: wheelchair,
+      kid_friendly: kids,
+      quiet_times: draft.quiet_times.trim() || null,
     };
     try {
       const { data } = partner ? await api.admin.updatePartner(token, partner.id, input) : await api.admin.createPartner(token, input);
@@ -229,7 +282,11 @@ export default function AdminPartnerScreen() {
         {field('phone', 'Telefon', { keyboardType: 'phone-pad' })}
         {field('website', 'Webseite (https://…)', { autoCapitalize: 'none', keyboardType: 'url' })}
         {field('instagram', 'Instagram (ohne @)', { autoCapitalize: 'none' })}
-        {field('max_discount_percent', 'Höchstrabatt in % (leer = 35 %)', { keyboardType: 'number-pad' })}
+        {field('max_discount_percent', 'Höchstrabatt in % (leer = 20 %)', { keyboardType: 'number-pad' })}
+        <Text style={[styles.label, { color: colors.textSecondary }]}>Barrierefreiheit – erscheint auf der Partnerseite und im Filter „Barrierefrei“</Text>
+        <TriRow label="Rollstuhlgerecht" value={wheelchair} onChange={setWheelchair} />
+        <TriRow label="Kinderfreundlich" value={kids} onChange={setKids} />
+        {field('quiet_times', 'Ruhige Zeiten (z. B. „Di–Do vormittags“)')}
         <ToggleRow label="Aktiv" hint="Pausierte Partner sind in der App unsichtbar." value={active} onChange={setActive} />
         <ToggleRow label="Hervorheben" hint="Steht auf der Startseite weiter vorn." value={featured} onChange={setFeatured} />
         <Button title={partner ? 'Speichern' : 'Partner anlegen'} onPress={save} loading={saving} disabled={!draft.name.trim()} />
@@ -301,6 +358,9 @@ export default function AdminPartnerScreen() {
 }
 
 const styles = StyleSheet.create({
+  triRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: Spacing.two, flexWrap: 'wrap' },
+  triLabel: { fontFamily: FontFamily.semibold, fontSize: 15 },
+  triChips: { flexDirection: 'row', gap: Spacing.one },
   flex: { flex: 1 },
   images: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   imageButton: { alignItems: 'center', gap: 4 },

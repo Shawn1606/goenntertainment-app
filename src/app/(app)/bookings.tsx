@@ -1,34 +1,53 @@
-import { Stack, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { BookingTicket } from '@/components/booking-ticket';
 import { MascotEmpty } from '@/components/mascot';
-import { PartnerLogo } from '@/components/partner-logo';
+import { useGarlandSpace } from '@/components/seasonal-decor';
+import { TopBar } from '@/components/top-bar';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Entrance } from '@/components/ui/entrance';
 import { Icon } from '@/components/ui/icon';
-import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
-import { BOOKING_STATUS_LABEL } from '@/domain/booking-status';
-import { formatCredits, formatEuro } from '@/domain/club';
-import { formatDay } from '@/domain/date-format';
+import { PressableScale } from '@/components/ui/pressable-scale';
+import { FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
+import { expiryInfo } from '@/domain/booking-status';
+import { expiryWords } from '@/domain/mascot-lines';
+import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import type { Booking } from '@/lib/api';
+import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
 
-/** Alle eigenen Buchungen: offene oben, Vergangenes darunter. */
+/**
+ * Tickets – alle eigenen Buchungen, ein eigener Tab.
+ *
+ * Oben in einem Satz, was das hier ist und wie man einlöst; dann umschalten
+ * zwischen „Offen" und „Vergangen". Offene Tickets sind nach Ablaufdatum
+ * sortiert – was zuerst verfällt, steht oben, und ein Hinweis warnt, wenn
+ * etwas in den nächsten Tagen abläuft.
+ */
 export default function BookingsScreen() {
   const router = useRouter();
   const colors = useTheme();
   const market = useMarket();
   const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<'open' | 'past'>('open');
+  const garland = useGarlandSpace();
 
   useEffect(() => {
     void market.refreshBookings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const open = market.bookings.filter((b) => b.status === 'confirmed');
+  const now = new Date();
+  const open = market.bookings
+    .filter((b) => b.status === 'confirmed')
+    .slice()
+    .sort((a, b) => new Date(a.valid_until).getTime() - new Date(b.valid_until).getTime());
   const past = market.bookings.filter((b) => b.status !== 'confirmed');
+  const urgent = open.filter((b) => expiryInfo(b.valid_until, now)?.tone === 'urgent');
+  const shown = tab === 'open' ? open : past;
 
   const refresh = async () => {
     setRefreshing(true);
@@ -38,73 +57,115 @@ export default function BookingsScreen() {
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
-      <Stack.Screen options={{ headerShown: true, title: 'Buchungen' }} />
-      <ScrollView
-        contentContainerStyle={styles.content}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.tint} />}>
-        {market.bookings.length === 0 ? (
+      <TopBar />
+      <ScrollView contentContainerStyle={[styles.content, { paddingTop: Spacing.three + garland }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.tint} />}>
+        <View style={styles.head}>
+          <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">
+            Deine Tickets
+          </Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+            Alles, was du gebucht hast. Beim Partner zeigst du den Code – oder hältst dein Handy an den GÖ4Fun-Aufkleber.
+          </Text>
+        </View>
+
+        <View style={styles.how}>
+          <HowChip icon="ticket" text="Buchen" />
+          <Icon name="chevron-right" size={14} color={colors.textSecondary} />
+          <HowChip icon="nfc" text="Vor Ort zeigen" />
+          <Icon name="chevron-right" size={14} color={colors.textSecondary} />
+          <HowChip icon="stamp" text="Stempel kassieren" />
+        </View>
+
+        {urgent.length > 0 ? (
+          <View style={styles.alert} accessibilityRole="alert">
+            <Icon name="hourglass" size={18} color="#e11d48" />
+            <Text style={styles.alertText}>
+              {urgent.length === 1
+                ? `„${urgent[0].offer_title}" verfällt ${expiryWords(expiryInfo(urgent[0].valid_until, now)?.days ?? 0)} – jetzt einlösen!`
+                : `${urgent.length} Tickets verfallen in den nächsten Tagen.`}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={[styles.segment, { backgroundColor: colors.backgroundSelected }]} accessibilityRole="tablist">
+          <Segment label={`Offen${open.length ? ` (${open.length})` : ''}`} active={tab === 'open'} onPress={() => setTab('open')} />
+          <Segment label={`Vergangen${past.length ? ` (${past.length})` : ''}`} active={tab === 'past'} onPress={() => setTab('past')} />
+        </View>
+
+        {shown.length === 0 ? (
           <Card>
             <MascotEmpty mood="thinking" gesture="wave">
-              <Text style={[styles.emptyTitle, { color: colors.text }]}>Noch nichts gebucht</Text>
+              <Text style={[styles.emptyTitle, { color: colors.text }]}>{tab === 'open' ? 'Keine offenen Tickets' : 'Noch nichts Vergangenes'}</Text>
               <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                Such dir im Finder etwas aus – allein oder mit deiner Gruppe.
+                {tab === 'open' ? 'Unter „Entdecken“ findest du, was zu dir oder deiner Gruppe passt.' : 'Eingelöste und abgelaufene Tickets landen hier.'}
               </Text>
-              <Button title="Zum Finder" icon="search" onPress={() => router.navigate('/finder')} />
+              {tab === 'open' ? <Button title="Jetzt entdecken" icon="compass" onPress={() => router.navigate('/finder')} /> : null}
             </MascotEmpty>
           </Card>
         ) : null}
 
-        {open.length > 0 ? <Text style={[styles.section, { color: colors.text }]}>Offen</Text> : null}
-        {open.map((b) => (
-          <BookingRow key={b.id} booking={b} />
-        ))}
-
-        {past.length > 0 ? <Text style={[styles.section, { color: colors.text }]}>Vergangen</Text> : null}
-        {past.map((b) => (
-          <BookingRow key={b.id} booking={b} />
+        {shown.map((b, i) => (
+          <Entrance key={`${tab}-${b.id}`} index={i}>
+            <BookingTicket booking={b} />
+          </Entrance>
         ))}
       </ScrollView>
     </View>
   );
 }
 
-function BookingRow({ booking }: { booking: Booking }) {
+function HowChip({ icon, text }: { icon: UiIconName; text: string }) {
   const colors = useTheme();
-  const router = useRouter();
-  const open = booking.status === 'confirmed';
-
   return (
-    <Card onPress={() => router.push({ pathname: '/booking/[id]', params: { id: String(booking.id) } })} accessibilityLabel={booking.offer_title}>
-      <View style={[styles.row, !open && styles.dim]}>
-        <PartnerLogo name={booking.partner_name} uri={booking.partner?.logo_url} size={46} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
-            {booking.offer_title}
-          </Text>
-          <Text style={[styles.meta, { color: colors.textSecondary }]} numberOfLines={1}>
-            {booking.partner_name} · {booking.people} P. ·{' '}
-            {booking.pay_method === 'money' ? formatEuro(booking.total_cents) : `${formatCredits(booking.total_credits)} Credits`}
-          </Text>
-          <Text style={[styles.meta, { color: open ? colors.tint : colors.textSecondary }]}>
-            {BOOKING_STATUS_LABEL[booking.status]}
-            {open ? ` · bis ${formatDay(booking.valid_until)}` : ''}
-            {booking.group ? ` · ${booking.group.name}` : ''}
-          </Text>
-        </View>
-        <Icon name="chevron-right" size={18} color={colors.textSecondary} />
-      </View>
-    </Card>
+    <View style={[styles.howChip, { backgroundColor: colors.background, borderColor: colors.border }]}>
+      <Icon name={icon} size={14} color={colors.tint} />
+      <Text style={[styles.howText, { color: colors.text }]} numberOfLines={1}>
+        {text}
+      </Text>
+    </View>
+  );
+}
+
+function Segment({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  const colors = useTheme();
+  return (
+    <PressableScale
+      onPress={() => {
+        if (!active) feedback.selected();
+        onPress();
+      }}
+      haptic="none"
+      accessibilityRole="tab"
+      accessibilityState={{ selected: active }}
+      style={[styles.segmentItem, active && { backgroundColor: colors.background, borderColor: colors.border }]}>
+      <Text style={[styles.segmentText, { color: active ? colors.text : colors.textSecondary }]}>{label}</Text>
+    </PressableScale>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  content: { padding: Spacing.three, gap: Spacing.two, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.six },
-  section: { fontFamily: FontFamily.bold, fontSize: 17, marginTop: Spacing.two },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
-  dim: { opacity: 0.65 },
-  title: { fontFamily: FontFamily.bold, fontSize: 15.5 },
-  meta: { fontFamily: FontFamily.medium, fontSize: 13 },
+  content: { padding: Spacing.three, gap: Spacing.three, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.six + 40 },
+  head: { gap: 4 },
+  title: { fontFamily: FontFamily.bold, fontSize: 26, letterSpacing: -0.4 },
+  subtitle: { fontFamily: FontFamily.medium, fontSize: 14, lineHeight: 20 },
+  how: { flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' },
+  howChip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: Stroke, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  howText: { fontFamily: FontFamily.semibold, fontSize: 12 },
+  alert: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderRadius: Radius.field,
+    borderWidth: 1,
+    borderColor: 'rgba(225,29,72,0.35)',
+    backgroundColor: 'rgba(225,29,72,0.08)',
+    padding: Spacing.three,
+  },
+  alertText: { flex: 1, color: '#e11d48', fontFamily: FontFamily.bold, fontSize: 13.5, lineHeight: 18 },
+  segment: { flexDirection: 'row', borderRadius: 999, padding: 4, gap: 4 },
+  segmentItem: { flex: 1, alignItems: 'center', paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: 'transparent' },
+  segmentText: { fontFamily: FontFamily.bold, fontSize: 14 },
   emptyTitle: { fontFamily: FontFamily.bold, fontSize: 19 },
   emptyText: { fontFamily: FontFamily.medium, fontSize: 14, textAlign: 'center', marginBottom: Spacing.two },
 });

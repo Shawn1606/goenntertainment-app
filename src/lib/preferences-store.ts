@@ -55,6 +55,14 @@ export type AppSettings = {
    * abschalten – also fragen wir. Details in `src/lib/sound.ts`.
    */
   sounds: boolean;
+  /**
+   * Goenni sitzt unten über der Tab-Leiste, sagt ab und zu etwas und reagiert
+   * aufs Antippen. An, weil er die App erklärt; abschaltbar für alle, die es
+   * lieber ruhig mögen (src/components/mascot-dock.tsx).
+   */
+  mascotCompanion: boolean;
+  /** Kleine Saison-Deko (Kürbisse, Christbaumkugeln …) in Kopfzeile und Karten. */
+  seasonalDecor: boolean;
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -66,6 +74,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   useLocation: true,
   haptics: true,
   sounds: false,
+  mascotCompanion: true,
+  seasonalDecor: true,
 };
 
 /** Nur bekannte Schlüssel übernehmen – alles andere kommt aus den Vorgaben. */

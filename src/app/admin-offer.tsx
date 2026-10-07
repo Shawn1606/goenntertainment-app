@@ -32,7 +32,9 @@ type Draft = Record<
   | 'max_age'
   | 'duration'
   | 'valid_days'
-  | 'sort',
+  | 'sort'
+  | 'daily_capacity'
+  | 'platinum_reserved',
   string
 >;
 
@@ -50,6 +52,8 @@ const EMPTY: Draft = {
   duration: '',
   valid_days: '90',
   sort: '0',
+  daily_capacity: '',
+  platinum_reserved: '0',
 };
 
 const str = (n: number | null | undefined) => (n === null || n === undefined ? '' : String(n));
@@ -98,6 +102,8 @@ export default function AdminOfferScreen() {
       duration: str(o.duration_minutes),
       valid_days: String(o.valid_days),
       sort: String(o.sort),
+      daily_capacity: str(o.daily_capacity),
+      platinum_reserved: String(o.platinum_reserved ?? 0),
     });
   };
 
@@ -135,6 +141,8 @@ export default function AdminOfferScreen() {
       sort: numberOrNull(draft.sort) ?? 0,
       is_active: active,
       is_featured: featured,
+      daily_capacity: numberOrNull(draft.daily_capacity),
+      platinum_reserved: numberOrNull(draft.platinum_reserved) ?? 0,
     };
     try {
       const { data } = offer ? await api.admin.updateOffer(token, offer.id, input) : await api.admin.createOffer(token, input);
@@ -242,6 +250,13 @@ export default function AdminOfferScreen() {
         <View style={styles.pair}>
           <View style={styles.flex}>{field('duration', 'Dauer in Minuten', { keyboardType: 'number-pad' })}</View>
           <View style={styles.flex}>{field('valid_days', 'Einlösbar (Tage)', { keyboardType: 'number-pad' })}</View>
+        </View>
+        <Text style={[styles.label, { color: colors.textSecondary }]}>
+          Testphase: Plätze pro Tag (leer = unbegrenzt). Mit Kontingent müssen Kund:innen einen Tag wählen; die reservierten Plätze bekommen nur Platinum-Mitglieder.
+        </Text>
+        <View style={styles.pair}>
+          <View style={styles.flex}>{field('daily_capacity', 'Plätze pro Tag', { keyboardType: 'number-pad' })}</View>
+          <View style={styles.flex}>{field('platinum_reserved', 'davon nur Platinum', { keyboardType: 'number-pad' })}</View>
         </View>
 
         <Text style={[styles.label, { color: colors.textSecondary }]}>Drinnen oder draußen?</Text>

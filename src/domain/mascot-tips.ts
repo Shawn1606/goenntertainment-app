@@ -9,7 +9,9 @@
  * Reihenfolge = Wichtigkeit: Was Geld oder Credits bringt, steht vorn; die
  * Begrüßung ist der Rückfall, wenn sonst nichts zu sagen ist.
  */
+import { SEASON_LINES, weekdayLine } from './mascot-lines.ts';
 import type { MascotMood } from './mascot-mood.ts';
+import type { SeasonKey } from './season.ts';
 
 export type TipContext = {
   firstName: string | null;
@@ -21,6 +23,13 @@ export type TipContext = {
   plan: string;
   openBookings: number;
   groups: number;
+  /** Für einen Satz zur Saison (Kürbis, Advent …). Ohne Angabe kein Saison-Satz. */
+  season?: SeasonKey;
+  /** 0 = Sonntag … 6 = Samstag. Ohne Angabe kein Wochentags-Satz. */
+  weekday?: number;
+  /** Credits, die als Nächstes verfallen – und in wie vielen Tagen. */
+  expiringCredits?: number;
+  expiringDays?: number;
 };
 
 export type Tip = { line: string; mood: MascotMood };
@@ -34,14 +43,28 @@ function greeting(hour: number, name: string | null): string {
   return `Späte Runde${who}?`;
 }
 
+/** Ab so wenigen Tagen vor dem Verfall erinnert Goenni (wie die Mail, 30 Tage vorher). */
+export const EXPIRY_WARN_DAYS = 30;
+
 export function homeTips(ctx: TipContext): Tip[] {
   const tips: Tip[] = [];
+
+  // Bald verfallende Credits zuerst – das kostet sonst echtes Guthaben.
+  if (ctx.expiringCredits && ctx.expiringCredits > 0 && ctx.expiringDays !== undefined && ctx.expiringDays <= EXPIRY_WARN_DAYS) {
+    tips.push({
+      line:
+        ctx.expiringDays <= 1
+          ? `${ctx.expiringCredits} Credits verfallen morgen – schnell noch was buchen!`
+          : `${ctx.expiringCredits} Credits verfallen in ${ctx.expiringDays} Tagen – lös sie ein, bevor sie weg sind!`,
+      mood: ctx.expiringDays <= 7 ? 'oops' : 'thinking',
+    });
+  }
 
   if (ctx.openBookings > 0) {
     tips.push({
       line:
         ctx.openBookings === 1
-          ? 'Du hast eine offene Buchung – beim Partner einfach Handy an den Aufkleber halten!'
+          ? 'Du hast eine offene Buchung – vor Ort Handy an den Aufkleber halten!'
           : `Du hast ${ctx.openBookings} offene Buchungen. Viel Spaß!`,
       mood: 'happy',
     });
@@ -52,7 +75,7 @@ export function homeTips(ctx: TipContext): Tip[] {
   } else if (ctx.stampsFilled > 0) {
     tips.push({ line: `Noch ${ctx.stampsRemaining} Stempel, dann gibt's ${ctx.rewardCredits} Credits geschenkt.`, mood: 'happy' });
   } else {
-    tips.push({ line: `Jeder Besuch bei einem Partner = 1 Stempel. 10 Stempel = ${ctx.rewardCredits} Credits!`, mood: 'idle' });
+    tips.push({ line: `Eine Karte für alle Partner: 10 Stempel = ${ctx.rewardCredits} Credits!`, mood: 'idle' });
   }
 
   if (ctx.groups === 0) {
@@ -66,7 +89,16 @@ export function homeTips(ctx: TipContext): Tip[] {
   }
 
   if (ctx.credits > 0) {
-    tips.push({ line: `Du hast ${ctx.credits} Credits – damit kannst du bei Partnern bezahlen.`, mood: 'happy' });
+    tips.push({ line: `Du hast ${ctx.credits} Credits – damit zahlst du bei allen Partnern.`, mood: 'happy' });
+  }
+
+  if (ctx.season) {
+    const season = SEASON_LINES[ctx.season];
+    if (season.length > 0) tips.push(season[ctx.hour % season.length]);
+  }
+  if (ctx.weekday !== undefined) {
+    const day = weekdayLine(ctx.weekday, ctx.hour);
+    if (day) tips.push(day);
   }
 
   tips.push({ line: greeting(ctx.hour, ctx.firstName), mood: 'happy' });

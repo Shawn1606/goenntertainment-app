@@ -62,10 +62,26 @@ test('Budget: knapp drüber bleibt, weit drüber fliegt raus', () => {
 test('Preis pro Person enthält den Gruppenrabatt', () => {
   const m = matchOffer(RULES, offer({ id: 1, price_cents: 2000 }), { ...DEFAULT_CRITERIA, people: 4 }, { plan: 'gold', distanceKm: null });
   assert.ok(m);
-  // Gold, 4 Personen: 10 % + 10 % × 1,5 = 25 %
-  assert.equal(m.percent, 25);
-  assert.equal(m.totalCents, 6000);
-  assert.equal(m.perPersonCents, 1500);
+  // Gold, 4 Personen: 5 % Club + 5 % Gruppe = 10 %
+  assert.equal(m.percent, 10);
+  assert.equal(m.totalCents, 7200);
+  assert.equal(m.perPersonCents, 1800);
+});
+
+test('Barrierefreie Filter: nur ausdrücklich angegebene Partner', () => {
+  const access = { wheelchair: true, quiet: false, kids: false };
+  const yes = offer({ id: 1, partner: { wheelchair_accessible: true } });
+  const no = offer({ id: 2, partner: { wheelchair_accessible: false } });
+  const unknown = offer({ id: 3, partner: null });
+  assert.ok(matchOffer(RULES, yes, { ...DEFAULT_CRITERIA, access }, ctx));
+  assert.equal(matchOffer(RULES, no, { ...DEFAULT_CRITERIA, access }, ctx), null);
+  assert.equal(matchOffer(RULES, unknown, { ...DEFAULT_CRITERIA, access }, ctx), null);
+  // Ohne Filter bleibt alles drin.
+  assert.ok(matchOffer(RULES, unknown, DEFAULT_CRITERIA, ctx));
+
+  const quiet = { wheelchair: false, quiet: true, kids: true };
+  assert.ok(matchOffer(RULES, offer({ id: 4, partner: { kid_friendly: true, quiet_times: 'Di vormittags' } }), { ...DEFAULT_CRITERIA, access: quiet }, ctx));
+  assert.equal(matchOffer(RULES, offer({ id: 5, partner: { kid_friendly: true, quiet_times: ' ' } }), { ...DEFAULT_CRITERIA, access: quiet }, ctx), null);
 });
 
 test('Kategorie und drinnen/draußen filtern', () => {

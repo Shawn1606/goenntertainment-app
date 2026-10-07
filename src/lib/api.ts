@@ -1,7 +1,9 @@
 import { Platform } from 'react-native';
 
 import { API_URL } from '@/constants/config';
-import type { ClubPlan, PlanKey } from '@/domain/club';
+import type { ClubPlan, GroupTier, PlanKey } from '@/domain/club';
+import type { AdminFeatureState, BingoState, FeatureKey, FeatureState, PreviewMode } from '@/domain/features';
+import type { NewChallengeInput, TestphaseState } from '@/domain/testphase';
 
 /**
  * Die Schnittstelle zum Laravel-Backend (api/). Typen hier, Regeln in
@@ -39,6 +41,8 @@ export type User = {
   club_since: string | null;
   club_renews_at: string | null;
   club_cancel_at_period_end: boolean;
+  /** Monats- oder Jahresabo. */
+  club_interval?: ClubInterval;
   /** Darf im Partner-Modus Kunden-Pässe scannen. */
   is_partner_staff: boolean;
 };
@@ -87,7 +91,15 @@ export type BanInfo = {
 
 export type OfferKind = 'activity' | 'perk';
 
-export type OfferPartner = {
+/** Angaben zur Barrierefreiheit eines Partners: true/false, null = unbekannt. */
+export type PartnerAccess = {
+  wheelchair_accessible?: boolean | null;
+  kid_friendly?: boolean | null;
+  /** z. B. „Di–Do vormittags" */
+  quiet_times?: string | null;
+};
+
+export type OfferPartner = PartnerAccess & {
   id: number;
   slug: string;
   name: string;
@@ -121,10 +133,22 @@ export type Offer = {
   indoor: boolean | null;
   valid_days: number;
   is_featured: boolean;
+  /** Testphase: Plätze pro Tag (null = unbegrenzt), davon für Platinum reserviert. */
+  daily_capacity?: number | null;
+  platinum_reserved?: number;
   partner: OfferPartner | null;
 };
 
-export type Partner = {
+/** Freie Plätze an einem Tag (nur bei Angeboten mit Tageskontingent). */
+export type Availability = {
+  capacity: number | null;
+  booked: number;
+  reserved: number;
+  available: number | null;
+  available_for_you: number | null;
+};
+
+export type Partner = PartnerAccess & {
   id: number;
   slug: string;
   name: string;
@@ -205,6 +229,10 @@ export type Booking = {
   redeemed_at: string | null;
   cancelled_at: string | null;
   created_at: string;
+  /** Kalender-Export: Pfad unter der API mit Signatur (öffnet der Kalender selbst). */
+  calendar_path?: string;
+  /** Testphase: Rückmeldung an den Partner schon abgegeben? */
+  feedback_given?: boolean;
   /** Nur in der Gruppenansicht: wer gebucht hat. */
   booked_by?: string | null;
   /** Nur im Partner-Modus. */
@@ -224,14 +252,22 @@ export type StampCard = {
   fields: number;
   completed_cards: number;
   remaining: number;
+  /** Was die LAUFENDE Karte bringt, wenn sie voll ist – je Club-Stufe, golden ×1,5. */
   reward_credits: number;
+  /** Ist die laufende Karte eine goldene (jede `golden_every`-te)? */
+  golden?: boolean;
+  golden_every?: number;
+  /** Karten nach der laufenden bis zur nächsten goldenen (0 = die laufende ist golden). */
+  cards_until_golden?: number;
   /** Die Stempel der laufenden Karte, ältester zuerst. */
   stamps: StampEntry[];
 };
 
-export type CreditPack = { credits: number; price_cents: number };
+export type CreditPack = { credits: number; bonus: number; price_cents: number };
 
 export type PaymentsMode = 'test' | 'off';
+
+export type ClubInterval = 'month' | 'year';
 
 export type ClubState = {
   plan: PlanKey;
@@ -239,15 +275,36 @@ export type ClubState = {
   since: string | null;
   renews_at: string | null;
   cancel_at_period_end: boolean;
+  interval?: ClubInterval;
   credits: number;
+  /** Der Posten, der als Nächstes verfällt – oder null, wenn nichts verfällt. */
+  next_expiry: CreditLot | null;
+  /** Wie lange neue Gutschriften in der aktuellen Stufe gelten, z. B. „18 Monate". */
+  credit_validity_label?: string;
+  /** Erstkauf-Bonus in Prozent, solange das Konto noch nie ein Paket gekauft hat (sonst 0). */
+  first_purchase_bonus_percent?: number;
   stamps: StampCard;
   plans: ClubPlan[];
-  group_discount: { minPeople: number; percent: number }[];
+  group_discount: GroupTier[];
   packs: CreditPack[];
   payments_mode: PaymentsMode;
 };
 
-export type CreditTransactionKind = 'purchase' | 'voucher' | 'stamp_reward' | 'monthly' | 'booking' | 'refund' | 'admin';
+export type CreditTransactionKind =
+  | 'purchase'
+  | 'voucher'
+  | 'stamp_reward'
+  | 'monthly'
+  | 'booking'
+  | 'refund'
+  | 'admin'
+  | 'expired'
+  /** Testphase: Challenge, Bingo-Reihe oder Serien-Bonus abgeholt. */
+  | 'challenge'
+  /** Testphase: Credits für eine Rückmeldung an den Partner. */
+  | 'feedback'
+  /** Testphase: Anteil an einer Gruppenbuchung gezahlt bzw. bekommen. */
+  | 'share';
 
 export type CreditTransaction = {
   id: number;
@@ -256,10 +313,30 @@ export type CreditTransaction = {
   kind: CreditTransactionKind;
   description: string;
   created_at: string | null;
+  /** Nur bei Gutschriften: bis wann sie gilt. */
+  expires_at?: string | null;
+};
+
+/** Ein Credit-Posten: Was von einer Gutschrift übrig ist und wann es verfällt. */
+export type CreditLot = {
+  /** Davon noch übrig. */
+  credits: number;
+  /** Ursprünglich gutgeschrieben. */
+  amount?: number;
+  /** Woher die Gutschrift kam (Kauf, Monats-Credits, Stempelkarte …). */
+  kind?: CreditTransactionKind | null;
+  expires_at: string | null;
+  created_at: string | null;
 };
 
 export type WalletState = {
   balance: number;
+  /** Was noch gilt, der früheste Verfall zuerst. */
+  lots: CreditLot[];
+  /** Wie lange neue Gutschriften in der aktuellen Stufe gelten, z. B. „18 Monate". */
+  validity_label: string;
+  /** Erstkauf-Bonus in Prozent, solange das Konto noch nie ein Paket gekauft hat (sonst 0). */
+  first_purchase_bonus_percent: number;
   transactions: CreditTransaction[];
   packs: CreditPack[];
   payments_mode: PaymentsMode;
@@ -270,6 +347,8 @@ export type CheckinMethod = 'nfc' | 'qr';
 export type CheckinResult = {
   partner: { id: number; name: string };
   stamped: boolean;
+  /** Testphase (nur Admins): erster Besuch bei diesem Partner = doppelter Stempel. */
+  bonus_stamp?: boolean;
   reward_credits: number;
   stamps: StampCard;
   /** Fehlt im Partner-Modus (der Partner sieht fremde Stände nicht). */
@@ -279,7 +358,24 @@ export type CheckinResult = {
   customer?: { first_name: string };
 };
 
-export type PassToken = { token: string; expires_at: string };
+export type PassToken = {
+  token: string;
+  expires_at: string;
+  /** Länger gültiger Pass – nur zeigen, wenn gerade kein Netz da ist. */
+  offline_token?: string;
+  offline_expires_at?: string;
+};
+
+/** Ein Abzeichen mit Datum (GET /badges). */
+export type Badge = {
+  key: string;
+  title: string;
+  description: string;
+  icon: string;
+  earned: boolean;
+  earned_at: string | null;
+  progress: { current: number; target: number } | null;
+};
 
 /* ======================================================= Gruppen & Chat */
 
@@ -372,10 +468,20 @@ export type AdminUser = {
   credits_balance: number;
   groups_count: number;
   bookings_count: number;
+  /** Alle Stempel des Kontos (auch die schon eingelösten Karten). */
+  stamps_total: number;
   banned: boolean;
   banned_permanent: boolean;
   banned_until: string | null;
   ban_reason: string | null;
+};
+
+/** Ein Konto im Admin-Bereich – mit Stempelkarte und letzten Credit-Bewegungen. */
+export type AdminUserDetail = AdminUser & {
+  /** Das eigene Konto: Sperren und Löschen gibt es dann nicht. */
+  is_self: boolean;
+  stamps: StampCard;
+  transactions: CreditTransaction[];
 };
 
 export type AdminEvidence = {
@@ -433,6 +539,9 @@ export type PartnerInput = Partial<{
   max_discount_percent: number | null;
   is_active: boolean;
   is_featured: boolean;
+  wheelchair_accessible: boolean | null;
+  kid_friendly: boolean | null;
+  quiet_times: string | null;
 }>;
 
 export type AdminOffer = Offer & {
@@ -462,6 +571,8 @@ export type OfferInput = Partial<{
   is_active: boolean;
   is_featured: boolean;
   sort: number;
+  daily_capacity: number | null;
+  platinum_reserved: number;
 }>;
 
 export type VoucherBatch = {
@@ -499,6 +610,11 @@ export class ApiError extends Error {
   /** Erste Fehlermeldung – praktisch für eine einfache Anzeige. */
   firstError(): string {
     return Object.values(this.errors)[0]?.[0] ?? this.message;
+  }
+
+  /** Die Meldung zu einem Feld (Validierung), sonst `null` – für Fehler direkt am Eingabefeld. */
+  fieldError(field: string): string | null {
+    return this.errors[field]?.[0] ?? null;
   }
 }
 
@@ -602,6 +718,11 @@ export const api = {
   updateProfile: (token: string, input: UpdateProfileInput) =>
     request<{ user: User; profile_complete: boolean }>('/user', { method: 'PATCH', body: input, token }),
 
+  uploadAvatar: (token: string, image: ImageUpload) =>
+    imageForm({}, 'image', image).then((form) => upload<{ user: User }>(token, '/user/avatar', form)),
+
+  removeAvatar: (token: string) => request<{ user: User }>('/user/avatar', { method: 'DELETE', token }),
+
   interests: () => request<{ data: Interest[] }>('/interests'),
 
   /* ----------------------------------------------------------- Sicherheit */
@@ -659,6 +780,18 @@ export const api = {
 
   booking: (token: string, id: number) => request<{ data: Booking }>(`/bookings/${id}`, { token }),
 
+  /** Freie Plätze eines Angebots mit Tageskontingent an einem Tag (Y-m-d). */
+  availability: (token: string, offerId: number, date: string) =>
+    request<{ data: Availability }>(`/offers/${offerId}/availability?date=${encodeURIComponent(date)}`, { token }),
+
+  /** Testphase: private Rückmeldung an den Partner nach dem Einlösen. */
+  bookingFeedback: (token: string, id: number, rating: number, comment: string | null) =>
+    request<{ data: Booking; credits: number; credits_balance: number }>(`/bookings/${id}/feedback`, {
+      method: 'POST',
+      body: { rating, comment },
+      token,
+    }),
+
   book: (
     token: string,
     input: { offerId: number; people: number; payMethod: PayMethod; groupId?: number | null; preferredDate?: string | null },
@@ -686,15 +819,31 @@ export const api = {
 
   club: (token: string) => request<{ data: ClubState }>('/club', { token }),
 
-  subscribe: (token: string, plan: PlanKey) =>
-    request<{ data: ClubState }>('/club/subscribe', { method: 'POST', body: { plan }, token }),
+  subscribe: (token: string, plan: PlanKey, interval: ClubInterval = 'month') =>
+    request<{ data: ClubState }>('/club/subscribe', { method: 'POST', body: { plan, interval }, token }),
+
+  /** Abzeichen mit Datum – verdiente zuerst. */
+  badges: (token: string) => request<{ data: Badge[] }>('/badges', { token }),
 
   cancelPlan: (token: string) => request<{ data: ClubState }>('/club/cancel', { method: 'POST', token }),
 
   wallet: (token: string) => request<{ data: WalletState }>('/wallet', { token }),
 
+  /** Was dieses Konto sehen darf (Admin-Schalter, src/domain/features.ts). */
+  features: (token: string) => request<{ data: FeatureState }>('/features', { token }),
+
+  /** Stadt-Bingo – nur, wenn es für dieses Konto freigeschaltet ist (sonst 403). */
+  bingo: (token: string) => request<{ data: BingoState }>('/bingo', { token }),
+
+  claimBingo: (token: string, key: string) =>
+    request<{ data: BingoState; credits: number; balance: number }>('/bingo/claim', { method: 'POST', body: { key }, token }),
+
   buyCredits: (token: string, credits: number) =>
-    request<{ data: { balance: number; added: number } }>('/wallet/purchase', { method: 'POST', body: { credits }, token }),
+    request<{ data: { balance: number; added: number; bonus: number; first_purchase_bonus: number } }>('/wallet/purchase', {
+      method: 'POST',
+      body: { credits },
+      token,
+    }),
 
   redeemVoucher: (token: string, code: string) =>
     request<{ data: { balance: number; added: number } }>('/wallet/redeem', { method: 'POST', body: { code }, token }),
@@ -792,6 +941,15 @@ export const api = {
   /* ------------------------------------------------------------------ Admin */
 
   admin: {
+    /** Funktions-Schalter: für alle (`setGlobal`) bzw. nur fürs eigene Konto (`setPreview`). */
+    features: {
+      state: (token: string) => request<{ data: AdminFeatureState }>('/admin/features', { token }),
+      setGlobal: (token: string, key: FeatureKey, body: { enabled?: boolean; value?: string }) =>
+        request<{ data: AdminFeatureState }>(`/admin/features/${key}`, { method: 'PUT', body, token }),
+      setPreview: (token: string, key: FeatureKey, body: { mode?: PreviewMode; value?: string | null }) =>
+        request<{ data: AdminFeatureState }>(`/admin/features/${key}/preview`, { method: 'PUT', body, token }),
+    },
+
     stats: (token: string) => request<AdminStats>('/admin/stats', { token }),
 
     bookings: (token: string) => request<{ data: AdminBooking[] }>('/admin/bookings', { token }),
@@ -803,6 +961,8 @@ export const api = {
       request<{ message: string }>(`/admin/reports/${id}`, { method: 'PATCH', body: { status }, token }),
 
     users: (token: string, q = '') => request<{ data: AdminUser[] }>(`/admin/users?q=${encodeURIComponent(q)}`, { token }),
+
+    user: (token: string, id: number) => request<{ data: AdminUserDetail }>(`/admin/users/${id}`, { token }),
 
     renameUser: (token: string, id: number, username: string) =>
       request<{ message: string; username: string }>(`/admin/users/${id}`, { method: 'PATCH', body: { username }, token }),
@@ -819,10 +979,62 @@ export const api = {
 
     deleteUser: (token: string, id: number) => request<{ message: string }>(`/admin/users/${id}`, { method: 'DELETE', token }),
 
-    grantCredits: (token: string, id: number, amount: number, note: string) =>
-      request<{ data: AdminUser }>(`/admin/users/${id}/credits`, { method: 'POST', body: { amount, note }, token }),
+    /** Plus = gutschreiben, Minus = abziehen (höchstens bis 0). Geht auch beim eigenen Konto. */
+    adjustCredits: (token: string, id: number, amount: number, note: string) =>
+      request<{ data: AdminUserDetail }>(`/admin/users/${id}/credits`, { method: 'POST', body: { amount, note }, token }),
+
+    /** Plus = Stempel gutschreiben (volle Karte bringt Credits), Minus = jüngste Stempel abziehen. */
+    adjustStamps: (token: string, id: number, amount: number) =>
+      request<{ data: AdminUserDetail; reward_credits: number }>(`/admin/users/${id}/stamps`, { method: 'POST', body: { amount }, token }),
 
     evidence: (token: string) => request<{ data: AdminEvidence[] }>('/admin/evidence', { token }),
+
+    /** Testphase (nur Admins): Bingo, Challenges, Serie – gerechnet mit dem eigenen Konto. */
+    testphase: {
+      state: (token: string) => request<{ data: TestphaseState }>('/admin/testphase', { token }),
+
+      /** Challenge mit Wahl an- oder abwählen. */
+      choose: (token: string, challengeId: number) =>
+        request<{ data: TestphaseState }>('/admin/testphase/choose', { method: 'POST', body: { challenge_id: challengeId }, token }),
+
+      addWish: (token: string, name: string, note: string | null) =>
+        request<{ data: TestphaseState }>('/admin/testphase/wishes', { method: 'POST', body: { name, note }, token }),
+
+      voteWish: (token: string, id: number) =>
+        request<{ data: TestphaseState }>(`/admin/testphase/wishes/${id}/vote`, { method: 'POST', token }),
+
+      deleteWish: (token: string, id: number) =>
+        request<{ data: TestphaseState }>(`/admin/testphase/wishes/${id}`, { method: 'DELETE', token }),
+
+      requestShares: (token: string, bookingId: number, userIds: number[]) =>
+        request<{ data: TestphaseState }>('/admin/testphase/shares', { method: 'POST', body: { booking_id: bookingId, user_ids: userIds }, token }),
+
+      payShare: (token: string, id: number) =>
+        request<{ data: TestphaseState; credits: number; balance: number }>(`/admin/testphase/shares/${id}/pay`, { method: 'POST', token }),
+
+      declineShare: (token: string, id: number) =>
+        request<{ data: TestphaseState }>(`/admin/testphase/shares/${id}/decline`, { method: 'POST', token }),
+
+      createPoll: (token: string, input: { group_id: number; title: string; options: { offer_id: number; day?: string | null }[] }) =>
+        request<{ data: TestphaseState }>('/admin/testphase/polls', { method: 'POST', body: input, token }),
+
+      votePoll: (token: string, id: number, optionId: number) =>
+        request<{ data: TestphaseState }>(`/admin/testphase/polls/${id}/vote`, { method: 'POST', body: { option_id: optionId }, token }),
+
+      closePoll: (token: string, id: number) =>
+        request<{ data: TestphaseState }>(`/admin/testphase/polls/${id}/close`, { method: 'POST', token }),
+
+      claim: (token: string, key: string) =>
+        request<{ data: TestphaseState; credits: number; balance: number }>('/admin/testphase/claim', { method: 'POST', body: { key }, token }),
+
+      createChallenge: (token: string, input: NewChallengeInput) =>
+        request<{ data: TestphaseState; id: number }>('/admin/testphase/challenges', { method: 'POST', body: input, token }),
+
+      deleteChallenge: (token: string, id: number) =>
+        request<{ data: TestphaseState }>(`/admin/testphase/challenges/${id}`, { method: 'DELETE', token }),
+
+      examples: (token: string) => request<{ data: TestphaseState; created: number }>('/admin/testphase/examples', { method: 'POST', token }),
+    },
 
     partners: (token: string) => request<{ data: AdminPartner[] }>('/admin/partners', { token }),
 

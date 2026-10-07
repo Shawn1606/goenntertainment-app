@@ -7,13 +7,24 @@ import {
   discountFor,
   formatCredits,
   formatEuro,
+  creditValidityFor,
+  creditValidityLabel,
+  firstPurchaseBonus,
   formatPercent,
-  groupBasePercent,
+  groupPercentFor,
+  isGoldenCard,
+  periodPriceCents,
+  yearlySavingsCents,
+  happyHourPercent,
+  applyHappyHour,
+  packBonus,
   packPriceCents,
+  packTotalCredits,
   planFor,
   quoteCredits,
   quoteMoney,
   stampProgress,
+  stampRewardFor,
   type ClubRules,
 } from './club.ts';
 
@@ -36,8 +47,10 @@ const FIXTURES = JSON.parse(readFileSync(join(SHARED, 'club.fixtures.json'), 'ut
     unitCredits: number;
     expect: { percent: number; subtotalCredits: number; totalCredits: number };
   }[];
-  packPrices: { credits: number; priceCents: number }[];
+  packPrices: { credits: number; priceCents: number; bonus: number; totalCredits: number; firstPurchaseBonus: number }[];
+  stampRewards: { plan: string; card: number; expect: number }[];
   stampProgress: { total: number; expect: { filled: number; completedCards: number } }[];
+  groupPercents: { plan: string; people: number; expect: number }[];
 };
 
 test('Euro-Preise: die gemeinsamen Fälle', () => {
@@ -62,7 +75,21 @@ test('Credit-Preise: die gemeinsamen Fälle', () => {
 
 test('Paketpreise: 10 Credits = 75 Cent', () => {
   assert.deepEqual(RULES.credits.packs, FIXTURES.packPrices.map((p) => p.credits));
-  for (const p of FIXTURES.packPrices) assert.equal(packPriceCents(RULES, p.credits), p.priceCents);
+  for (const p of FIXTURES.packPrices) {
+    assert.equal(packPriceCents(RULES, p.credits), p.priceCents);
+    assert.equal(packBonus(RULES, p.credits), p.bonus);
+    assert.equal(packTotalCredits(RULES, p.credits), p.totalCredits);
+    assert.equal(firstPurchaseBonus(RULES, p.credits), p.firstPurchaseBonus);
+  }
+});
+
+test('Stempelkarte: Belohnung je Stufe, jede 5. Karte golden', () => {
+  for (const c of FIXTURES.stampRewards) {
+    assert.equal(stampRewardFor(RULES, c.plan, c.card), c.expect, `${c.plan}, Karte ${c.card}`);
+  }
+  assert.equal(isGoldenCard(RULES, 4), false);
+  assert.equal(isGoldenCard(RULES, 5), true);
+  assert.equal(isGoldenCard(RULES, 0), false);
 });
 
 test('Stempelkarte: volle Karte fängt neu an', () => {
@@ -96,15 +123,63 @@ test('höhere Stufe spart nie weniger', () => {
 });
 
 test('Deckel wird gemeldet', () => {
-  assert.equal(discountFor(RULES, 'platinum', 10).capped, true);
+  assert.equal(discountFor(RULES, 'platinum', 10, 15).capped, true);
+  assert.equal(discountFor(RULES, 'platinum', 10).capped, false);
   assert.equal(discountFor(RULES, 'free', 1).capped, false);
 });
 
-test('Gruppenrabatt ohne Club-Faktor', () => {
-  assert.equal(groupBasePercent(RULES, 1), 0);
-  assert.equal(groupBasePercent(RULES, 3), 5);
-  assert.equal(groupBasePercent(RULES, 5), 10);
-  assert.equal(groupBasePercent(RULES, 50), 20);
+test('Gruppenrabatt je Stufe: die gemeinsamen Fälle', () => {
+  for (const c of FIXTURES.groupPercents) {
+    assert.equal(groupPercentFor(RULES, c.plan, c.people), c.expect, `${c.plan}, ${c.people} Personen`);
+  }
+});
+
+test('Gruppenrabatt 3–10 % für alle Stufen, insgesamt höchstens 20 %', () => {
+  const top = (plan: string) => groupPercentFor(RULES, plan, 1000);
+  assert.equal(groupPercentFor(RULES, 'free', 2), 3);
+  assert.equal(top('free'), 10);
+  assert.equal(top('gold'), 10);
+  assert.equal(top('platinum'), 10);
+  assert.equal(discountFor(RULES, 'platinum', 1000).percent, 20);
+  assert.equal(discountFor(RULES, 'gold', 1000).percent, 15);
+  assert.equal(RULES.discountCap.defaultPercent, 20);
+  assert.equal(planFor(RULES, 'gold').discountPercent, 5);
+  assert.equal(planFor(RULES, 'platinum').discountPercent, 10);
+});
+
+test('Monats-Credits = 12,5 % des Abopreises als Credit-Wert, auf ganze Credits gerundet', () => {
+  for (const plan of RULES.plans) {
+    const exact = (plan.priceCents * 0.125) / (RULES.credits.centsPerTenCredits / 10);
+    assert.equal(plan.monthlyCredits, Math.round(exact), plan.key);
+  }
+  assert.equal(planFor(RULES, 'gold').monthlyCredits, 42);
+  assert.equal(planFor(RULES, 'platinum').monthlyCredits, 83);
+});
+
+test('Gültigkeit je Stufe: 365 Tage, 18 Monate, 30 Monate', () => {
+  assert.deepEqual(creditValidityFor(RULES, 'free'), { days: 365 });
+  assert.deepEqual(creditValidityFor(RULES, 'gold'), { months: 18 });
+  assert.deepEqual(creditValidityFor(RULES, 'platinum'), { months: 30 });
+  assert.equal(creditValidityLabel(RULES, 'free'), '365 Tage');
+  assert.equal(creditValidityLabel(RULES, 'platinum'), '30 Monate');
+  assert.equal(creditValidityLabel(RULES, 'diamond'), '365 Tage');
+});
+
+test('Jahresabo: zehn Monatspreise, zwei Monate gespart', () => {
+  assert.equal(periodPriceCents(RULES, 'gold', 'year'), 24990);
+  assert.equal(periodPriceCents(RULES, 'gold', 'month'), 2499);
+  assert.equal(yearlySavingsCents(RULES, 'gold'), 2 * 2499);
+  assert.equal(yearlySavingsCents(RULES, 'platinum'), 2 * 4999);
+});
+
+test('Happy Hour (Testphase): Di–Do, Gold 15 %, Platinum 20 %', () => {
+  assert.equal(happyHourPercent(RULES, 'gold', '2026-10-06'), 15); // Dienstag
+  assert.equal(happyHourPercent(RULES, 'platinum', '2026-10-08'), 20); // Donnerstag
+  assert.equal(happyHourPercent(RULES, 'gold', '2026-10-10'), 0); // Samstag
+  assert.equal(happyHourPercent(RULES, 'free', '2026-10-06'), 0);
+  assert.equal(happyHourPercent(RULES, 'gold', null), 0);
+  assert.equal(applyHappyHour(95, 15), 81);
+  assert.equal(applyHappyHour(90, 20), 72);
 });
 
 test('unbekannte oder fehlende Stufe = Free', () => {

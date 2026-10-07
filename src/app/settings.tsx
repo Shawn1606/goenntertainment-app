@@ -1,40 +1,27 @@
 import Constants from 'expo-constants';
+import { Image } from 'expo-image';
 import { Stack, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Linking,
-  Pressable,
-  StyleSheet,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { HomeBackground } from '@/components/home-background';
 import { InterestPicker, type InterestPickerPalette } from '@/components/interest-picker';
-import { ThemedText } from '@/components/themed-text';
-import { useHeaderBackFallback } from '@/components/ui/header-back';
-import { Icon } from '@/components/ui/icon';
-import { KeyboardForm } from '@/components/ui/keyboard-form';
-import { LinkRow, RowDivider, RowNote, SettingGroup, SwitchRow } from '@/components/ui/setting-row';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { ListNote, ListRow, ListSection, ListSwitch } from '@/components/ui/list-row';
 import { TextField } from '@/components/ui/text-field';
 import { Links, supportMailto } from '@/constants/links';
-import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
+import { initialsOf } from '@/domain/initials';
 import { LEGAL_VERSION, type LegalDocId } from '@/domain/legal';
-import type { UiIconName } from '@/domain/ui-icon';
-import { useBrandSurface, useTheme } from '@/hooks/use-theme';
+import { useTheme } from '@/hooks/use-theme';
 import { ApiError } from '@/lib/api';
 import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
-import { blockedTermMessage } from '@/lib/blocked-terms';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import { clearCredentials } from '@/lib/credential-store';
 import { previewSound } from '@/lib/feedback';
 import { useThemePreference } from '@/lib/theme-preference';
-
-type EditableField = 'email' | 'username';
 
 const APP_VERSION = Constants.expoConfig?.version ?? '1.0.0';
 
@@ -52,137 +39,24 @@ async function openLink(url: string) {
 }
 
 /**
- * Einstellungen in klar getrennten Gruppen – aufgebaut entlang dessen, was
- * Nutzer in einer Social-/Event-App erwarten: Konto, Interessen,
- * Benachrichtigungen, Standort & Privatsphäre, Darstellung, Hilfe, Recht
- * und ein ehrlicher Weg zum Löschen des Kontos.
+ * Einstellungen – offene Abschnitte statt Klapp-Gruppen.
  *
- * Was hier steht, tut auch etwas: Dark-Mode, Standortnutzung und gespeicherte
- * Zugangsdaten greifen sofort. Die Benachrichtigungswünsche werden gemerkt und
- * gelten, sobald der Versand steht – das sagt der Hinweis in der Gruppe auch
- * so, statt Schalter ins Leere laufen zu lassen.
+ * Reihenfolge nach Häufigkeit: Profil, Anmeldung & Sicherheit, Interessen,
+ * Mitteilungen, App (Standort, Vibration, Klänge, Darstellung), Privatsphäre,
+ * Hilfe, Rechtliches – und ganz unten Abmelden und Konto löschen. Alles hier
+ * wirkt sofort; die Mitteilungs-Wünsche werden gespeichert und gelten, sobald
+ * der Versand steht (das sagt der Hinweis in der Karte).
  */
 export default function SettingsScreen() {
-  const insets = useSafeAreaInsets();
   const router = useRouter();
   const colors = useTheme();
-  const surface = useBrandSurface();
-  const backFallback = useHeaderBackFallback('/account');
-
-  /** Ein Rechtstext in der App – nicht im Browser (siehe Gruppe „Rechtliches"). */
-  function openLegal(doc: LegalDocId) {
-    router.push({ pathname: '/legal', params: { doc } });
-  }
-
   const { user, logout, updateProfile } = useAuth();
   const { preference, isDark, setDark, followSystem } = useThemePreference();
   const { settings, update } = useAppSettings();
 
+  const openLegal = (doc: LegalDocId) => router.push({ pathname: '/legal', params: { doc } });
 
-  // Interessen-Bearbeitung (eigener Zustand, unabhängig von den Konto-Feldern).
-  const [editingInterests, setEditingInterests] = useState(false);
-  const [interestDraft, setInterestDraft] = useState<number[]>([]);
-  const [savingInterests, setSavingInterests] = useState(false);
-  const [interestError, setInterestError] = useState<string | null>(null);
-
-  const interestPalette: InterestPickerPalette = {
-    // Die Chips liegen jetzt auf der blauen Gruppen-Karte: eine Stufe kräftiger
-    // als diese, damit sie als eigene Fläche lesbar bleiben.
-    chipBg: surface.chipBgStrong,
-    chipBorder: surface.chipBorder,
-    chipText: colors.text,
-    activeBg: colors.tint,
-    activeBorder: colors.tint,
-    activeText: colors.tintText,
-    muted: colors.textSecondary,
-  };
-
-  function startEditInterests() {
-    setInterestDraft((user?.interests ?? []).map((i) => i.id));
-    setInterestError(null);
-    setEditingInterests(true);
-  }
-
-  function cancelEditInterests() {
-    setEditingInterests(false);
-    setInterestError(null);
-  }
-
-  async function saveInterests() {
-    setSavingInterests(true);
-    setInterestError(null);
-    try {
-      await updateProfile({ interests: interestDraft });
-      setEditingInterests(false);
-    } catch (err) {
-      setInterestError(
-        err instanceof ApiError ? err.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.',
-      );
-    } finally {
-      setSavingInterests(false);
-    }
-  }
-
-  // Inline-Bearbeitung: welches Feld gerade bearbeitet wird + Entwurf/Fehler.
-  const [editing, setEditing] = useState<EditableField | null>(null);
-  const [draft, setDraft] = useState('');
-  const [fieldError, setFieldError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  function startEdit(field: EditableField, current: string) {
-    setEditing(field);
-    setDraft(current);
-    setFieldError(null);
-  }
-
-  function cancelEdit() {
-    setEditing(null);
-    setFieldError(null);
-  }
-
-  async function saveEdit(field: EditableField) {
-    // Benutzername ohne führendes @ speichern.
-    const value = field === 'username' ? draft.trim().replace(/^@+/, '') : draft.trim();
-
-    if (!value) {
-      setFieldError(field === 'email' ? 'Bitte eine E-Mail angeben.' : 'Bitte einen Benutzernamen angeben.');
-      return;
-    }
-
-    // Gleiche Liste wie am Server – so steht die Meldung sofort da, ohne Umweg.
-    const blocked = field === 'username' ? blockedTermMessage(value, 'username') : null;
-    if (blocked) {
-      setFieldError(blocked);
-      return;
-    }
-
-    setSaving(true);
-    setFieldError(null);
-    try {
-      await updateProfile({ [field]: value });
-      setEditing(null);
-    } catch (err) {
-      setFieldError(
-        err instanceof ApiError ? err.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.',
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  /**
-   * Passwort ändern – im eigenen Bildschirm mit altem Passwort und Stärke-Anzeige.
-   *
-   * Vorher schickte dieser Knopf einen Zurücksetzen-Link per Mail. Das war doppelt
-   * schlecht: Ohne eingerichteten Mail-Versand kam nie etwas an, und wer angemeldet
-   * ist, kennt sein Passwort ja – der Umweg über das Postfach ist dann nur Reibung.
-   */
-  function onChangePassword() {
-    router.push('/security/password');
-  }
-
-  /** Auf diesem Gerät gemerkte Zugangsdaten entfernen (Login füllt dann leer). */
-  async function onForgetDevice() {
+  const onForgetDevice = async () => {
     const ok = await confirmAction(
       'Zugangsdaten löschen',
       'Die auf diesem Gerät gespeicherte E-Mail und das Passwort werden entfernt. Beim nächsten Login musst du sie neu eingeben.',
@@ -192,715 +66,289 @@ export default function SettingsScreen() {
     if (!ok) return;
     await clearCredentials();
     await notifyUser('Erledigt', 'Auf diesem Gerät sind keine Zugangsdaten mehr gespeichert.');
-  }
+  };
 
-  /**
-   * Konto löschen – direkt in der App, mit Passwort-Bestätigung.
-   *
-   * Vorher ging das nur per Mail an den Support. Apple und Google verlangen, dass
-   * man die Löschung IN der App auslösen kann; eine vorgefertigte Mail reicht
-   * nicht und ist ein häufiger Ablehnungsgrund in der Store-Prüfung.
-   */
-  function onDeleteAccount() {
-    router.push('/security/delete-account');
-  }
-
-  function onLogout() {
-    Alert.alert('Abmelden', 'Möchtest du dich wirklich abmelden?', [
-      { text: 'Abbrechen', style: 'cancel' },
-      { text: 'Abmelden', style: 'destructive', onPress: () => logout() },
-    ]);
-  }
+  const onLogout = async () => {
+    if (await confirmAction('Abmelden', 'Möchtest du dich wirklich abmelden?', 'Abmelden', true)) await logout();
+  };
 
   const followsSystem = preference === null;
 
   return (
-    // Gleiche helle Leinwand wie im Rest der App – die Karten sind Glas darauf.
-    <HomeBackground style={styles.screen}>
-      {/* Eigene Stack-Route (hinter dem Menü im Profil, wie bei Instagram) – der
-          Kopf bringt den Zurück-Knopf mit. Ohne ihn wäre das eine Sackgasse über
-          der Tab-Leiste. */}
-      <Stack.Screen
-        options={{
-          headerShown: true,
-          title: 'Einstellungen',
-          headerBackTitle: 'Zurück',
-          headerTintColor: colors.text,
-          headerStyle: { backgroundColor: colors.background },
-          headerTitleStyle: { color: colors.text },
-          headerShadowVisible: false,
-          headerLeft: backFallback,
-        }}
-      />
-      {/* Tastatur-Freistellung macht `KeyboardForm` (siehe dort). */}
-      <View style={styles.screen}>
-        <KeyboardForm
-          contentContainerStyle={[
-            styles.content,
-            {
-              paddingTop: Spacing.three,
-              paddingBottom: insets.bottom + Spacing.five,
-            },
-          ]}
-          showsVerticalScrollIndicator={false}>
+    <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
+      <Stack.Screen options={{ headerShown: true, title: 'Einstellungen' }} />
+      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ListSection title="Profil">
+          <ListRow
+            first
+            icon="user"
+            title={user?.name ?? 'Profil'}
+            hint={user?.username ? `@${user.username} · Profilbild, Name, Benutzername` : 'Profilbild, Name, Benutzername'}
+            onPress={() => router.push('/profile')}
+            right={<ProfileThumb />}
+          />
+        </ListSection>
 
-          {/* Konto – die eine Gruppe, die offen startet: Von hier geht man
-              weiter, hier fängt man nicht mit einem zusätzlichen Tipp an.
-              Die Einordnung steht trotzdem da, weil man die Gruppe zuklappen
-              kann und dann dieselbe Frage hat wie bei allen anderen. */}
-          <SettingGroup
-            label="Konto"
-            hint="E-Mail, Benutzername und Passwort ändern."
-            defaultOpen>
-            <EditableRow
-              field="email"
-              icon="mail"
-              label="E-Mail"
-              displayValue={user?.email ?? '—'}
-              editValue={user?.email ?? ''}
-              keyboardType="email-address"
-              colors={colors}
-              editing={editing}
-              draft={draft}
-              onChangeDraft={setDraft}
-              error={fieldError}
-              saving={saving}
-              onStart={startEdit}
-              onCancel={cancelEdit}
-              onSave={saveEdit}
-            />
+        <ListSection title="Anmeldung & Sicherheit">
+          <EmailRow email={user?.email ?? ''} onSave={(email) => updateProfile({ email })} />
+          <ListRow icon="lock" title="Passwort ändern" hint="Mit altem Passwort bestätigen" onPress={() => router.push('/security/password')} />
+          <ListRow
+            icon={user?.two_factor_method ? 'shield-check' : 'shield'}
+            title="Zwei-Faktor-Anmeldung"
+            value={user?.two_factor_method ? 'An' : 'Aus'}
+            hint={user?.two_factor_method === 'totp' ? 'Code aus der Authenticator-App' : user?.two_factor_method === 'email' ? 'Code per E-Mail' : 'Zusätzlicher Code beim Anmelden'}
+            onPress={() => router.push('/security/two-factor')}
+          />
+          <ListRow icon="key" title="Gespeicherte Zugangsdaten löschen" hint="Entfernt E-Mail und Passwort von diesem Gerät" onPress={onForgetDevice} />
+        </ListSection>
 
-            <RowDivider />
+        <InterestsSection />
 
-            <EditableRow
-              field="username"
-              icon="user"
-              label="Benutzername"
-              displayValue={user?.username ? `@${user.username}` : '—'}
-              editValue={user?.username ?? ''}
-              prefix="@"
-              colors={colors}
-              editing={editing}
-              draft={draft}
-              onChangeDraft={setDraft}
-              error={fieldError}
-              saving={saving}
-              onStart={startEdit}
-              onCancel={cancelEdit}
-              onSave={saveEdit}
-            />
+        <ListSection title="Mitteilungen">
+          <ListSwitch first icon="map-pin" title="Neue Partner in der Nähe" value={settings.notifyNearby} onValueChange={(v) => update('notifyNearby', v)} />
+          <ListSwitch icon="clock" title="Erinnerung an Buchungen" hint="Bevor eine Buchung abläuft" value={settings.notifyReminder} onValueChange={(v) => update('notifyReminder', v)} />
+          <ListSwitch icon="users" title="Neues in deinen Gruppen" hint="Nachrichten und neue Mitglieder" value={settings.notifyJoins} onValueChange={(v) => update('notifyJoins', v)} />
+          <ListSwitch icon="percent" title="Angebote und Aktionen" hint="Neue Rabatte bei unseren Partnern" value={settings.notifyUpdates} onValueChange={(v) => update('notifyUpdates', v)} />
+          <ListSwitch icon="mail" title="Wochenrückblick" hint="Stempel, Credits und Tipps – einmal pro Woche" value={settings.notifyDigest} onValueChange={(v) => update('notifyDigest', v)} />
+          <ListNote>Der Versand wird gerade aufgebaut. Deine Auswahl ist gespeichert und gilt, sobald es losgeht.</ListNote>
+        </ListSection>
 
-          </SettingGroup>
+        <ListSection title="App">
+          <ListSwitch
+            first
+            icon="compass"
+            title="Standort verwenden"
+            hint={settings.useLocation ? 'Für Entfernungen, die Karte und den Stempel am Aufkleber' : 'Aus – Entfernungen bleiben leer'}
+            value={settings.useLocation}
+            onValueChange={(v) => update('useLocation', v)}
+          />
+          <ListSwitch icon="vibrate" title="Vibration" hint="Kurze Rückmeldung beim Tippen, Buchen und Stempeln" value={settings.haptics} onValueChange={(v) => update('haptics', v)} />
+          <ListSwitch
+            icon="speaker"
+            title="Klänge"
+            hint="Kurze Töne beim Buchen und bei vollen Stempelkarten"
+            value={settings.sounds}
+            onValueChange={(next) => {
+              update('sounds', next);
+              // Beim Einschalten einmal vorspielen – sonst weiß man nicht, ob es geht.
+              if (next) previewSound();
+            }}
+          />
+          <ListSwitch
+            icon="sparkles"
+            title="Goenni als Begleiter"
+            hint="Sitzt unten über der Leiste, gibt Tipps und reagiert aufs Antippen"
+            value={settings.mascotCompanion}
+            onValueChange={(v) => update('mascotCompanion', v)}
+          />
+          <ListSwitch icon="star" title="Saison-Deko" hint="Kürbisse, Christbaumkugeln & Co. passend zur Jahreszeit" value={settings.seasonalDecor} onValueChange={(v) => update('seasonalDecor', v)} />
+          <ListSwitch icon="contrast" title="Wie das Handy (hell/dunkel)" value={followsSystem} onValueChange={(on) => (on ? followSystem() : setDark(isDark))} />
+          <ListSwitch icon="moon" title="Dunkles Design" hint={followsSystem ? 'Bestimmt gerade dein Handy' : undefined} value={isDark} onValueChange={setDark} disabled={followsSystem} />
+        </ListSection>
 
+        <ListSection title="Privatsphäre">
+          <ListRow first icon="lock" title="Datenschutz" hint="Was wir speichern und warum" onPress={() => openLegal('privacy')} />
+          <ListRow icon="ban" title="Blockierte Konten" hint="Wen du blockiert hast – und wie du es zurücknimmst" onPress={() => router.push('/blocked')} />
+        </ListSection>
 
-          {/* Sicherheit – eigene Gruppe, weil sie das eine schützt, das man nicht
-              zurückholen kann: den Zugang zum Konto. */}
-          <SettingGroup label="Sicherheit" hint="Passwort und Zwei-Faktor-Anmeldung.">
-            <LinkRow
-              icon="lock"
-              title="Passwort ändern"
-              hint="Mit altem Passwort bestätigen"
-              onPress={onChangePassword}
-            />
-            <RowDivider />
-            <LinkRow
-              icon={user?.two_factor_method ? 'shield-check' : 'shield'}
-              title="Zwei-Faktor-Anmeldung"
-              hint={
-                user?.two_factor_method === 'totp'
-                  ? 'An – Code aus der Authenticator-App'
-                  : user?.two_factor_method === 'email'
-                    ? 'An – Code per E-Mail'
-                    : 'Aus – zusätzlicher Code beim Anmelden'
-              }
-              onPress={() => router.push('/security/two-factor')}
-            />
-            <RowDivider />
-            <LinkRow
-              icon="key"
-              title="Gespeicherte Zugangsdaten löschen"
-              hint="Entfernt E-Mail und Passwort von diesem Gerät"
-              onPress={onForgetDevice}
-            />
-          </SettingGroup>
+        <ListSection title="Hilfe">
+          <ListRow first icon="help" title="Hilfe & häufige Fragen" onPress={() => openLink(Links.help)} />
+          <ListRow icon="chat" title="Feedback senden" hint="Was fehlt dir? Was nervt?" onPress={() => openLink(supportMailto('Feedback zu GÖ4Fun'))} />
+          <ListRow
+            icon="flag"
+            title="Problem melden"
+            hint="Fehler, unangemessene Inhalte oder Nutzer"
+            onPress={() => openLink(supportMailto('Problem melden', 'Was ist passiert?\n\nWo ist es passiert (Partner, Gruppe, Screen)?\n\n'))}
+          />
+        </ListSection>
 
-          {/* Interessen */}
-          <SettingGroup
-            label="Interessen"
-            hint="Wählen, was dir vorgeschlagen wird.">
-            {!editingInterests ? (
-              <View style={styles.interestView}>
-                <View style={styles.blockHeader}>
-                  <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                    Deine Interessen
-                  </ThemedText>
-                  <Pressable
-                    onPress={startEditInterests}
-                    disabled={editing !== null}
-                    hitSlop={8}
-                    style={({ pressed }) => pressed && styles.pressed}>
-                    <ThemedText
-                      type="smallBold"
-                      style={{ color: editing !== null ? colors.textSecondary : colors.tint }}>
-                      Bearbeiten
-                    </ThemedText>
-                  </Pressable>
-                </View>
-                {user?.interests && user.interests.length > 0 ? (
-                  <View style={styles.interestChips}>
-                    {user.interests.map((interest) => (
-                      <View
-                        key={interest.id}
-                        style={[
-                          styles.readonlyChip,
-                          // Auf der blauen Gruppen-Karte eine Stufe kräftiger.
-                          { backgroundColor: surface.chipBgStrong, borderColor: surface.chipBorder },
-                        ]}>
-                        <ThemedText type="small" style={{ color: surface.chipText }}>
-                          {interest.name}
-                        </ThemedText>
-                      </View>
-                    ))}
-                  </View>
-                ) : (
-                  <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                    Noch keine Interessen ausgewählt.
-                  </ThemedText>
-                )}
-              </View>
-            ) : (
-              <View style={styles.interestView}>
-                <ThemedText type="small" style={{ color: colors.textSecondary }}>
-                  Tippe an, um Interessen aus- oder abzuwählen.
-                </ThemedText>
-                <InterestPicker
-                  value={interestDraft}
-                  onChange={setInterestDraft}
-                  palette={interestPalette}
-                  disabled={savingInterests}
-                />
-                {interestError ? (
-                  <ThemedText type="small" style={styles.errorText}>
-                    {interestError}
-                  </ThemedText>
-                ) : null}
-                <View style={styles.editActions}>
-                  <Pressable
-                    onPress={cancelEditInterests}
-                    disabled={savingInterests}
-                    hitSlop={8}
-                    style={({ pressed }) => pressed && styles.pressed}>
-                    <ThemedText type="smallBold" style={{ color: colors.textSecondary }}>
-                      Abbrechen
-                    </ThemedText>
-                  </Pressable>
-                  <Pressable
-                    onPress={saveInterests}
-                    disabled={savingInterests}
-                    hitSlop={8}
-                    style={({ pressed }) => pressed && styles.pressed}>
-                    {savingInterests ? (
-                      <ActivityIndicator size="small" color={colors.tint} />
-                    ) : (
-                      <ThemedText type="smallBold" style={{ color: colors.tint }}>
-                        Speichern
-                      </ThemedText>
-                    )}
-                  </Pressable>
-                </View>
-              </View>
-            )}
-          </SettingGroup>
+        <ListSection title="Rechtliches" footer={`GÖ4Fun ${APP_VERSION} · Rechtstexte Stand ${LEGAL_VERSION}`}>
+          <ListRow first icon="document" title="Nutzungsbedingungen" onPress={() => openLegal('terms')} />
+          <ListRow icon="shield" title="Haftung und Partner" onPress={() => openLegal('liability')} />
+          <ListRow icon="users" title="Regeln für das Miteinander" onPress={() => openLegal('conduct')} />
+          <ListRow icon="building" title="Impressum" onPress={() => openLegal('imprint')} />
+        </ListSection>
 
-          {/* Benachrichtigungen. Der Vorbehalt („greift noch nicht") steht als
-              `RowNote` UNTEN in der Gruppe, nicht in der Einordnung: Vor dem
-              Aufklappen weiß man noch nicht, worauf er sich bezieht. */}
-          <SettingGroup
-            label="Benachrichtigungen"
-            hint="Festlegen, worüber wir dich informieren.">
-            <SwitchRow
-              icon="map-pin"
-              title="Neue Partner in der Nähe"
-              hint="Wenn ein neuer Partner in deiner Nähe dazukommt"
-              value={settings.notifyNearby}
-              onValueChange={(v) => update('notifyNearby', v)}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="clock"
-              title="Erinnerung an Buchungen"
-              hint="Bevor eine Buchung abläuft"
-              value={settings.notifyReminder}
-              onValueChange={(v) => update('notifyReminder', v)}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="users"
-              title="Neues in deinen Gruppen"
-              hint="Neue Nachrichten und Mitglieder"
-              value={settings.notifyJoins}
-              onValueChange={(v) => update('notifyJoins', v)}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="edit"
-              title="Angebote und Aktionen"
-              hint="Neue Rabatte bei unseren Partnern"
-              value={settings.notifyUpdates}
-              onValueChange={(v) => update('notifyUpdates', v)}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="mail"
-              title="Wochenrückblick"
-              hint="Einmal pro Woche: Stempel, Credits, Tipps"
-              value={settings.notifyDigest}
-              onValueChange={(v) => update('notifyDigest', v)}
-            />
-            <RowDivider />
-            <RowNote>
-              Der Versand wird gerade aufgebaut. Deine Auswahl ist gespeichert und gilt, sobald es
-              losgeht.
-            </RowNote>
-          </SettingGroup>
-
-          {/* Standort & Privatsphäre */}
-          <SettingGroup
-            label="Standort & Privatsphäre"
-            hint="Standort, Vibration und Klänge einstellen.">
-            <SwitchRow
-              icon="compass"
-              title="Standort verwenden"
-              hint={
-                settings.useLocation
-                  ? 'Für Entfernungen, die Karte und den Stempel am Aufkleber'
-                  : 'Aus – Entfernungen und „In deiner Nähe" bleiben leer'
-              }
-              value={settings.useLocation}
-              onValueChange={(v) => update('useLocation', v)}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="vibrate"
-              title="Vibration"
-              hint={
-                settings.haptics
-                  ? 'Kurze Rückmeldung beim Antippen, Buchen und Stempeln'
-                  : 'Aus – die App bleibt still'
-              }
-              value={settings.haptics}
-              onValueChange={(v) => update('haptics', v)}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="speaker"
-              title="Klänge"
-              hint={
-                settings.sounds
-                  ? 'Kurze Töne beim Buchen und bei vollen Stempelkarten'
-                  : 'Aus – Töne gibt es nur, wenn du sie einschaltest'
-              }
-              value={settings.sounds}
-              onValueChange={(next) => {
-                update('sounds', next);
-                // Beim Einschalten einmal vorspielen: Sonst schaltet man einen
-                // Ton ein, hört nichts und weiß nicht, ob es funktioniert.
-                // Beim Ausschalten wäre ein Ton widersprüchlich.
-                if (next) previewSound();
-              }}
-            />
-            <RowDivider />
-            <LinkRow
-              icon="lock"
-              title="Datenschutz"
-              hint="Was wir speichern und warum"
-              onPress={() => openLegal('privacy')}
-            />
-            <RowDivider />
-            <LinkRow
-              icon="ban"
-              title="Blockierte Konten"
-              hint="Wen du blockiert hast – und wie du es zurücknimmst"
-              onPress={() => router.push('/blocked')}
-            />
-          </SettingGroup>
-
-          {/* Darstellung */}
-          <SettingGroup label="Darstellung" hint="Zwischen hell und dunkel wechseln.">
-            <SwitchRow
-              icon="contrast"
-              title="Systemeinstellung folgen"
-              hint="Hell oder dunkel wie dein Handy"
-              value={followsSystem}
-              onValueChange={(on) => (on ? followSystem() : setDark(isDark))}
-            />
-            <RowDivider />
-            <SwitchRow
-              icon="moon"
-              title="Dark Mode"
-              hint={followsSystem ? 'Wird gerade vom System bestimmt' : 'Dunklere Farbpalette für die App'}
-              value={isDark}
-              onValueChange={setDark}
-              disabled={followsSystem}
-            />
-          </SettingGroup>
-
-          {/* Admin-Bereich – vorher hing er im Konto-Blatt auf der Startseite. Das Blatt
-              gibt es nicht mehr; hier suchen Admins ohnehin zuerst. */}
-          {user?.is_admin ? (
-            <SettingGroup label="Admin" hint="Partner, Angebote und Nutzer verwalten.">
-              <LinkRow
-                icon="shield"
-                title="Admin-Bereich öffnen"
-                hint="Partner, Angebote, Gutscheine, Nutzer, Meldungen"
-                onPress={() => router.push('/admin-dashboard')}
-              />
-            </SettingGroup>
-          ) : null}
-
-          {/* Hilfe */}
-          <SettingGroup
-            label="Hilfe & Support"
-            hint="Antworten finden oder uns schreiben.">
-            <LinkRow icon="help" title="Hilfe & häufige Fragen" onPress={() => openLink(Links.help)} />
-            <RowDivider />
-            <LinkRow
-              icon="chat"
-              title="Feedback senden"
-              hint="Was fehlt dir? Was nervt?"
-              onPress={() => openLink(supportMailto('Feedback zu GÖ4Fun'))}
-            />
-            <RowDivider />
-            <LinkRow
-              icon="flag"
-              title="Problem melden"
-              hint="Fehler, unangemessene Inhalte oder Nutzer"
-              onPress={() =>
-                openLink(
-                  supportMailto(
-                    'Problem melden',
-                    'Was ist passiert?\n\nWo ist es passiert (Partner, Gruppe, Screen)?\n\n',
-                  ),
-                )
-              }
-            />
-          </SettingGroup>
-
-          {/* Rechtliches & Über.
-              Die Texte liegen jetzt IN der App (src/domain/legal.ts) und nicht
-              mehr hinter einem Link nach draußen. Zwei Gründe: Die Store-Prüfung
-              will sie aus der App erreichbar sehen, und wer im Funkloch wissen
-              will, wer für ein Event verantwortlich ist, kommt an eine externe
-              Seite nicht heran. Die Fassung im Netz steht unten in jedem
-              Dokument als Zweitweg. */}
-          <SettingGroup
-            label="Rechtliches"
-            hint="Nutzungsbedingungen, Haftung, Impressum lesen.">
-            <LinkRow
-              icon="document"
-              title="Nutzungsbedingungen"
-              hint="Die Regeln für die Nutzung"
-              onPress={() => openLegal('terms')}
-            />
-            <RowDivider />
-            <LinkRow
-              icon="shield"
-              title="Haftung und Partner"
-              hint="Wer wofür verantwortlich ist"
-              onPress={() => openLegal('liability')}
-            />
-            <RowDivider />
-            <LinkRow
-              icon="users"
-              title="Regeln für das Miteinander"
-              hint="Was hier geht und was nicht"
-              onPress={() => openLegal('conduct')}
-            />
-            <RowDivider />
-            <LinkRow icon="building" title="Impressum" onPress={() => openLegal('imprint')} />
-            <RowDivider />
-            <LinkRow icon="info" title="App-Version" value={`${APP_VERSION} · Stand ${LEGAL_VERSION}`} />
-          </SettingGroup>
-
-          {/* Konto beenden */}
-          <SettingGroup
-            label="Konto beenden"
-            hint="Dein Konto endgültig löschen.">
-            <LinkRow
-              icon="trash"
-              title="Konto löschen"
-              hint="Konto, Credits und Stempel endgültig entfernen"
-              onPress={onDeleteAccount}
-              danger
-            />
-          </SettingGroup>
-
-          <Pressable
-            onPress={onLogout}
-            style={({ pressed }) => [
-              styles.logoutButton,
-              { borderColor: surface.chipBorder },
-              pressed && styles.pressed,
-            ]}>
-            <Icon name="logout" size={18} color="#ef4444" />
-            <ThemedText type="smallBold" style={{ color: '#ef4444' }}>
-              Abmelden
-            </ThemedText>
-          </Pressable>
-        </KeyboardForm>
-      </View>
-    </HomeBackground>
+        <ListSection title="Konto">
+          <ListRow first icon="logout" title="Abmelden" onPress={onLogout} danger />
+          <ListRow icon="trash" title="Konto löschen" hint="Konto, Credits und Stempel endgültig entfernen" onPress={() => router.push('/security/delete-account')} danger />
+        </ListSection>
+      </ScrollView>
+    </View>
   );
 }
 
-type ThemeColors = ReturnType<typeof useTheme>;
+/** Kleines Profilbild rechts in der Profil-Zeile. */
+function ProfileThumb() {
+  const colors = useTheme();
+  const { user } = useAuth();
+  return (
+    <View style={[styles.thumb, { backgroundColor: colors.backgroundSelected }]}>
+      {user?.avatar ? (
+        <Image source={{ uri: user.avatar }} style={StyleSheet.absoluteFill} contentFit="cover" />
+      ) : (
+        <Text style={[styles.thumbText, { color: colors.tint }]}>{initialsOf(user?.name)}</Text>
+      )}
+    </View>
+  );
+}
 
-/**
- * Konto-Zeile mit Inline-Bearbeitung: zeigt normalerweise Wert + „Bearbeiten“;
- * beim Bearbeiten ein Eingabefeld mit Speichern/Abbrechen.
- */
-function EditableRow({
-  field,
-  icon,
-  label,
-  displayValue,
-  editValue,
-  prefix,
-  keyboardType = 'default',
-  colors,
-  editing,
-  draft,
-  onChangeDraft,
-  error,
-  saving,
-  onStart,
-  onCancel,
-  onSave,
-}: {
-  field: EditableField;
-  /** Symbol-Name aus dem Set – dieselbe Sprache wie SwitchRow und LinkRow. */
-  icon: UiIconName;
-  label: string;
-  displayValue: string;
-  editValue: string;
-  prefix?: string;
-  keyboardType?: 'default' | 'email-address';
-  colors: ThemeColors;
-  editing: EditableField | null;
-  draft: string;
-  onChangeDraft: (value: string) => void;
-  error: string | null;
-  saving: boolean;
-  onStart: (field: EditableField, current: string) => void;
-  onCancel: () => void;
-  onSave: (field: EditableField) => void;
-}) {
-  const isEditing = editing === field;
+/** E-Mail: Zeile zum Antippen, darunter klappt ein Feld mit Speichern/Abbrechen auf. */
+function EmailRow({ email, onSave }: { email: string; onSave: (email: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(email);
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  if (!isEditing) {
+  const save = async () => {
+    const value = draft.trim();
+    if (!value) {
+      setError('Bitte eine E-Mail angeben.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(value);
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
     return (
-      <View style={styles.row}>
-        <View style={styles.rowLabel}>
-          <Icon name={icon} size={20} color={colors.tint} />
-          <ThemedText type="small" style={{ color: colors.textSecondary }}>
-            {label}
-          </ThemedText>
-        </View>
-        <View style={styles.passwordRight}>
-          <ThemedText numberOfLines={1} style={styles.value}>
-            {displayValue}
-          </ThemedText>
-          <Pressable
-            onPress={() => onStart(field, editValue)}
-            disabled={editing !== null}
-            hitSlop={8}
-            style={({ pressed }) => pressed && styles.pressed}>
-            <ThemedText
-              type="smallBold"
-              style={{ color: editing !== null ? colors.textSecondary : colors.tint }}>
-              Bearbeiten
-            </ThemedText>
-          </Pressable>
-        </View>
-      </View>
+      <ListRow
+        first
+        icon="mail"
+        title="E-Mail"
+        value={email}
+        onPress={() => {
+          setDraft(email);
+          setError(null);
+          setEditing(true);
+        }}
+      />
     );
   }
-
   return (
-    <View style={styles.editRow}>
-      <View style={styles.rowLabel}>
-        <Icon name={icon} size={20} color={colors.tint} />
-        <ThemedText type="small" style={{ color: colors.textSecondary }}>
-          {label}
-        </ThemedText>
-      </View>
-
-      {/* Kompakte Zeile: `fieldStyle`/`style` drücken die Standardhöhe des
-          Feldes auf Zeilenmaß. Fehlertext und Fehlerrand kommen aus dem Feld
-          selbst – deshalb steht hier keine eigene Fehlerzeile mehr. */}
+    <View style={styles.editBox}>
       <TextField
+        label="E-Mail"
         value={draft}
-        onChangeText={onChangeDraft}
+        onChangeText={setDraft}
         autoFocus
         autoCapitalize="none"
         autoCorrect={false}
-        keyboardType={keyboardType}
+        keyboardType="email-address"
         editable={!saving}
-        onSubmitEditing={() => onSave(field)}
+        onSubmitEditing={save}
         error={error ?? undefined}
-        leftIcon={prefix ? <ThemedText style={{ color: colors.textSecondary }}>{prefix}</ThemedText> : undefined}
-        fieldStyle={[styles.inputWrap, { backgroundColor: colors.background }]}
-        style={styles.input}
       />
-
       <View style={styles.editActions}>
-        <Pressable
-          onPress={onCancel}
-          disabled={saving}
-          hitSlop={8}
-          style={({ pressed }) => pressed && styles.pressed}>
-          <ThemedText type="smallBold" style={{ color: colors.textSecondary }}>
-            Abbrechen
-          </ThemedText>
-        </Pressable>
-        <Pressable
-          onPress={() => onSave(field)}
-          disabled={saving}
-          hitSlop={8}
-          style={({ pressed }) => pressed && styles.pressed}>
-          {saving ? (
-            <ActivityIndicator size="small" color={colors.tint} />
-          ) : (
-            <ThemedText type="smallBold" style={{ color: colors.tint }}>
-              Speichern
-            </ThemedText>
-          )}
-        </Pressable>
+        <Button title="Abbrechen" variant="ghost" size="small" onPress={() => setEditing(false)} disabled={saving} />
+        <Button title="Speichern" size="small" icon="check" onPress={save} loading={saving} />
       </View>
     </View>
   );
 }
 
+/** Interessen: was dir auf der Startseite zuerst vorgeschlagen wird. */
+function InterestsSection() {
+  const colors = useTheme();
+  const { user, updateProfile } = useAuth();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<number[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const palette: InterestPickerPalette = {
+    chipBg: colors.background,
+    chipBorder: colors.border,
+    chipText: colors.text,
+    activeBg: colors.tint,
+    activeBorder: colors.tint,
+    activeText: colors.tintText,
+    muted: colors.textSecondary,
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      await updateProfile({ interests: draft });
+      setEditing(false);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const interests = user?.interests ?? [];
+
+  return (
+    <View style={styles.section}>
+      <Text style={[styles.sectionTitle, { color: colors.textSecondary }]} accessibilityRole="header">
+        INTERESSEN
+      </Text>
+      <Card style={styles.interests}>
+        {editing ? (
+          <>
+            <Text style={[styles.small, { color: colors.textSecondary }]}>Tippe an, was dich interessiert – das schlagen wir dir zuerst vor.</Text>
+            <InterestPicker value={draft} onChange={setDraft} palette={palette} disabled={saving} />
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <View style={styles.editActions}>
+              <Button title="Abbrechen" variant="ghost" size="small" onPress={() => setEditing(false)} disabled={saving} />
+              <Button title="Speichern" size="small" icon="check" onPress={save} loading={saving} />
+            </View>
+          </>
+        ) : (
+          <>
+            {interests.length > 0 ? (
+              <View style={styles.chips}>
+                {interests.map((interest) => (
+                  <View key={interest.id} style={[styles.chip, { backgroundColor: colors.backgroundSelected, borderColor: colors.border }]}>
+                    <Text style={[styles.chipText, { color: colors.text }]}>{interest.name}</Text>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={[styles.small, { color: colors.textSecondary }]}>Noch keine Interessen ausgewählt.</Text>
+            )}
+            <Button
+              title={interests.length > 0 ? 'Interessen bearbeiten' : 'Interessen wählen'}
+              icon="edit"
+              variant="secondary"
+              size="small"
+              onPress={() => {
+                setDraft(interests.map((i) => i.id));
+                setError(null);
+                setEditing(true);
+              }}
+            />
+          </>
+        )}
+      </Card>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
-  content: {
-    paddingHorizontal: Spacing.four,
-    maxWidth: MaxContentWidth,
-    width: '100%',
-    alignSelf: 'center',
-    flexGrow: 1,
-    gap: Spacing.four,
-  },
-  header: { gap: Spacing.half, marginBottom: Spacing.one },
-  mascot: { marginTop: Spacing.two },
-  title: { fontSize: 26, lineHeight: 33, fontWeight: '800', letterSpacing: -0.5 },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: Spacing.three,
-    minHeight: 56,
-    gap: Spacing.three,
-  },
-  editRow: {
-    paddingVertical: Spacing.three,
-    gap: Spacing.two,
-  },
-  rowLabel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-  },
-  value: {
-    fontWeight: '600',
-    flexShrink: 1,
-  },
-  passwordRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
-    flexShrink: 1,
-    justifyContent: 'flex-end',
-  },
-  inputWrap: {
-    // `minHeight: 0` hebt die 56 px des Standardfeldes auf – diese Zeile sitzt
-    // in einer Liste und soll Zeilenhöhe haben, keine Formularhöhe.
-    minHeight: 0,
-    borderWidth: 1,
-    borderRadius: Radius.field,
-    paddingHorizontal: Spacing.three,
-  },
-  input: {
-    flex: 1,
-    paddingVertical: Spacing.two,
-    fontSize: 16,
-  },
-  errorText: {
-    color: '#ef4444',
-  },
-  editActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: Spacing.four,
-    marginTop: Spacing.one,
-  },
-  accountTypeRow: {
-    paddingVertical: Spacing.three,
-    gap: Spacing.three,
-  },
-  // Gleiche Maße wie die Emoji-Spalte in setting-row.tsx, damit die Zeile mit
-  // den übrigen Einträgen der Gruppe fluchtet.
-  rowIcon: { fontSize: 18, lineHeight: 24, width: 24, textAlign: 'center' },
-  tierOptions: {
-    gap: Spacing.two,
-  },
-  tierOption: {
-    borderRadius: Radius.field,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.three,
-    gap: 2,
-  },
-  tierHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: Spacing.two,
-  },
-  perkList: {
-    gap: 1,
-    marginTop: Spacing.one,
-  },
-  interestView: {
-    paddingVertical: Spacing.three,
-    gap: Spacing.three,
-  },
-  // Kopfzeile eines mehrzeiligen Blocks: Beschriftung links, Aktion/Spinner rechts.
-  blockHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  interestChips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  readonlyChip: {
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.three,
-  },
-  logoutButton: {
-    marginTop: Spacing.two,
-    alignSelf: 'center',
-    paddingVertical: Spacing.three,
-    paddingHorizontal: Spacing.five,
-    borderRadius: 999,
-    borderWidth: 1,
-  },
-  pressed: {
-    opacity: 0.6,
-  },
+  flex: { flex: 1 },
+  content: { padding: Spacing.three, gap: Spacing.four, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingBottom: Spacing.six },
+  thumb: { width: 40, height: 40, borderRadius: 20, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
+  thumbText: { fontFamily: FontFamily.bold, fontSize: 14 },
+  editBox: { padding: Spacing.three, gap: Spacing.two },
+  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: Spacing.two },
+  section: { gap: Spacing.two },
+  sectionTitle: { fontFamily: FontFamily.bold, fontSize: 12, letterSpacing: 0.8, marginLeft: Spacing.two },
+  interests: { gap: Spacing.three },
+  small: { fontFamily: FontFamily.medium, fontSize: 13.5, lineHeight: 19 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  chip: { borderRadius: 999, borderWidth: 1, paddingVertical: 6, paddingHorizontal: 12 },
+  chipText: { fontFamily: FontFamily.semibold, fontSize: 13.5 },
+  error: { color: '#e11d48', fontFamily: FontFamily.medium, fontSize: 13 },
 });

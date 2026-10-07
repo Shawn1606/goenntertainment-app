@@ -105,14 +105,15 @@ const terms: LegalDocument = {
       paragraphs: [
         'Vor dem Buchen siehst du den Endpreis inklusive aller Rabatte. Mit „Zahlungspflichtig buchen" gibst du ein verbindliches Angebot ab; die Buchung kommt zustande, sobald sie in der App bestätigt ist.',
         'Eine Buchung ist bis zum angezeigten Datum einlösbar. Eingelöst wird beim Partner – per NFC-Aufkleber, QR-Code oder indem der Partner deinen Pass scannt. Nicht eingelöste Buchungen verfallen nach Ablauf; ob und wie der Betrag erstattet wird, richtet sich nach den Bedingungen des Partners und dem Gesetz.',
-        'Solange eine Buchung nicht eingelöst ist, kannst du sie in der App stornieren. Mit Credits bezahlte Buchungen schreiben wir dir sofort gut, mit Geld bezahlte erstatten wir auf dem ursprünglichen Zahlweg.',
+        'Solange eine Buchung nicht eingelöst ist, kannst du sie in der App stornieren. Mit Credits bezahlte Buchungen schreiben wir dir sofort gut – mit der Frist, die die Credits vorher hatten; sind sie inzwischen verfallen, gelten sie noch 30 Tage. Mit Geld bezahlte erstatten wir auf dem ursprünglichen Zahlweg.',
         'Freizeitangebote zu einem bestimmten Termin sind nach § 312g Abs. 2 Nr. 9 BGB vom Widerrufsrecht ausgenommen. Unsere Stornomöglichkeit geht darüber hinaus und gilt freiwillig.',
       ],
     },
     {
       heading: 'Credits',
       paragraphs: [
-        `Credits sind ein Guthaben in ${APP_NAME}, mit dem du bei unseren Partnern bezahlen kannst. Du bekommst sie durch Kauf (10 Credits = 0,75 €), über Gutscheinkarten, als Monatsleistung im Club und für eine volle Stempelkarte.`,
+        `Credits sind ein Guthaben in ${APP_NAME}, mit dem du bei unseren Partnern bezahlen kannst. Du bekommst sie durch Kauf von Credit-Paketen (größere Pakete mit Mengenbonus, beim allerersten Kauf einmalig 20 % der Paketgröße zusätzlich), über Gutscheinkarten, als Monatsleistung im Club und für eine volle Stempelkarte.`,
+        'Jede Gutschrift gilt ab dem Tag, an dem sie auf deinem Konto eingeht, 365 Tage, im Gold Plan 18 Monate und im Platinum Plan 30 Monate – maßgeblich ist deine Stufe bei der Gutschrift. Wechselst du in eine Stufe mit längerer Frist, gilt sie auch für deine offenen Credits; kürzer wird eine Frist nie. Danach verfällt die Gutschrift mit ihrem Rest. Spätere Gutschriften haben ihre eigene Frist. Bezahlt wird immer zuerst mit den Credits, die am frühesten verfallen; was wann verfällt, siehst du in der App unter „Credits“.',
         'Credits lassen sich nur bei Partnern von GÖ4Fun einsetzen. Sie werden nicht in Geld ausgezahlt und sind nicht auf andere Konten übertragbar – gesetzliche Ansprüche bleiben unberührt.',
         'Gekaufte Credits kannst du innerhalb von 14 Tagen nach dem Kauf widerrufen, solange du sie nicht eingesetzt hast. Danach ist der Kauf endgültig.',
       ],
@@ -127,8 +128,8 @@ const terms: LegalDocument = {
     {
       heading: 'Club: Free, Gold und Platinum',
       paragraphs: [
-        'Der Free Plan ist kostenlos. Gold und Platinum sind Abos mit einem Monatspreis, Rabatten auf Partner-Angebote und monatlichen Credits. Was jede Stufe genau enthält, steht in der App unter „Club".',
-        'Ein Abo läuft einen Monat und verlängert sich automatisch um einen weiteren Monat, wenn du es nicht kündigst. Kündigen kannst du jederzeit in der App unter „Club → Abo kündigen"; das Abo endet dann zum Ende der laufenden Laufzeit.',
+        'Der Free Plan ist kostenlos. Gold und Platinum sind Abos mit Rabatten auf Partner-Angebote und monatlichen Credits – monatlich oder jährlich bezahlt. Was jede Stufe genau enthält, steht in der App unter „Club".',
+        'Ein Monatsabo läuft einen Monat und verlängert sich automatisch um einen weiteren Monat, wenn du es nicht kündigst. Das Jahresabo kostet zehn Monatspreise und läuft ein Jahr; die Monats-Credits bekommst du trotzdem jeden Monat. Nach dem ersten Jahr läuft es als Monatsabo weiter und ist dann monatlich kündbar. Während eines laufenden Jahresabos ist ein Wechsel der Stufe erst zum Ende des Jahres möglich. Kündigen kannst du jederzeit in der App unter „Club → Abo kündigen"; das Abo endet dann zum Ende der laufenden Laufzeit.',
         'Beim Abschluss hast du ein Widerrufsrecht von 14 Tagen. Nutzt du in dieser Zeit Club-Vorteile, schuldest du bei einem Widerruf einen anteiligen Betrag; bereits gutgeschriebene Monats-Credits werden zurückgebucht.',
         'Ein Wechsel zwischen Gold und Platinum beginnt sofort eine neue Laufzeit.',
       ],
@@ -136,7 +137,7 @@ const terms: LegalDocument = {
     {
       heading: 'Stempelkarte',
       paragraphs: [
-        'Bei jedem Besuch eines Partners kannst du einen Stempel sammeln – höchstens einen pro Partner und Tag. Für zehn Stempel schreiben wir dir 100 Credits gut.',
+        'Bei jedem Besuch eines Partners kannst du einen Stempel sammeln – höchstens einen pro Partner und Tag. Für zehn Stempel schreiben wir dir 100 Credits gut, im Gold Plan 125 und im Platinum Plan 150. Jede fünfte volle Karte ist eine goldene und bringt das 1,5-Fache.',
         'Stempel gibt es nur für echte Besuche. Wer Aufkleber-Codes weitergibt, Stempel ohne Besuch sammelt oder das System anders austrickst, verliert Stempel und daraus entstandene Credits; das Konto kann gesperrt werden.',
       ],
     },

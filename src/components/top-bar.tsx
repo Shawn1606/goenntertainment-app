@@ -5,6 +5,11 @@
  * Wie viel habe ich, was kann ich mir holen? Antippen öffnet das Kauf-Blatt.
  * Das Profilbild rechts trägt einen Ring in der Farbe der Club-Stufe – Gold und
  * Platinum sieht man so auf jedem Bildschirm.
+ *
+ * Unter der Kante hängt die Saison-Girlande (Kürbisse, Christbaumkugeln …,
+ * src/components/seasonal-decor.tsx) – in einem eigenen Streifen, damit sie
+ * keine Überschrift verdeckt. Die Hülle liegt mit `zIndex` über dem Inhalt,
+ * weil die Anhänger ein wenig über den Streifen hinausschaukeln.
  */
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
@@ -14,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandLogo } from '@/components/brand-logo';
 import { useCreditsSheet } from '@/components/credits-sheet';
+import { SeasonGarland } from '@/components/seasonal-decor';
 import { CountUp } from '@/components/ui/count-up';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
@@ -24,7 +30,8 @@ import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
 
-export function TopBar({ below }: { below?: ReactNode }) {
+/** `decor={false}`: ohne Saison-Girlande – auf der Karte, die Platz braucht. */
+export function TopBar({ below, decor = true }: { below?: ReactNode; decor?: boolean }) {
   const colors = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -35,49 +42,52 @@ export function TopBar({ below }: { below?: ReactNode }) {
   const look = PlanLook[plan.key];
 
   return (
-    <View style={[styles.wrap, { paddingTop: insets.top + Spacing.one, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
-      <View style={styles.row}>
-        <View style={styles.side}>
-          <BrandLogo size="small" />
-        </View>
-
-        <PressableScale
-          onPress={() => credits.open()}
-          haptic="tap"
-          accessibilityRole="button"
-          accessibilityLabel={`${user?.credits_balance ?? 0} Credits. Antippen zum Aufladen.`}
-          style={[styles.pill, { borderColor: '#f0c44c', backgroundColor: colors.background }]}>
-          <View style={styles.coin}>
-            <Icon name="coin" size={18} color="#b27b00" />
+    <View style={styles.shell}>
+      <View style={[styles.wrap, { paddingTop: insets.top + Spacing.one, backgroundColor: colors.background, borderBottomColor: colors.border }]}>
+        <View style={styles.row}>
+          <View style={styles.side}>
+            <BrandLogo size="small" />
           </View>
-          <CountUp value={user?.credits_balance ?? 0} format={formatCredits} style={[styles.pillValue, { color: colors.text }]} />
-          <View style={[styles.plus, { backgroundColor: colors.tint }]}>
-            <Icon name="plus" size={12} color="#ffffff" />
-          </View>
-        </PressableScale>
-
-        <View style={[styles.side, styles.sideRight]}>
+  
           <PressableScale
-            onPress={() => router.push('/account')}
+            onPress={() => credits.open()}
+            haptic="tap"
             accessibilityRole="button"
-            accessibilityLabel={`Dein Konto, ${plan.name}`}
-            style={[styles.avatarRing, { borderColor: look.ring }]}>
-            <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
-              {user?.avatar ? (
-                <Image source={{ uri: user.avatar }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" accessible={false} />
-              ) : (
-                <Text style={[styles.initials, { color: colors.text }]}>{initialsOf(user?.name ?? '')}</Text>
-              )}
+            accessibilityLabel={`${user?.credits_balance ?? 0} Credits. Antippen zum Aufladen.`}
+            style={[styles.pill, { borderColor: '#f0c44c', backgroundColor: colors.background }]}>
+            <View style={styles.coin}>
+              <Icon name="coin" size={18} color="#b27b00" />
             </View>
-            {plan.key !== 'free' ? (
-              <View style={[styles.crown, { backgroundColor: look.ring, borderColor: colors.background }]}>
-                <Icon name="crown" size={9} color="#ffffff" />
-              </View>
-            ) : null}
+            <CountUp value={user?.credits_balance ?? 0} format={formatCredits} style={[styles.pillValue, { color: colors.text }]} />
+            <View style={[styles.plus, { backgroundColor: colors.tint }]}>
+              <Icon name="plus" size={12} color="#ffffff" />
+            </View>
           </PressableScale>
+  
+          <View style={[styles.side, styles.sideRight]}>
+            <PressableScale
+              onPress={() => router.push('/account')}
+              accessibilityRole="button"
+              accessibilityLabel={`Dein Konto, ${plan.name}`}
+              style={[styles.avatarRing, { borderColor: look.ring }]}>
+              <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
+                {user?.avatar ? (
+                  <Image source={{ uri: user.avatar }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" accessible={false} />
+                ) : (
+                  <Text style={[styles.initials, { color: colors.text }]}>{initialsOf(user?.name ?? '')}</Text>
+                )}
+              </View>
+              {plan.key !== 'free' ? (
+                <View style={[styles.crown, { backgroundColor: look.ring, borderColor: colors.background }]}>
+                  <Icon name="crown" size={9} color="#ffffff" />
+                </View>
+              ) : null}
+            </PressableScale>
+          </View>
         </View>
+        {below}
       </View>
-      {below}
+      {decor ? <SeasonGarland /> : null}
     </View>
   );
 }
@@ -86,7 +96,8 @@ export function TopBar({ below }: { below?: ReactNode }) {
 const AVATAR = 34;
 
 const styles = StyleSheet.create({
-  wrap: { borderBottomWidth: Stroke, zIndex: 5 },
+  shell: { zIndex: 5 },
+  wrap: { borderBottomWidth: Stroke },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
