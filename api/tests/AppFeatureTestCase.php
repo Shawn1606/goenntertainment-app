@@ -16,12 +16,12 @@ use Throwable;
 /**
  * Base class for every feature test that touches the database.
  *
- * The app schema exists in one place only, server/schema.sql: the stock migrations in
- * database/migrations do not match it, and the controllers use MySQL-only SQL. So these tests
- * run against MySQL 8.4 loaded from that file (CI's api job, or the local command in README
- * "Tests and checks"), each test inside a transaction that is rolled back afterwards. They never
- * build their own schema: a second copy would drift from schema.sql (F-33), and
- * RefreshDatabase would replace the app tables with the stock ones.
+ * The reference schema is server/schema.sql; the deploy builds the same tables with the
+ * migrations in database/migrations (scripts/schema-drift keeps both in step, F-33), and the
+ * controllers use MySQL-only SQL. So these tests run against MySQL 8.4 loaded from that file
+ * (CI's api job, or the local command in README "Tests and checks"), each test inside a
+ * transaction that is rolled back afterwards. They never build their own schema: RefreshDatabase
+ * would rebuild the shared test database from the migrations in the middle of the suite.
  *
  * Without MySQL, or with a database that lacks a table of server/schema.sql, every test of this
  * class FAILS with a message that says how to run it. It is never skipped: a skipped suite looks

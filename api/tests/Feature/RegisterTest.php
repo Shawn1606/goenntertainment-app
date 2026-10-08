@@ -8,12 +8,13 @@ use Illuminate\Testing\TestResponse;
 use Tests\AppFeatureTestCase;
 
 /**
- * POST /api/register: password rule, self-service tiers and the word filter.
+ * POST /api/register: password rule and the word filter. (The account tiers and their sign-up
+ * checks are gone with the marketplace.)
  *
  * Sign-up belongs to Laravel; Node's copy of this route is deleted (F-01, one owner per path).
  * These tests were Node tests of that copy and moved here with the same assertions:
- * server/test/account.test.js (password rule), server/test/api.test.js (tiers) and
- * server/test/blocked-terms-routes.test.js (word filter).
+ * server/test/account.test.js (password rule) and server/test/blocked-terms-routes.test.js (word
+ * filter).
  */
 class RegisterTest extends AppFeatureTestCase
 {
@@ -27,7 +28,6 @@ class RegisterTest extends AppFeatureTestCase
             'username' => $username,
             'email' => $username.'@example.invalid',
             'password' => self::TEST_PASSWORD,
-            'account_type' => 'standard',
             'device_name' => 'test',
         ], self::consent(), $overrides));
     }
@@ -61,42 +61,6 @@ class RegisterTest extends AppFeatureTestCase
         $this->register('regbasic', ['password' => 'nurbuchstaben'])
             ->assertStatus(422)
             ->assertJsonPath('message', 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.');
-    }
-
-    public function test_tiers_above_standard_cannot_be_self_assigned(): void
-    {
-        // 'creator' belongs here on purpose: otherwise the confirmation in the admin panel would be
-        // worthless, because signing up as a creator would be quicker than asking for it.
-        foreach (['creator', 'business', 'business_plus'] as $type) {
-            $response = $this->register('regabove', ['account_type' => $type]);
-            $response->assertStatus(422);
-            $this->assertNotEmpty($response->json('errors.account_type'), "{$type} must not get through");
-        }
-    }
-
-    /**
-     * The other half of the Node test ("and cannot create events") belongs to Node's
-     * POST /api/activities and stays covered there (server/test/api.test.js).
-     */
-    public function test_new_account_is_standard(): void
-    {
-        $this->register('regnew', ['account_type' => 'standard'])
-            ->assertCreated()
-            ->assertJsonPath('user.account_type', 'standard');
-    }
-
-    public function test_unknown_tier_is_rejected(): void
-    {
-        $response = $this->register('regbad', ['account_type' => 'enterprise']);
-        $response->assertStatus(422);
-        $this->assertNotEmpty($response->json('errors.account_type'));
-    }
-
-    public function test_legacy_personal_registers_as_standard(): void
-    {
-        $this->register('reglegacy', ['account_type' => 'personal'])
-            ->assertCreated()
-            ->assertJsonPath('user.account_type', 'standard');
     }
 
     public function test_blocked_username_and_name_are_rejected(): void

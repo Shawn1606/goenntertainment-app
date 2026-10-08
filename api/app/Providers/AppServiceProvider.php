@@ -15,6 +15,9 @@ class AppServiceProvider extends ServiceProvider
     /** The answer to a request over a limit (Laravel's own is English; the app shows it as is). */
     public const MSG_TOO_MANY = 'Zu viele Versuche – bitte warte kurz und probier es dann noch mal.';
 
+    /** The answer when the group chat's limiter refuses a message. */
+    public const MSG_CHAT_TOO_FAST = 'Kurz durchatmen – das waren viele Nachrichten auf einmal.';
+
     /**
      * Register any application services.
      */
@@ -34,8 +37,8 @@ class AppServiceProvider extends ServiceProvider
          * A token is valid only with an expiry date that has not passed (F-20). Sanctum alone
          * accepts a token without `expires_at` (it then checks only its age against
          * sanctum.expiration); tokens from before expiry existed have none and end here.
-         * App\Support\Sessions issues every token with one. Node's requireAuth applies the whole
-         * rule too, the age included (server/src/auth.js, TOKEN_IS_VALID_SQL).
+         * App\Support\Sessions issues every token with one. The former Node backend's requireAuth
+         * applies the whole rule too, the age included (server/src/auth.js, TOKEN_IS_VALID_SQL).
          */
         Sanctum::authenticateAccessTokensUsing(
             static fn (PersonalAccessToken $token, bool $isValid): bool => $isValid && $token->expires_at !== null,
@@ -134,5 +137,48 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('profile', static fn (Request $request) => $limits('profile', [
             'user' => RateLimitKeys::user($request),
         ]));
+
+        // Gutscheincodes und Einladungscodes: Raten soll aussichtslos bleiben.
+        RateLimiter::for('voucher-redeem', static fn (Request $request) => $limits('voucher-redeem', [
+            'user' => RateLimitKeys::user($request),
+            'ip' => RateLimitKeys::ip($request),
+        ]));
+
+        // Kaufen, Buchen, Abo, Stornieren und alles, was Credits bewegt: Ein Doppeltipp soll
+        // nicht zweimal abbuchen - dafuer sorgt die App; das hier faengt Skripte ab.
+        RateLimiter::for('payments', static fn (Request $request) => $limits('payments', [
+            'user' => RateLimitKeys::user($request),
+        ]));
+
+        // Check-ins und Einloesen am Aufkleber: Ein Stempel gibt es ohnehin nur einmal am Tag je Partner.
+        RateLimiter::for('checkin', static fn (Request $request) => $limits('checkin', [
+            'user' => RateLimitKeys::user($request),
+        ]));
+
+        // POST /user/avatar: every upload is decoded and encoded again (App\Support\Uploads).
+        RateLimiter::for('avatar', static fn (Request $request) => $limits('avatar', [
+            'user' => RateLimitKeys::user($request),
+        ]));
+
+        // Chat: zehn Nachrichten in zehn Sekunden - wie die Bremse im alten Backend - and the chat
+        // write class on top of it (config/ratelimits.php), with the chat's own answer.
+        $chatTooFast = static fn (Request $request, array $headers) => response()->json(
+            ['message' => self::MSG_CHAT_TOO_FAST],
+            429,
+            $headers,
+        );
+        RateLimiter::for('chat-send', static fn (Request $request) => RateLimitRules::limits('chat-send', [
+            'user' => RateLimitKeys::user($request),
+            'ip' => RateLimitKeys::ip($request),
+        ], $chatTooFast));
+
+        // Every other write route takes one of these classes (config/ratelimits.php names what
+        // each is for): per account and per client address.
+        foreach (['write-content', 'write-state', 'write-report', 'write-block', 'write-admin'] as $class) {
+            RateLimiter::for($class, static fn (Request $request) => $limits($class, [
+                'user' => RateLimitKeys::user($request),
+                'ip' => RateLimitKeys::ip($request),
+            ]));
+        }
     }
 }

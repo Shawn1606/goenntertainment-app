@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\Format;
 use App\Support\Media;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -50,13 +51,30 @@ class UserResource extends JsonResource
 
         // Aus Pfaden fertige Adressen - fremde URLs (Google) bleiben, wie sie sind.
         $data['avatar'] = Media::url($this->avatar, $request);
-        $data['banner'] = Media::url($this->banner, $request);
 
         // Immer vorhanden, auch wenn Node die Spalte noch nicht nachgeruestet
         // hat: Die App fragt `two_factor_method` ab, und ein fehlender Schluessel
         // waere dort `undefined` statt „aus". Secret und Codes blendet das Model
         // aus (#[Hidden] in App\Models\User).
         $data['two_factor_method'] = $this->resource->two_factor_method ?? null;
+
+        // Club-Stand fuer die Kopfzeile (Credits in der Mitte, Stufe am Bild).
+        // Fehlt die Spalte noch (Datenbank vor der Migration), gilt Free mit 0.
+        $data['club_plan'] = $this->resource->club_plan ?? 'free';
+        $data['credits_balance'] = (int) ($this->resource->credits_balance ?? 0);
+        $data['club_cancel_at_period_end'] = (bool) ($this->resource->club_cancel_at_period_end ?? false);
+        // month | year (Jahresabo)
+        $data['club_interval'] = $this->resource->club_interval ?? 'month';
+        unset($data['club_credits_next_at']);
+        foreach (['club_since', 'club_renews_at'] as $field) {
+            $data[$field] = Format::iso($this->resource->{$field} ?? null);
+        }
+
+        // Darf dieses Konto im Partner-Modus scannen? Die App zeigt dann den Eintrag.
+        $data['is_partner_staff'] = $this->resource->staffPartners()->exists();
+
+        // Ueberbleibsel der alten Kontostufen - die App kennt sie nicht mehr.
+        unset($data['account_type'], $data['granted_account_type'], $data['banner']);
 
         if ($this->withInterests) {
             $data['interests'] = $this->resource->interests()->get();

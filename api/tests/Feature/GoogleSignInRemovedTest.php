@@ -3,8 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use App\Support\OwnedRoutes;
-use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Route;
@@ -38,8 +36,7 @@ class GoogleSignInRemovedTest extends AppFeatureTestCase
 
     public function test_laravel_does_not_serve_google_sign_in_and_forwards_nothing(): void
     {
-        // Without a Node fallback Laravel answers every path itself.
-        config(['services.node_fallback.url' => '']);
+        // Laravel answers every path itself; there is no fallback to another backend.
         $user = $this->makeUser();
         $this->fakeGoogleProfileOf($user);
 
@@ -52,45 +49,17 @@ class GoogleSignInRemovedTest extends AppFeatureTestCase
         $this->assertNull(DB::table('users')->where('id', $user->id)->value('google_id'));
     }
 
-    public function test_with_the_node_fallback_on_the_answer_is_404_and_google_is_never_called(): void
-    {
-        // The deployed setup: what Laravel does not serve goes to Node, which has no such route
-        // either (its 404 is faked here; the Node test checks the real one).
-        config(['services.node_fallback.url' => 'http://node.test']);
-        $user = $this->makeUser();
-        $this->fakeGoogleProfileOf($user, [
-            'node.test/*' => Http::response(['message' => 'Nicht gefunden.'], 404),
-        ]);
-
-        $this->postJson('/api/auth/google', ['access_token' => 'fake-not-a-token'])
-            ->assertNotFound();
-
-        Http::assertNotSent(fn (ClientRequest $request) => str_contains($request->url(), 'googleapis.com'));
-        $this->assertSame(0, $this->tokenCount($user));
-        $this->assertNull(DB::table('users')->where('id', $user->id)->value('google_id'));
-    }
-
     /**
-     * Every route except the Node fallback whose URI or controller names Google: a Google route
-     * need not have 'google' in its path.
+     * Every route whose URI or controller names Google: a Google route need not have 'google' in
+     * its path. Every route is checked; none is left out (there is no fallback route any more).
      *
-     * The fallback is recognised the way App\Support\OwnedRoutes recognises it (by its name, or by
-     * its controller class), and the test asserts that exactly that one route was left out, so the
-     * exclusion cannot silently widen or stop matching.
-     *
-     * @return array{checked: int, skipped: int, google: list<string>}
+     * @return array{checked: int, google: list<string>}
      */
     private static function googleRoutes(): array
     {
         $checked = 0;
-        $skipped = 0;
         $google = [];
         foreach (Route::getRoutes()->getRoutes() as $route) {
-            if (OwnedRoutes::isFallback($route)) {
-                $skipped++;
-
-                continue;
-            }
             $checked++;
             $names = strtolower($route->uri().' '.($route->getControllerClass() ?? '').' '.$route->getActionName());
             if (str_contains($names, 'google')) {
@@ -98,7 +67,7 @@ class GoogleSignInRemovedTest extends AppFeatureTestCase
             }
         }
 
-        return ['checked' => $checked, 'skipped' => $skipped, 'google' => $google];
+        return ['checked' => $checked, 'google' => $google];
     }
 
     public function test_the_route_table_has_no_google_route(): void
@@ -106,7 +75,6 @@ class GoogleSignInRemovedTest extends AppFeatureTestCase
         $routes = self::googleRoutes();
 
         $this->assertGreaterThan(0, $routes['checked']);
-        $this->assertSame(1, $routes['skipped'], 'exactly one route, the Node fallback, is left out of the check');
         $this->assertSame([], $routes['google'], "{$routes['checked']} routes checked");
     }
 

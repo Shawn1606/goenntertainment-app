@@ -231,19 +231,26 @@ export function multipart(fields = {}, files = []) {
 
 export const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
-/** A list from server/src/storage.js (`export const NAME = ['a', 'b'];`): the folder names. */
+/**
+ * A list from api/app/Support/Uploads.php, the one writer of the uploads
+ * (`public const NAME = ['a', 'b'];`): the folder names.
+ */
 export function storageList(name) {
-  const text = readText(path.join(REPO_ROOT, 'server', 'src', 'storage.js'));
-  const list = new RegExp(`export const ${name} = \\[([^\\]]+)\\]`).exec(text)?.[1].match(/'([^']+)'/g)?.map((s) => s.slice(1, -1));
-  if (!list?.length) throw new Error(`cannot read ${name} in server/src/storage.js`);
+  const text = readText(path.join(REPO_ROOT, 'api', 'app', 'Support', 'Uploads.php'));
+  const list = new RegExp(`public const ${name} = \\[([^\\]]+)\\];`).exec(text)?.[1].match(/'([^']+)'/g)?.map((s) => s.slice(1, -1));
+  if (!list?.length) throw new Error(`cannot read ${name} in api/app/Support/Uploads.php`);
   return list;
 }
 
-/** One rule list of DEFAULT_WRITE_LIMITS in server/src/rate-limit.js, e.g. 'ip:120/1m'. */
-export function defaultWriteLimit(cls) {
-  const text = readText(path.join(REPO_ROOT, 'server', 'src', 'rate-limit.js'));
-  const spec = new RegExp(`^\\s*${cls}: '([^']+)',`, 'm').exec(text)?.[1];
-  if (!spec) throw new Error(`cannot read the ${cls} limit in server/src/rate-limit.js`);
+/**
+ * The default rules of one scope of a named limiter in api/config/ratelimits.php, e.g.
+ * laravelLimit('password-forgot', 'ip') -> '5/600,20/3600' (max/seconds, comma-separated).
+ */
+export function laravelLimit(limiter, scope) {
+  const text = readText(path.join(REPO_ROOT, 'api', 'config', 'ratelimits.php'));
+  const block = new RegExp(`'${limiter}' => \\[([\\s\\S]*?)\\],`).exec(text)?.[1] ?? '';
+  const spec = new RegExp(`'${scope}' => RateLimitRules::env\\('[A-Z0-9_]+', '([^']+)'\\)`).exec(block)?.[1];
+  if (!spec) throw new Error(`cannot read the ${scope} rules of ${limiter} in api/config/ratelimits.php`);
   return spec;
 }
 

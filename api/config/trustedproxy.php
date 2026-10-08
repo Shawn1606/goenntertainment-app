@@ -11,7 +11,7 @@
 | from anyone else those headers are ignored and $request->ip() is the peer itself.
 |
 | Empty = trust nobody (development: `php artisan serve` has no proxy in front). Never '*':
-| then every client could choose the address the rate limits count and that Node receives.
+| then every client could choose the address the rate limits count.
 | bootstrap/app.php names the headers; this file only the addresses, read at request time.
 |
 | Empty or unset gives an empty list, never null: Laravel's TrustProxies reads null as "trust

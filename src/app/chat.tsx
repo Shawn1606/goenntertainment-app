@@ -1,164 +1,105 @@
 /**
- * Ein Chat-Raum – für eine Gruppe oder für ein Event.
- *
- * ## Ein Screen für beide Arten
- *
- * `kind` (`group` | `activity`) und `id` kommen als Parameter. Zwei Screens für
- * dasselbe Gespräch wären zwei Layouts, die auseinanderlaufen; der Unterschied
- * zwischen „Gruppe" und „Event" ist genau eine Zeile in der Kopfzeile.
+ * Der Gruppen-Chat.
  *
  * ## Nachfragen statt zuhören
  *
- * Das Backend hat keine offene Verbindung (siehe server/src/routes/chat.js).
- * Dieser Screen fragt deshalb alle {@link POLL_MS} nach dem, was **nach** der
- * höchsten bekannten ID kam. Das ist meist eine leere Antwort und damit ein
- * winziger Aufruf. Drei Dinge machen es erträglich:
+ * Das Backend hat keine offene Verbindung. Dieser Screen fragt deshalb alle
+ * {@link POLL_MS} nach dem, was **nach** der höchsten bekannten ID kam – nur
+ * solange er im Vordergrund ist, mit Cursor, und nie zwei Abrufe gleichzeitig.
  *
- *  - Gefragt wird nur, solange der Screen im Vordergrund ist (`useFocusEffect`).
- *  - Gefragt wird mit Cursor, nicht nach dem ganzen Verlauf.
- *  - Läuft eine Anfrage noch, wird keine zweite gestartet (`polling`-Merker) –
- *    sonst stapeln sich bei langsamem Netz die Abrufe.
+ * ## Angebote teilen
  *
- * ## Warum die Liste nicht umgedreht ist
- *
- * Übliche Chats benutzen eine `inverted` FlatList. Hier steht eine normale
- * ScrollView, die ans Ende springt: Der Verlauf ist in dieser App kurz (eine
- * Runde verabredet sich, sie führt keinen Dauerchat), und `inverted` dreht auf
- * Android auch die Scroll-Schatten und die Reihenfolge beim Vorlesen um. Für
- * lange Verläufe wäre das die falsche Entscheidung – dann käme hier eine
- * FlatList hin.
+ * Eine Nachricht kann ein Angebot tragen („Wollen wir das machen?"). Die Karte
+ * im Verlauf öffnet das Angebot – mit der Gruppengröße schon eingestellt.
  */
-import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { Image } from 'expo-image';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ActivityDetailModal } from '@/components/activity-detail-modal';
-import { HomeBackground } from '@/components/home-background';
 import { MascotEmpty, MascotError } from '@/components/mascot';
 import { ReportSheet } from '@/components/report-sheet';
-import { ThemedText } from '@/components/themed-text';
-import { GlassSurface } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
-import { FontFamily, MaxContentWidth, Radius, Spacing } from '@/constants/theme';
+import { OptionsSheet, type SheetOption } from '@/components/ui/options-sheet';
+import { FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
 import { MAX_MESSAGE_LENGTH, groupByDay, highestId, showsAuthor, validateDraft } from '@/domain/chat';
+import { formatCredits, formatEuro } from '@/domain/club';
 import { formatClock } from '@/domain/date-format';
-import { useBrandSurface, useGlass } from '@/hooks/use-theme';
 import { useKeyboardInset } from '@/hooks/use-keyboard-inset';
-import {
-  ApiError,
-  api,
-  type Activity,
-  type ChatKind,
-  type ChatMessage,
-  type ChatRoomMeta,
-} from '@/lib/api';
+import { useTheme } from '@/hooks/use-theme';
+import { ApiError, api, errorMessage, type ChatMessage, type ChatRoom } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { confirmAction } from '@/lib/confirm';
+import { confirmAction, notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
-import { BackButton } from '@/components/ui/icon-button';
 
 /** Abstand zwischen zwei Nachfragen nach neuen Nachrichten. */
 const POLL_MS = 4000;
 
 export default function ChatScreen() {
-  const params = useLocalSearchParams<{ kind?: string; id?: string; title?: string }>();
-  const kind: ChatKind = params.kind === 'activity' ? 'activity' : 'group';
-  const refId = Number(params.id) || 0;
-
+  const params = useLocalSearchParams<{ group: string; title?: string; people?: string }>();
+  const groupId = Number(params.group) || 0;
+  const router = useRouter();
+  const colors = useTheme();
   const insets = useSafeAreaInsets();
-  const surface = useBrandSurface();
   const keyboard = useKeyboardInset();
   const { token } = useAuth();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [room, setRoom] = useState<ChatRoomMeta | null>(null);
+  const [room, setRoom] = useState<ChatRoom | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
-
-  /** Ein angetipptes geteiltes Event – wird als vollständiges Popup gezeigt. */
-  const [openActivity, setOpenActivity] = useState<Activity | null>(null);
-  /** Die gemeldete Nachricht (`null` = kein Melde-Blatt offen). */
+  const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
   const [reporting, setReporting] = useState<{ id: number; label: string } | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
-  /**
-   * Höchste bekannte Nachrichten-ID. Als Ref und nicht als State: Der Zeitgeber
-   * unten liest sie bei jedem Tick, und mit State müsste er dafür neu aufgesetzt
-   * werden – ein Intervall, das sich selbst alle vier Sekunden neu anlegt.
-   */
   const cursor = useRef(0);
-  /** Läuft gerade ein Abruf? Verhindert, dass sich Abrufe stapeln. */
   const polling = useRef(false);
 
   const remember = useCallback((incoming: ChatMessage[]) => {
     if (incoming.length === 0) return;
     setMessages((prev) => {
-      // Nach ID zusammenführen: Die eben selbst gesendete Nachricht steht schon
-      // in der Liste, und der nächste Abruf bringt sie erneut mit.
-      const seen = new Set(prev.map((message) => message.id));
-      const fresh = incoming.filter((message) => !seen.has(message.id));
-      if (fresh.length === 0) return prev;
-      return [...prev, ...fresh].sort((a, b) => a.id - b.id);
+      const seen = new Set(prev.map((m) => m.id));
+      const fresh = incoming.filter((m) => !seen.has(m.id));
+      return fresh.length === 0 ? prev : [...prev, ...fresh].sort((a, b) => a.id - b.id);
     });
     cursor.current = Math.max(cursor.current, highestId(incoming));
   }, []);
 
-  /** Erster Aufbau: Verlauf und Kopfdaten. */
   const loadFirst = useCallback(async () => {
-    if (!token || !refId) return;
+    if (!token || !groupId) return;
     setError(null);
     try {
-      const res = await api.chatMessages(token, kind, refId);
+      const res = await api.messages(token, groupId);
       setRoom(res.room);
       setMessages(res.data);
       cursor.current = highestId(res.data);
-      // Beim Betreten ist gelesen, was da ist – dafür ist man hier.
-      if (res.data.length > 0) {
-        api.markChatRead(token, kind, refId, cursor.current).catch(() => {});
-      }
+      if (res.data.length > 0) api.markRead(token, groupId, cursor.current).catch(() => {});
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.status === 404
-          ? 'Diesen Chat gibt es nicht mehr.'
-          : 'Der Chat ließ sich nicht laden. Läuft das Backend?',
-      );
+      setError(err instanceof ApiError && err.status === 404 ? 'Diesen Chat gibt es nicht mehr.' : 'Der Chat ließ sich nicht laden.');
     } finally {
       setLoading(false);
     }
-  }, [token, kind, refId]);
+  }, [token, groupId]);
 
-  /** Ein Tick: nur das, was nach dem Cursor kam. */
   const pollOnce = useCallback(async () => {
-    if (!token || !refId || polling.current) return;
+    if (!token || !groupId || polling.current) return;
     polling.current = true;
     try {
-      const res = await api.chatMessages(token, kind, refId, { after: cursor.current });
+      const res = await api.messages(token, groupId, { after: cursor.current });
       if (res.data.length > 0) {
         remember(res.data);
-        api.markChatRead(token, kind, refId, highestId(res.data)).catch(() => {});
+        api.markRead(token, groupId, highestId(res.data)).catch(() => {});
       }
-      // Kopfdaten mitziehen: Eine Gruppe kann zwischenzeitlich umbenannt worden
-      // sein, und dann soll oben nicht der alte Name stehen bleiben.
       setRoom(res.room);
     } catch {
-      // Ein fehlgeschlagener Tick bleibt still. Eine Fehlermeldung alle vier
-      // Sekunden wäre für ein kurz weggebrochenes Netz die falsche Antwort.
+      // Ein fehlgeschlagener Tick bleibt still.
     } finally {
       polling.current = false;
     }
-  }, [token, kind, refId, remember]);
+  }, [token, groupId, remember]);
 
   useFocusEffect(
     useCallback(() => {
@@ -175,100 +116,92 @@ export default function ChatScreen() {
       if (check.error) setError(check.error);
       return;
     }
-
     setSending(true);
     setError(null);
     const text = draft.trim();
-    // Das Feld sofort leeren: Wer gesendet hat, will weitertippen und nicht
-    // warten, bis das Netz geantwortet hat.
     setDraft('');
     try {
-      const res = await api.sendChatMessage(token, kind, refId, { body: text });
+      const res = await api.sendMessage(token, groupId, { body: text });
       remember([res.data]);
       feedback.tapped();
     } catch (err) {
       feedback.failed();
-      // Den Text zurückgeben, statt ihn zu verlieren – das ist der Unterschied
-      // zwischen „nochmal senden" und „nochmal schreiben".
       setDraft(text);
-      setError(err instanceof ApiError ? err.firstError() : 'Die Nachricht ging nicht raus.');
+      setError(errorMessage(err, 'Die Nachricht ging nicht raus.'));
     } finally {
       setSending(false);
     }
   }
 
-  async function onDelete(message: ChatMessage) {
-    if (!token) return;
-    const ok = await confirmAction(
-      'Nachricht löschen',
-      'Sie verschwindet für alle im Chat.',
-      'Löschen',
-      true,
-    );
-    if (!ok) return;
-    try {
-      await api.deleteChatMessage(token, message.id);
-      setMessages((prev) => prev.filter((row) => row.id !== message.id));
-      feedback.left();
-    } catch (err) {
-      feedback.failed();
-      setError(err instanceof ApiError ? err.firstError() : 'Löschen hat nicht geklappt.');
+  const menuOptions = useMemo<SheetOption[]>(() => {
+    const m = menuFor;
+    if (!m) return [];
+    const options: SheetOption[] = [];
+    if (m.is_mine || room?.can_moderate) {
+      options.push({
+        key: 'delete',
+        label: 'Nachricht löschen',
+        icon: 'trash',
+        destructive: true,
+        onPress: async () => {
+          if (!token) return;
+          if (!(await confirmAction('Nachricht löschen', 'Sie verschwindet für alle im Chat.', 'Löschen', true))) return;
+          try {
+            await api.deleteMessage(token, m.id);
+            setMessages((prev) => prev.filter((row) => row.id !== m.id));
+          } catch (err) {
+            setError(errorMessage(err, 'Löschen hat nicht geklappt.'));
+          }
+        },
+      });
     }
-  }
-
-  /**
-   * Antippen einer Nachricht: eigene bzw. als Verantwortliche:r löschen, fremde
-   * melden. Beides über eine Rückfrage, weil ein einzelner Tipp auf eine
-   * Nachricht sonst überraschend etwas täte.
-   */
-  async function onMessageAction(message: ChatMessage) {
-    const mayDelete = message.is_mine || room?.can_moderate;
-    if (mayDelete) {
-      await onDelete(message);
-      return;
+    if (!m.is_mine) {
+      options.push({ key: 'report', label: 'Melden', icon: 'flag', destructive: true, onPress: () => setReporting({ id: m.id, label: m.body || m.shared?.title || 'Nachricht' }) });
+      options.push({
+        key: 'block',
+        label: `${m.user.name ?? 'Person'} blockieren`,
+        icon: 'ban',
+        destructive: true,
+        onPress: async () => {
+          if (!token) return;
+          if (!(await confirmAction('Blockieren?', 'Du siehst die Nachrichten dieser Person nicht mehr. Aufheben kannst du das in den Einstellungen.', 'Blockieren', true))) return;
+          try {
+            await api.blockUser(token, m.user.id);
+            setMessages((prev) => prev.filter((row) => row.user.id !== m.user.id));
+          } catch (err) {
+            await notifyUser('Hat nicht geklappt', errorMessage(err));
+          }
+        },
+      });
     }
-    setReporting({
-      id: message.id,
-      label: message.body || `Geteiltes Event: ${message.shared?.title ?? ''}`,
-    });
-  }
-
-  /** Ein angetipptes geteiltes Event vollständig holen und im Popup zeigen. */
-  async function openShared(activityId: number) {
-    if (!token) return;
-    feedback.tapped();
-    try {
-      const res = await api.activity(token, activityId);
-      setOpenActivity(res.data);
-    } catch {
-      setError('Dieses Event gibt es nicht mehr.');
-    }
-  }
+    return options;
+  }, [menuFor, room?.can_moderate, token]);
 
   const sections = useMemo(() => groupByDay(messages, new Date()), [messages]);
-
-  const title = room?.title ?? params.title ?? 'Chat';
-  const subtitle = kind === 'group' ? 'Gruppen-Chat' : 'Event-Chat';
+  const title = room?.title ?? params.title ?? 'Gruppe';
+  const canSend = validateDraft(draft).ok;
 
   return (
-    <HomeBackground style={styles.screen}>
-      <View style={[styles.frame, { paddingTop: insets.top + Spacing.two }]}>
-        {/* Kopfzeile */}
-        <View style={styles.header}>
-          <BackButton />
-          <View style={styles.headerText}>
-            <ThemedText type="smallBold" style={{ color: surface.text }} numberOfLines={1}>
-              {title}
-            </ThemedText>
-            <ThemedText type="small" style={{ color: surface.textMuted }}>
-              {subtitle}
-            </ThemedText>
-          </View>
-        </View>
-
+    <View style={[styles.screen, { backgroundColor: colors.backgroundElement }]}>
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title,
+          headerRight: () => (
+            <Pressable
+              onPress={() => router.push({ pathname: '/group/[id]', params: { id: String(groupId) } })}
+              accessibilityRole="button"
+              accessibilityLabel="Gruppe ansehen"
+              hitSlop={10}>
+              <Icon name="users" size={22} color={colors.text} />
+            </Pressable>
+          ),
+        }}
+      />
+      <View style={styles.frame}>
         {loading ? (
           <View style={styles.center}>
-            <ActivityIndicator color={surface.accent} />
+            <ActivityIndicator color={colors.tint} />
           </View>
         ) : (
           <ScrollView
@@ -276,21 +209,16 @@ export default function ChatScreen() {
             contentContainerStyle={styles.list}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
-            // Ans Ende springen, sobald der Inhalt wächst: Das Neueste ist das,
-            // worum es geht. `animated: false` beim ersten Aufbau würde ruckeln,
-            // deshalb immer sanft.
             onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}>
             {error ? <MascotError detail={error} onRetry={loadFirst} /> : null}
 
             {messages.length === 0 && !error ? (
               <View style={styles.empty}>
                 <MascotEmpty mood="cheer" size={88} gesture="wave">
-                  <ThemedText style={{ color: surface.text }}>Noch nichts geschrieben.</ThemedText>
-                  <ThemedText type="small" style={[styles.centered, { color: surface.textMuted }]}>
-                    {kind === 'group'
-                      ? 'Schreib den ersten Satz – oder teile ein Event in diese Runde.'
-                      : 'Frag, wer was mitbringt, oder sag, wo genau ihr euch trefft.'}
-                  </ThemedText>
+                  <Text style={[styles.emptyTitle, { color: colors.text }]}>Noch nichts geschrieben.</Text>
+                  <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                    Schreib den ersten Satz – oder teile ein Angebot aus „Entdecken“ in diese Runde.
+                  </Text>
                 </MascotEmpty>
               </View>
             ) : null}
@@ -298,20 +226,19 @@ export default function ChatScreen() {
             {sections.map((section) => (
               <View key={section.label} style={styles.section}>
                 <View style={styles.dayRow}>
-                  <View style={[styles.dayLine, { backgroundColor: surface.chipBorder }]} />
-                  <ThemedText type="small" style={{ color: surface.textMuted }}>
-                    {section.label}
-                  </ThemedText>
-                  <View style={[styles.dayLine, { backgroundColor: surface.chipBorder }]} />
+                  <View style={[styles.dayLine, { backgroundColor: colors.border }]} />
+                  <Text style={[styles.day, { color: colors.textSecondary }]}>{section.label}</Text>
+                  <View style={[styles.dayLine, { backgroundColor: colors.border }]} />
                 </View>
-
                 {section.messages.map((message, index) => (
                   <MessageRow
                     key={message.id}
                     message={message}
                     withAuthor={showsAuthor(message, section.messages[index - 1] ?? null)}
-                    onLongPress={() => onMessageAction(message)}
-                    onOpenShared={openShared}
+                    onLongPress={() => setMenuFor(message)}
+                    onOpenShared={(offerId) =>
+                      router.push({ pathname: '/offer/[id]', params: { id: String(offerId), group: String(groupId), ...(params.people ? { people: params.people } : {}) } })
+                    }
                   />
                 ))}
               </View>
@@ -319,71 +246,38 @@ export default function ChatScreen() {
           </ScrollView>
         )}
 
-        {/* Eingabe. Die Tastaturhöhe wandert in den unteren Innenabstand – siehe
-            src/hooks/use-keyboard-inset.ts, warum nicht KeyboardAvoidingView. */}
         <View style={{ paddingBottom: insets.bottom + keyboard + Spacing.two }}>
-          <GlassSurface tone="panel" radius={Radius.field} style={styles.inputBar}>
+          <View style={[styles.inputBar, { backgroundColor: colors.background, borderColor: colors.border }]}>
             <TextInput
               value={draft}
               onChangeText={setDraft}
               placeholder="Nachricht schreiben"
-              placeholderTextColor={surface.textMuted}
+              placeholderTextColor={colors.textSecondary}
               multiline
               maxLength={MAX_MESSAGE_LENGTH}
               editable={!sending}
-              style={[styles.input, { color: surface.text }]}
+              style={[styles.input, { color: colors.text }]}
               accessibilityLabel="Nachricht schreiben"
             />
             <Pressable
               onPress={onSend}
-              disabled={sending || !validateDraft(draft).ok}
+              disabled={sending || !canSend}
               accessibilityRole="button"
               accessibilityLabel="Senden"
               hitSlop={8}
-              style={({ pressed }) => [
-                styles.sendButton,
-                {
-                  backgroundColor: validateDraft(draft).ok ? surface.accent : surface.chipBg,
-                },
-                pressed && styles.pressed,
-              ]}>
-              {sending ? (
-                <ActivityIndicator size="small" color={surface.accentText} />
-              ) : (
-                <Icon
-                  name="send"
-                  size={18}
-                  color={validateDraft(draft).ok ? surface.accentText : surface.textMuted}
-                />
-              )}
+              style={({ pressed }) => [styles.sendButton, { backgroundColor: canSend ? colors.tint : colors.backgroundSelected }, pressed && styles.pressed]}>
+              {sending ? <ActivityIndicator size="small" color="#ffffff" /> : <Icon name="send" size={18} color={canSend ? '#ffffff' : colors.textSecondary} />}
             </Pressable>
-          </GlassSurface>
+          </View>
         </View>
       </View>
 
-      {/* Ein geteiltes Event vollständig – mit Beitreten. Genau das ist der Sinn
-          des Teilens in einen Chat: aus „schau mal" wird eine Zusage. */}
-      <ActivityDetailModal
-        activity={openActivity}
-        onClose={() => setOpenActivity(null)}
-        onChanged={(updated) => setOpenActivity(updated)}
-      />
-
-      <ReportSheet
-        target={reporting ? { type: 'message', id: reporting.id, label: reporting.label } : null}
-        onClose={() => setReporting(null)}
-      />
-    </HomeBackground>
+      <OptionsSheet visible={menuFor !== null} title={menuFor?.body?.slice(0, 60)} options={menuOptions} onClose={() => setMenuFor(null)} />
+      <ReportSheet target={reporting ? { type: 'message', id: reporting.id, label: reporting.label } : null} onClose={() => setReporting(null)} />
+    </View>
   );
 }
 
-/**
- * Eine Nachricht.
- *
- * Eigene rechts und in der Akzentfarbe, fremde links auf Glas – die räumliche
- * Trennung ist schneller zu lesen als jeder Name. Der Name steht nur über der
- * ersten Nachricht einer Folge (siehe `showsAuthor` in src/domain/chat.ts).
- */
 function MessageRow({
   message,
   withAuthor,
@@ -393,105 +287,57 @@ function MessageRow({
   message: ChatMessage;
   withAuthor: boolean;
   onLongPress: () => void;
-  onOpenShared: (activityId: number) => void;
+  onOpenShared: (offerId: number) => void;
 }) {
-  const surface = useBrandSurface();
-  const glass = useGlass();
+  const colors = useTheme();
   const mine = message.is_mine;
+  const ink = mine ? '#ffffff' : colors.text;
+  const shared = message.shared;
 
   return (
     <View style={[styles.messageWrap, mine ? styles.messageMine : styles.messageTheirs]}>
-      {withAuthor && !mine ? (
-        <ThemedText type="small" style={[styles.author, { color: surface.textMuted }]}>
-          {message.user.name}
-        </ThemedText>
-      ) : null}
-
+      {withAuthor && !mine ? <Text style={[styles.author, { color: colors.textSecondary }]}>{message.user.name}</Text> : null}
       <Pressable
         onLongPress={onLongPress}
         delayLongPress={350}
-        accessibilityRole="button"
-        accessibilityLabel={
-          mine ? 'Eigene Nachricht – lang drücken zum Löschen' : 'Nachricht – lang drücken zum Melden'
-        }
+        // Bewusst ohne role="button": Im Web würde daraus ein <button>, und die
+        // geteilte Angebotskarte darin ist selbst einer (verschachtelt = ungültig).
+        accessibilityHint="Lang drücken für Optionen"
+        accessibilityActions={[{ name: 'longpress', label: 'Optionen' }]}
+        onAccessibilityAction={(e) => {
+          if (e.nativeEvent.actionName === 'longpress') onLongPress();
+        }}
         style={({ pressed }) => pressed && styles.pressed}>
-        <View
-          style={[
-            styles.bubble,
-            mine
-              ? { backgroundColor: surface.accent, borderColor: surface.accent }
-              : { backgroundColor: glass.fill, borderColor: glass.border },
-          ]}>
-          {/* Geteiltes Event: eine Karte im Chat, antippbar. Ohne `activity_id`
-              wurde es gelöscht – dann bleibt der Titel als Erinnerung, aber
-              nichts mehr zum Öffnen. */}
-          {message.shared ? (
+        <View style={[styles.bubble, mine ? { backgroundColor: colors.tint, borderColor: colors.tint } : { backgroundColor: colors.background, borderColor: colors.border }]}>
+          {shared ? (
             <Pressable
-              onPress={
-                message.shared.activity_id
-                  ? () => onOpenShared(message.shared!.activity_id!)
-                  : undefined
-              }
-              disabled={!message.shared.activity_id}
+              onPress={shared.offer_id ? () => onOpenShared(shared.offer_id!) : undefined}
+              disabled={!shared.offer_id}
               accessibilityRole="button"
-              accessibilityLabel={`Event ${message.shared.title}`}
+              accessibilityLabel={`Angebot ${shared.title}`}
               style={({ pressed }) => [
                 styles.sharedCard,
-                {
-                  backgroundColor: mine ? 'rgba(255,255,255,0.16)' : surface.chipBg,
-                  borderColor: mine ? 'rgba(255,255,255,0.28)' : surface.chipBorder,
-                },
+                { backgroundColor: mine ? 'rgba(255,255,255,0.16)' : colors.backgroundElement, borderColor: mine ? 'rgba(255,255,255,0.3)' : colors.border },
                 pressed && styles.pressed,
               ]}>
-              {message.shared.banner_url ? (
-                <Image
-                  source={{ uri: message.shared.banner_url }}
-                  style={styles.sharedBanner}
-                  contentFit="cover"
-                />
-              ) : null}
-              <View style={styles.sharedText}>
-                <ThemedText
-                  type="smallBold"
-                  style={{ color: mine ? surface.accentText : surface.text }}
-                  numberOfLines={2}>
-                  {message.shared.title}
-                </ThemedText>
-                <ThemedText
-                  type="small"
-                  style={{ color: mine ? surface.accentText : surface.textMuted }}
-                  numberOfLines={1}>
-                  {message.shared.activity_id
-                    ? [message.shared.location, formatClock(message.shared.starts_at)]
+              {shared.image_url ? <Image source={{ uri: shared.image_url }} style={styles.sharedImage} contentFit="cover" /> : null}
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.sharedTitle, { color: ink }]} numberOfLines={2}>
+                  {shared.title}
+                </Text>
+                <Text style={[styles.sharedMeta, { color: mine ? 'rgba(255,255,255,0.85)' : colors.textSecondary }]} numberOfLines={1}>
+                  {shared.offer_id
+                    ? [shared.partner_name, shared.price_cents !== null ? formatEuro(shared.price_cents) : shared.price_credits !== null ? `${formatCredits(shared.price_credits)} Credits` : null]
                         .filter(Boolean)
-                        .join(' · ') || 'Event ansehen'
-                    : 'Dieses Event gibt es nicht mehr'}
-                </ThemedText>
+                        .join(' · ')
+                    : 'Dieses Angebot gibt es nicht mehr'}
+                </Text>
               </View>
-              {message.shared.activity_id ? (
-                <Icon
-                  name="ticket"
-                  size={18}
-                  color={mine ? surface.accentText : surface.accent}
-                />
-              ) : null}
+              {shared.offer_id ? <Icon name="chevron-right" size={18} color={ink} /> : null}
             </Pressable>
           ) : null}
-
-          {message.body ? (
-            <ThemedText style={{ color: mine ? surface.accentText : surface.text }}>
-              {message.body}
-            </ThemedText>
-          ) : null}
-
-          <ThemedText
-            type="small"
-            style={[
-              styles.time,
-              { color: mine ? surface.accentText : surface.textMuted },
-            ]}>
-            {formatClock(message.created_at)}
-          </ThemedText>
+          {message.body ? <Text style={[styles.body, { color: ink }]}>{message.body}</Text> : null}
+          <Text style={[styles.time, { color: ink }]}>{formatClock(message.created_at)}</Text>
         </View>
       </Pressable>
     </View>
@@ -500,78 +346,29 @@ function MessageRow({
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  frame: {
-    flex: 1,
-    width: '100%',
-    maxWidth: MaxContentWidth,
-    alignSelf: 'center',
-    paddingHorizontal: Spacing.four,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: Spacing.three,
-  },
-  headerText: { flex: 1, gap: 1 },
+  frame: { flex: 1, width: '100%', maxWidth: MaxContentWidth, alignSelf: 'center', paddingHorizontal: Spacing.three },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  list: { gap: Spacing.three, paddingBottom: Spacing.three, flexGrow: 1 },
+  list: { gap: Spacing.three, paddingVertical: Spacing.three, flexGrow: 1 },
   empty: { paddingTop: Spacing.five },
-  centered: { textAlign: 'center' },
+  emptyTitle: { fontFamily: FontFamily.bold, fontSize: 17 },
+  emptyText: { fontFamily: FontFamily.medium, fontSize: 14, textAlign: 'center' },
   section: { gap: Spacing.one },
-  dayRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.three,
-    paddingVertical: Spacing.two,
-  },
-  dayLine: { flex: 1, height: StyleSheet.hairlineWidth * 2 },
+  dayRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingVertical: Spacing.two },
+  dayLine: { flex: 1, height: Stroke },
+  day: { fontFamily: FontFamily.semibold, fontSize: 12 },
   messageWrap: { maxWidth: '86%' },
   messageMine: { alignSelf: 'flex-end', alignItems: 'flex-end' },
   messageTheirs: { alignSelf: 'flex-start', alignItems: 'flex-start' },
-  author: { paddingHorizontal: Spacing.two, paddingBottom: 2 },
-  bubble: {
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    borderRadius: Radius.card,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-    gap: Spacing.one,
-  },
-  sharedCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    borderWidth: StyleSheet.hairlineWidth * 2,
-    borderRadius: Radius.field,
-    padding: Spacing.two,
-    minWidth: 220,
-  },
-  sharedBanner: { width: 44, height: 44, borderRadius: Spacing.two },
-  sharedText: { flex: 1, gap: 1 },
-  /** Die Uhrzeit ist Beiwerk – klein, rechts, gedämpft. */
+  author: { paddingHorizontal: Spacing.two, paddingBottom: 2, fontFamily: FontFamily.semibold, fontSize: 12 },
+  bubble: { borderWidth: Stroke, borderRadius: Radius.card, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, gap: Spacing.one },
+  body: { fontFamily: FontFamily.regular, fontSize: 15, lineHeight: 21 },
+  sharedCard: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, borderWidth: Stroke, borderRadius: Radius.field, padding: Spacing.two, minWidth: 220 },
+  sharedImage: { width: 48, height: 48, borderRadius: 8 },
+  sharedTitle: { fontFamily: FontFamily.bold, fontSize: 14 },
+  sharedMeta: { fontFamily: FontFamily.medium, fontSize: 12 },
   time: { alignSelf: 'flex-end', fontSize: 11, opacity: 0.75, fontFamily: FontFamily.regular },
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: Spacing.two,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two,
-  },
-  input: {
-    flex: 1,
-    fontSize: 15,
-    fontFamily: FontFamily.regular,
-    // Höchstens vier Zeilen: Danach scrollt das Feld, statt den Verlauf zu
-    // verdrängen.
-    maxHeight: 96,
-    paddingVertical: Spacing.two,
-  },
-  sendButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.two, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderWidth: Stroke, borderRadius: Radius.card },
+  input: { flex: 1, fontSize: 15, fontFamily: FontFamily.regular, maxHeight: 96, paddingVertical: Spacing.two },
+  sendButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
   pressed: { opacity: 0.7 },
 });

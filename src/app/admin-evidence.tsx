@@ -34,7 +34,7 @@ export default function AdminEvidenceScreen() {
     if (!token) return;
     setError(null);
     try {
-      const res = await api.adminEvidence(token);
+      const res = await api.admin.evidence(token);
       setItems(res.data);
     } catch {
       setError('Beweismittel konnten nicht geladen werden.');

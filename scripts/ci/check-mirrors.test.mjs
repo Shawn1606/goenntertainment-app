@@ -32,12 +32,12 @@ const FILES = {
     'services:',
     '  db:',
     `    image: mysql:8.4@${MYSQL_DIGEST}`,
-    '  node:',
-    '    environment:',
-    '      # The same setting as api.',
-    '      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}',
     '  api:',
     '    environment:',
+    '      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}',
+    '  scheduler:',
+    '    environment:',
+    '      # The same setting as api.',
     '      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}',
     'volumes:',
     '  db-data:',
@@ -67,21 +67,13 @@ const FILES = {
     '',
   ].join('\n'),
   'server/src/streak.js': "import { pool } from './db.js';\nexport const ACTIVE_DAYS_WINDOW = 120;\n",
-  'api/app/Support/Streak.php': '<?php\nfinal class Streak\n{\n    public const ACTIVE_DAYS_WINDOW = 120;\n}\n',
-  'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 32;\n}\n',
-  'api/docker/entrypoint.sh': 'if [ -n "$NODE_FALLBACK_URL" ] && [ "${#NODE_INTERNAL_SECRET}" -lt 32 ]; then\n  exit 1\nfi\n',
-  'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\n# SANCTUM_EXPIRATION=43200\n',
   'server/.env.example': 'PORT=8001\r\nNODE_INTERNAL_SECRET=dev-only-fixture-not-a-secret-0000000000\r\n# SANCTUM_EXPIRATION=43200\r\n',
+  'api/.env.example': 'APP_NAME=Laravel\n# SANCTUM_EXPIRATION=43200\n',
   'server/src/uploads.js': '/** Largest image. */\nexport const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;\n',
-  'api/app/Http/Controllers/NodeFallbackController.php': '<?php\n        $nodeLimit = 5 * 1024 ** 2;\n',
+  'api/app/Support/Uploads.php': '<?php\nfinal class Uploads\n{\n    public const MAX_KB = 5120;\n}\n',
   'server/src/rate-limit.js': "export const RATE_LIMIT_MESSAGE = 'Zu viele Versuche – bitte warte kurz.';\n",
   'api/app/Providers/AppServiceProvider.php': "<?php\n        fn () => response()->json(['message' => 'Zu viele Versuche – bitte warte kurz.'], 429);\n",
-  'src/app/create-activity.tsx': "import x from 'y';\nconst MAX_INTERESTS = 5;\n",
-  'server/src/routes/activities.js': '/** Interests. */\nconst MAX_INTERESTS = 5;\n',
   'server/src/activity-pages.js': 'export const PAST_AFTER_HOURS = 3;\nexport const PAGE_SIZE_DEFAULT = 50;\nexport const PAGE_SIZE_MAX = 100;\n',
-  'src/domain/urgency.ts': 'const HOUR = 60 * MINUTE;\nexport const SOON_MS = 3 * HOUR;\nexport const LIVE_MS = 3 * HOUR;\n',
-  'src/app/(app)/index.tsx': '  const feed = useMemo(() => {\n    const cutoff = now.getTime() - 3 * 60 * 60 * 1000;\n',
-  'src/app/search.tsx': '/** Vergangenes nicht. */\nconst PAST_CUTOFF_MS = 3 * 60 * 60 * 1000;\n',
   'src/domain/activity-pages.ts': 'export const ACTIVITY_PAGE_SIZE = 100;\nexport const MAX_ACTIVITY_PAGES = 1000;\n',
   'server/src/app.js': [
     "export const JSON_LIMIT = '32kb';",
@@ -126,9 +118,9 @@ test('agrees on a consistent tree and reports its denominator', () => {
   withTree({}, (root) => {
     const r = checkMirrors(root);
     assert.deepEqual(r.problems, []);
-    assert.equal(r.values, 20);
-    assert.equal(r.places, 49);
-    assert.equal(r.occurrences, 51, 'two mysql services in ci.yml count separately, for the tag and for the digest');
+    assert.equal(r.values, 16);
+    assert.equal(r.places, 37);
+    assert.equal(r.occurrences, 39, 'two mysql services in ci.yml count separately, for the tag and for the digest');
   });
 });
 
@@ -193,13 +185,13 @@ test('detects a deploy that does not hand SANCTUM_EXPIRATION to both containers 
   const compose = FILES['deploy/docker-compose.yml'];
   withTree({ 'deploy/docker-compose.yml': compose.replace('      # The same setting as api.\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}\n', '') }, (root) => {
     assert.deepEqual(checkMirrors(root).problems, [
-      'SANCTUM_EXPIRATION in the deploy: cannot find node SANCTUM_EXPIRATION in deploy/docker-compose.yml',
+      'SANCTUM_EXPIRATION in the deploy: cannot find scheduler SANCTUM_EXPIRATION in deploy/docker-compose.yml',
     ]);
   });
-  withTree({ 'deploy/docker-compose.yml': compose.replace('    environment:\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}', '    environment:\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-1440}') }, (root) => {
+  withTree({ 'deploy/docker-compose.yml': compose.replace('  api:\n    environment:\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-}', '  api:\n    environment:\n      SANCTUM_EXPIRATION: ${SANCTUM_EXPIRATION:-1440}') }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0], /^SANCTUM_EXPIRATION in the deploy differs: \$\{SANCTUM_EXPIRATION:-1440\} \(deploy\/docker-compose\.yml api .*\), \$\{SANCTUM_EXPIRATION:-\} \(deploy\/docker-compose\.yml node /);
+    assert.match(r.problems[0], /^SANCTUM_EXPIRATION in the deploy differs: \$\{SANCTUM_EXPIRATION:-1440\} \(deploy\/docker-compose\.yml api .*\), \$\{SANCTUM_EXPIRATION:-\} \(deploy\/docker-compose\.yml scheduler /);
   });
 });
 
@@ -217,43 +209,19 @@ test('detects a 429 message that differs between Node and Laravel', () => {
 });
 
 test('detects an upload size limit that differs between Node and Laravel', () => {
-  withTree({ 'api/app/Http/Controllers/NodeFallbackController.php': '<?php\n        $nodeLimit = 8 * 1024 ** 2;\n' }, (root) => {
+  withTree({ 'api/app/Support/Uploads.php': '<?php\nfinal class Uploads\n{\n    public const MAX_KB = 8192;\n}\n' }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0], /^Upload size limit \(MB\) differs: 5 \(server\/src\/uploads\.js MAX_UPLOAD_BYTES\), 8 \(api\/app\/Http\/Controllers\/NodeFallbackController\.php \$nodeLimit\)$/);
+    assert.match(r.problems[0], /^Upload size limit \(MB\) differs: 8 \(api\/app\/Support\/Uploads\.php MAX_KB\), 5 \(server\/src\/uploads\.js MAX_UPLOAD_BYTES\)$/);
+  });
+  // Not a whole number of MB: not found, never a pass.
+  withTree({ 'api/app/Support/Uploads.php': '<?php\nfinal class Uploads\n{\n    public const MAX_KB = 5000;\n}\n' }, (root) => {
+    assert.deepEqual(checkMirrors(root).problems, ['Upload size limit (MB): cannot find MAX_KB in api/app/Support/Uploads.php']);
   });
   withTree({ 'server/src/uploads.js': 'export const MAX_UPLOAD_BYTES = 5242880;\n' }, (root) => {
     assert.deepEqual(checkMirrors(root).problems, [
       'Upload size limit (MB): cannot find MAX_UPLOAD_BYTES in server/src/uploads.js',
     ]);
-  });
-});
-
-test('detects an interests-per-event maximum that differs between the app and the server', () => {
-  withTree({ 'server/src/routes/activities.js': 'const MAX_INTERESTS = 6;\n' }, (root) => {
-    const r = checkMirrors(root);
-    assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0], /^Interests per event differs: 5 \(src\/app\/create-activity\.tsx MAX_INTERESTS\), 6 /);
-  });
-});
-
-test('detects an event-over time that differs between the server and the app', () => {
-  const cases = [
-    ['server/src/activity-pages.js', FILES['server/src/activity-pages.js'].replace('PAST_AFTER_HOURS = 3', 'PAST_AFTER_HOURS = 2'), /^Event over after \(hours\) differs: 2 \(server\/src\/activity-pages\.js PAST_AFTER_HOURS\), 3 /],
-    ['src/domain/urgency.ts', FILES['src/domain/urgency.ts'].replace('LIVE_MS = 3 * HOUR', 'LIVE_MS = 4 * HOUR'), /4 \(src\/domain\/urgency\.ts LIVE_MS\)/],
-    ['src/app/(app)/index.tsx', FILES['src/app/(app)/index.tsx'].replace('- 3 * 60', '- 6 * 60'), /6 \(src\/app\/\(app\)\/index\.tsx the feed cutoff\)/],
-    ['src/app/search.tsx', FILES['src/app/search.tsx'].replace('= 3 * 60', '= 1 * 60'), /1 \(src\/app\/search\.tsx PAST_CUTOFF_MS\)/],
-  ];
-  for (const [file, text, message] of cases) {
-    withTree({ [file]: text }, (root) => {
-      const r = checkMirrors(root);
-      assert.equal(r.problems.length, 1, file);
-      assert.match(r.problems[0], message);
-    });
-  }
-  // Written in milliseconds instead of hours: not found, never a pass.
-  withTree({ 'src/domain/urgency.ts': 'export const LIVE_MS = 10800000;\n' }, (root) => {
-    assert.deepEqual(checkMirrors(root).problems, ['Event over after (hours): cannot find LIVE_MS in src/domain/urgency.ts']);
   });
 });
 
@@ -265,46 +233,17 @@ test('detects an event-list page size the app asks for that is not the server ma
   });
 });
 
-test('detects a smallest usage retention that is not the streak window of both backends', () => {
+test('detects a smallest usage retention that is not the streak window', () => {
   const config = FILES['server/src/config.js'].replace('USAGE_RETENTION_MIN_DAYS = 120', 'USAGE_RETENTION_MIN_DAYS = 90');
   withTree({ 'server/src/config.js': config }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
-    assert.match(
-      r.problems[0],
-      /^Streak window \(days\) differs: 120 \(server\/src\/streak\.js ACTIVE_DAYS_WINDOW\), 120 \(api\/app\/Support\/Streak\.php ACTIVE_DAYS_WINDOW\), 90 /,
-    );
+    assert.match(r.problems[0], /^Streak window \(days\) differs: 120 \(server\/src\/streak\.js ACTIVE_DAYS_WINDOW\), 90 /);
   });
-  withTree({ 'api/app/Support/Streak.php': '<?php\nfinal class Streak\n{\n    public const ACTIVE_DAYS_WINDOW = 90;\n}\n' }, (root) => {
+  withTree({ 'server/src/streak.js': "import { pool } from './db.js';\nexport const ACTIVE_DAYS_WINDOW = 90;\n" }, (root) => {
     const r = checkMirrors(root);
     assert.equal(r.problems.length, 1);
     assert.match(r.problems[0], /^Streak window \(days\) differs: /);
-  });
-});
-
-test('detects an internal secret minimum length that differs between Node, Laravel and the container', () => {
-  withTree({ 'api/app/Support/NodeInternal.php': '<?php\nfinal class NodeInternal\n{\n    public const SECRET_MIN_LENGTH = 24;\n}\n' }, (root) => {
-    const r = checkMirrors(root);
-    assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0], /^Internal secret minimum length differs: 32 \(server\/src\/config\.js .*\), 24 \(api\/app\/Support\/NodeInternal\.php .*\), 32 \(api\/docker\/entrypoint\.sh .*\)$/);
-  });
-  withTree({ 'api/docker/entrypoint.sh': 'exit 0\n' }, (root) => {
-    assert.deepEqual(checkMirrors(root).problems, [
-      'Internal secret minimum length: cannot find NODE_INTERNAL_SECRET length check in api/docker/entrypoint.sh',
-    ]);
-  });
-});
-
-test('detects development internal secrets that differ between api/ and server/', () => {
-  withTree({ 'server/.env.example': 'NODE_INTERNAL_SECRET=dev-only-other-not-a-secret-00000000000\n# SANCTUM_EXPIRATION=43200\n' }, (root) => {
-    const r = checkMirrors(root);
-    assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0], /^Development NODE_INTERNAL_SECRET differs: /);
-  });
-  withTree({ 'api/.env.example': 'APP_NAME=Laravel\nNODE_INTERNAL_SECRET=\n# SANCTUM_EXPIRATION=43200\n' }, (root) => {
-    assert.deepEqual(checkMirrors(root).problems, [
-      'Development NODE_INTERNAL_SECRET: cannot find NODE_INTERNAL_SECRET in api/.env.example',
-    ]);
   });
 });
 

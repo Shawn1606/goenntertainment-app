@@ -15,7 +15,7 @@
  * darin.
  */
 import type { ReactNode } from 'react';
-import { Pressable, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -28,6 +28,22 @@ import * as haptics from '@/lib/haptics';
 
 /** Knapp und straff: soll wie Material wirken, nicht wie Gummi. */
 const SPRING = { damping: 18, stiffness: 320, mass: 0.5 } as const;
+
+/**
+ * Größenangaben, die auch die äußere Tippfläche braucht. `style` liegt auf der
+ * inneren (federnden) Fläche; ohne diese Kopie blieb die äußere Hülle so groß
+ * wie ihr Inhalt – `flex: 1` in einer Reihe wirkte dann nicht, und zwei Knöpfe
+ * nebeneinander liefen im Web über den Rand. Ränder und Position bleiben innen.
+ */
+const OUTER_KEYS = ['flex', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf', 'width', 'minWidth', 'maxWidth'] as const;
+
+function outerStyle(style: StyleProp<ViewStyle>): ViewStyle | undefined {
+  const flat = StyleSheet.flatten(style);
+  if (!flat) return undefined;
+  const outer: Record<string, unknown> = {};
+  for (const key of OUTER_KEYS) if (flat[key] !== undefined) outer[key] = flat[key];
+  return outer as ViewStyle;
+}
 
 export type PressableScaleProps = Omit<PressableProps, 'style' | 'children'> & {
   children: ReactNode;
@@ -61,6 +77,7 @@ export function PressableScale({
 
   return (
     <Pressable
+      style={outerStyle(style)}
       disabled={disabled}
       onPressIn={(event) => {
         if (!disabled) {
@@ -70,6 +87,8 @@ export function PressableScale({
 
           // Bei „Bewegung reduzieren" bleibt das Abdunkeln als Rückmeldung –
           // ganz ohne Reaktion wüsste man nicht, ob der Tipp angekommen ist.
+          // `.set()` statt `.value =`: So erkennt der React Compiler die
+          // Animationswerte als veränderlich und meckert nicht.
           scale.set(reduced ? 1 : withSpring(scaleTo, SPRING));
           dim.set(withTiming(1, { duration: 90 }));
         }

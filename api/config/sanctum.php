@@ -50,9 +50,9 @@ return [
     |
     | This app: tokens end after 30 days by default (an engineering default, F-20; listed for
     | confirmation), set through SANCTUM_EXPIRATION in minutes. App\Support\Sessions writes the
-    | same lifetime into each token's expires_at. The Node server checks both, and reads
-    | SANCTUM_EXPIRATION as well, so a lower value ends older sessions there at once too. A value
-    | that is not a positive whole number stops the configuration from loading: expiry is never off.
+    | same lifetime into each token's expires_at, and the retention prune counts from it
+    | (App\Support\Retention). A value that is not a positive whole number stops the
+    | configuration from loading: expiry is never off.
     |
     */
 

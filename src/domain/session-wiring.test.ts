@@ -63,13 +63,19 @@ test('the app start removes a stored password before anything else', () => {
 test('every authenticated request reports its answer', () => {
   const api = code('lib/api.ts');
   const fetchSites = (api.match(/Authorization: `Bearer \$\{token\}`/g) ?? []).length;
-  const reported = (api.match(/return parseResponse<[^>]+>\(response, token\);/g) ?? []).length;
+  // Through parseResponse, or (the text download) reported directly; minus the report inside
+  // parseResponse itself.
+  const reported =
+    (api.match(/return parseResponse<[^>]+>\(response, token\);/g) ?? []).length +
+    (api.match(/sessionWatch\.report\(response\.status, token\);/g) ?? []).length -
+    1;
 
-  // Denominator: the fetch sites that send a token (request, upload, moderationUpload, createActivity).
-  assert.ok(fetchSites >= 4, `only ${fetchSites} authenticated fetch sites found`);
+  // Denominator: the fetch sites that send a token (request, upload, fetchText).
+  assert.ok(fetchSites >= 3, `only ${fetchSites} authenticated fetch sites found`);
   assert.equal(reported, fetchSites, `${fetchSites} authenticated fetch sites, ${reported} report their answer`);
-  assert.equal((api.match(/await fetch\(/g) ?? []).length, fetchSites, 'a fetch site that sends no token was added: check it');
-  assert.match(api, /sessionWatch\.report\(response\.status, token\)/);
+  // Every request to the API (the other fetch reads a picked image on the web, never the API).
+  assert.equal((api.match(/await fetch\(`\$\{API_URL\}/g) ?? []).length, fetchSites, 'a fetch to the API that sends no token was added: check it');
+  assert.match(api, /async function parseResponse<T>\(response: Response, token: string \| null \| undefined\): Promise<T> \{\s*sessionWatch\.report\(response\.status, token\);/);
 });
 
 test('the auth state signs out through one path when a session is rejected', () => {
@@ -101,43 +107,38 @@ test('signing out clears the session in memory before the stored token', () => {
 });
 
 /*
- * F-44: the search history leaves the device with the session. The tested logic is
- * forgetSearchHistory (search-history.test.ts) and the history step of signOutLocally
- * (session.test.ts); these checks prove that the app hands them the real storage on every path.
+ * F-44: what the session left on the device goes with it. The marketplace keeps no search history;
+ * the personal data it keeps is the offline copy of the bookings and the pass (src/lib/offline-cache.ts).
+ * The tested logic is the history step of signOutLocally (session.test.ts); these checks prove
+ * that the app hands it the real storage on every path.
  */
 
-test('every way the session ends removes the search history (F-44)', () => {
+test('every way the session ends removes the offline copy of bookings and pass (F-44)', () => {
   const context = code('lib/auth-context.tsx');
 
   // Denominator: the places in the auth state that remove the stored token (the imports aside).
-  // Each one must remove the search history as well.
+  // Each one must remove the offline copy as well.
   const withoutImports = context.replace(/^import[\s\S]*?;$/gm, '');
   const tokenSites = (withoutImports.match(/\bclearToken\b/g) ?? []).length;
   assert.equal(tokenSites, 2, 'expected two token removals: the one local sign-out and the token rejected at app start');
 
   // 1. The one local sign-out (logout, the 401 during a session, the logout after deleting the
-  //    account): the history of the account that signs out, taken before the session is forgotten.
+  //    account).
   const start = context.indexOf('const endLocalSession = useCallback(');
   const end = context.indexOf('sessionWatch.subscribe(', start);
   assert.ok(start >= 0 && end > start, 'endLocalSession not found before the 401 listener');
   const body = context.slice(start, end);
-  assert.match(body, /const signedOutId = userIdRef\.current;[\s\S]*signOutLocally\(/, 'the account id is not taken before signing out');
-  assert.match(body, /clearHistory: \(\) => clearSearchHistory\(signedOutId\),/, 'endLocalSession does not remove the search history');
-  assert.match(context, /userIdRef\.current = user\?\.id \?\? null;/, 'the account id for the sign-out is not kept');
+  assert.match(body, /clearHistory: \(\) => clearOfflineCache\(\),/, 'endLocalSession does not remove the offline copy');
   assert.equal((context.match(/endLocalSession\((?:true|false)\)/g) ?? []).length, 2, 'logout and the 401 listener both end in endLocalSession');
+  // No other sign-out path that could skip it.
+  assert.equal((withoutImports.match(/\bclearOfflineCache\(/g) ?? []).length, 2, 'expected the offline copy removed in endLocalSession and at app start only');
 
-  // 2. A stored token rejected at app start (the account deleted, or the token revoked, while the
-  //    app was closed): the account id stored beside the token, read before the server is asked,
-  //    says whose history goes - on phones too, whose storage cannot list its keys.
+  // 2. A stored token rejected at app start (the account deleted or banned, or the token revoked,
+  //    while the app was closed).
   assert.match(
     context,
-    /const storedUserId = await loadSessionUserId\(\);[\s\S]*?await api\.me\(stored\)/,
-    'the stored account id is not read before the stored token is checked',
-  );
-  assert.match(
-    context,
-    /if \(error instanceof ApiError && error\.status === 401\) \{\s*await clearToken\(\);\s*await clearSearchHistory\(storedUserId\);/,
-    'a token rejected at app start leaves the search history of its account behind',
+    /if \(error instanceof ApiError && \(error\.status === 401 \|\| error\.status === 403\)\) \{\s*await clearToken\(\);\s*await clearOfflineCache\(\)/,
+    'a token rejected at app start leaves the offline copy behind',
   );
 });
 
@@ -172,28 +173,19 @@ test('the account id is stored beside the token and leaves with it (F-44)', () =
   assert.match(store, /return parseSessionUserId\(raw\);/);
 });
 
-test('deleting the account removes the search history before the closing dialog (F-44)', () => {
+test('deleting the account removes the offline copy before the closing dialog (F-44)', () => {
   // The dialog waits for a tap; an app closed there never reached the sign-out after it.
   const screen = code('app/security/delete-account.tsx');
   const deletion = screen.indexOf('await api.deleteAccount(');
   assert.ok(deletion >= 0, 'delete-account.tsx no longer deletes through api.deleteAccount');
-  const history = screen.indexOf('await clearSearchHistory(user?.id ?? null);', deletion);
+  const offline = screen.indexOf('await clearOfflineCache()', deletion);
   const dialog = screen.indexOf('await notifyUser(', deletion);
-  assert.ok(history > deletion, 'deleting the account does not remove the search history right away');
-  assert.ok(dialog > history, 'the search history is removed only after the dialog');
-  assert.match(screen, /import \{ clearSearchHistory \} from '@\/lib\/search-history-store';/);
-});
-
-test('the search history store removes histories from the real device storage (F-44)', () => {
-  const store = code('lib/search-history-store.ts');
-  assert.match(store, /export function clearSearchHistory\(/, 'src/lib/search-history-store.ts has no clearSearchHistory');
-  assert.match(store, /return forgetSearchHistory\(deviceStore, userId\);/);
-  // One key format for writing and removing.
-  assert.match(store, /function keyFor\(userId: number\): string \{\s*return searchHistoryKey\(userId\);\s*\}/);
-  // Web: localStorage, which can list its keys; phones: the secure store.
-  assert.match(store, /globalThis\.localStorage\?\.removeItem\(key\);/);
-  assert.match(store, /keys: webKeys,/);
-  assert.match(store, /remove: \(key\) => SecureStore\.deleteItemAsync\(key\)/);
+  assert.ok(offline > deletion, 'deleting the account does not remove the offline copy right away');
+  assert.ok(dialog > offline, 'the offline copy is removed only after the dialog');
+  assert.match(screen, /import \{ clearOfflineCache \} from '@\/lib\/offline-cache';/);
+  // Both stored parts go, on the phone and on the web (src/lib/offline-cache.ts).
+  const cache = code('lib/offline-cache.ts');
+  assert.match(cache, /export async function clearOfflineCache\(\): Promise<void> \{\s*await Promise\.all\(\[setRaw\(BOOKINGS_KEY, null\), setRaw\(PASS_KEY, null\)\]\);/);
 });
 
 test('deleting the account ends in the same sign-out (F-44)', () => {

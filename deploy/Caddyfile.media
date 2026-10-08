@@ -17,8 +17,8 @@
 
 :8080 {
 	# The same allow-list as the edge's (deploy/test/static.test.mjs checks both against
-	# server/src/storage.js: PUBLIC_FOLDERS, STORED_NAME).
-	@upload path_regexp upload ^/storage/(avatars|banners|posts|user-banners)/[0-9a-f]{40}\.(jpg|png|webp)$
+	# api/app/Support/Uploads.php: PUBLIC_FOLDERS, STORED_NAME).
+	@upload path_regexp upload ^/storage/(avatars|partners|offers)/[0-9a-f]{40}\.(jpg|png|webp)$
 	handle @upload {
 		root * /srv
 		file_server

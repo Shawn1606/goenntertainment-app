@@ -269,7 +269,7 @@ test('F-05: the first start keeps the public edge down until the admin account e
   const partial = ups.find((u) => u.call.services.length > 0);
   assert.ok(partial, '"First start" has no `docker compose up -d <services>` without caddy');
   assert.ok(!partial.call.services.includes('caddy'), `the first up starts caddy: ${cmds[partial.i]}`);
-  for (const s of ['db', 'node', 'api']) assert.ok(partial.call.services.includes(s), `the first up does not start ${s}`);
+  for (const s of ['db', 'api', 'scheduler']) assert.ok(partial.call.services.includes(s), `the first up does not start ${s}`);
   const seed = find(/^ADMIN_EMAIL="\$ADMIN_EMAIL" ADMIN_PASSWORD="\$ADMIN_PASSWORD" docker compose run --rm seed$/, 'creates the admin with the one-off seed service, ADMIN_* set for that command only');
   const gate = find(/^docker compose run --rm admin-gate$/, 'checks that an admin exists');
   const full = ups.find((u) => u.call.services.length === 0);
@@ -314,11 +314,13 @@ test('F-17: backups go outside the clone, and the restore is spelled out step by
   console.log(`restore: ${cmds.length} commands`);
   const steps = [
     [/sha256sum -c/, 'checks the set'],
-    [/^docker compose stop\b(?=.*\bapi\b)(?=.*\bnode\b)(?=.*\bbackup\b)/, 'stops api, node and backup'],
+    // Every service that writes the database or the volumes: api, the scheduler (its jobs and the
+    // retention prune) and the backup.
+    [/^docker compose stop\b(?=.*\bapi\b)(?=.*\bscheduler\b)(?=.*\bbackup\b)/, 'stops api, the scheduler and backup'],
     // Without pipefail a gunzip that fails hands mysql an empty input, and the load reports success.
     [/^set -o pipefail$/, 'makes a failing gunzip fail the load (pipefail)'],
     [/^gunzip -c "<SET_DIR>\/db-\$stamp\.sql\.gz" \| docker compose exec -T db /, 'loads the dump into db'],
-    [/^docker compose run --rm --no-deps -v "<SET_DIR>:\/backups:ro" storage-init sh -c .*tar -xzf .*uploads.*private-media.*chown -R 1000:1000/, 'unpacks both upload volumes and gives them back to uid 1000'],
+    [/^docker compose run --rm --no-deps -v "<SET_DIR>:\/backups:ro" storage-init sh -c .*tar -xzf .*uploads.*private-media.*chown -R 33:33/, 'unpacks both upload volumes and gives them back to uid 33 (www-data)'],
     [/^docker compose up -d$/, 'starts everything again'],
   ];
   let last = -1;

@@ -11,7 +11,7 @@ import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import { clearSavedEmail } from '@/lib/credential-store';
-import { clearSearchHistory } from '@/lib/search-history-store';
+import { clearOfflineCache } from '@/lib/offline-cache';
 
 /**
  * Konto endgültig löschen – direkt in der App.
@@ -64,10 +64,10 @@ export default function DeleteAccountScreen() {
         ...(needsCode ? { code: code.trim() } : {}),
       });
       await clearSavedEmail();
-      // The search history goes now (F-44), not only with the sign-out after the dialog: the
-      // dialog waits for a tap, and an app closed there would never reach that sign-out.
-      // Never throws.
-      await clearSearchHistory(user?.id ?? null);
+      // The offline copy of the bookings and the pass goes now (F-44), not only with the sign-out
+      // after the dialog: the dialog waits for a tap, and an app closed there would never reach
+      // that sign-out.
+      await clearOfflineCache().catch(() => undefined);
       await notifyUser('Konto gelöscht', res.message ?? 'Dein Konto wurde gelöscht. Schade, dass du gehst!');
       // Der Token ist mit dem Konto verschwunden – lokal abmelden, dann zeigt die App
       // wieder den Willkommensbildschirm.

@@ -66,7 +66,6 @@ class RequestBodyLimitServerTest extends TestCase
             'CACHE_STORE' => 'array',
             'SESSION_DRIVER' => 'array',
             'LOG_CHANNEL' => 'null',
-            'NODE_FALLBACK_URL' => '',
         ]);
 
         $this->server = proc_open([

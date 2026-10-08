@@ -1,70 +1,54 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { ERROR_REACTION, TAB_KEYS, moodAt, reactionFor } from './mascot-mood.ts';
-
-test('jeder Tab hat Gesichter, eine Geste und einen Satz', () => {
-  for (const tab of TAB_KEYS) {
-    const reaction = reactionFor(tab);
-    assert.ok(reaction.moods.length > 0, `${tab} hat kein Gesicht`);
-    assert.ok(reaction.gesture, `${tab} hat keine Geste`);
-    assert.ok(reaction.line.length > 0, `${tab} hat keinen Satz`);
-  }
-});
-
-test('die Hauptstimmung ist immer das erste Gesicht', () => {
-  // Sonst zeigt die Figur bei abgeschalteter Bewegung ein anderes Gesicht als
-  // im ersten Schritt des Wechsels.
-  for (const tab of TAB_KEYS) {
-    const reaction = reactionFor(tab);
-    assert.equal(reaction.mood, reaction.moods[0]);
-    assert.equal(reaction.mood, moodAt(tab, 0));
-  }
-});
-
-test('die Tabs reagieren unterschiedlich – sonst wäre die Figur Tapete', () => {
-  const moods = TAB_KEYS.map((tab) => reactionFor(tab).mood);
-  // Genau der Punkt der Anforderung: „soll dem Tab entsprechen".
-  assert.equal(new Set(moods).size, TAB_KEYS.length);
-});
-
-test('gewinkt wird dort, wo man jemanden begrüßt oder trifft', () => {
-  assert.equal(reactionFor('home').gesture, 'wave');
-  assert.equal(reactionFor('friends').gesture, 'wave');
-  // Auf der Karte wird gesucht, nicht gewinkt.
-  assert.equal(reactionFor('map').gesture, 'look');
-  // Und wer schläft, gestikuliert nicht.
-  assert.equal(reactionFor('settings').gesture, 'none');
-});
-
-test('moodAt läuft im Kreis', () => {
-  assert.equal(moodAt('home', 0), 'happy');
-  assert.equal(moodAt('home', 1), 'idle');
-  assert.equal(moodAt('home', 2), 'happy');
-  assert.equal(moodAt('home', 101), 'idle');
-});
-
-test('moodAt: ein Tab mit nur einem Gesicht wechselt nicht', () => {
-  for (const step of [0, 1, 2, 7, 1000]) {
-    assert.equal(moodAt('settings', step), 'asleep');
-  }
-});
-
-test('moodAt verträgt jede Zahl – ein Zähler läuft beliebig weit', () => {
-  assert.equal(moodAt('home', -1), 'idle');
-  assert.equal(moodAt('home', -2), 'happy');
-  assert.equal(moodAt('home', 1.9), 'idle');
-  assert.equal(moodAt('home', Number.NaN), 'happy');
-  assert.equal(moodAt('home', Number.POSITIVE_INFINITY), 'happy');
-});
-
-test('ein unbekannter Tab fällt auf die Startseite zurück statt zu werfen', () => {
-  assert.deepEqual(reactionFor('gibtsnicht'), reactionFor('home'));
-  assert.equal(moodAt('gibtsnicht', 1), moodAt('home', 1));
-});
+import { ERROR_REACTION, IDLE_TRICKS, MASCOT_MOODS, MASCOT_TRICKS, POKE_REACTIONS, pickTrick, pokeReaction, trickPause } from './mascot-mood.ts';
 
 test('der Fehlerfall sagt „Oh oh" und erklärt es in einem Satz', () => {
   assert.equal(ERROR_REACTION.headline, 'Oh oh');
   assert.equal(ERROR_REACTION.line, 'Es ist ein Fehler aufgetreten.');
   assert.equal(ERROR_REACTION.mood, 'oops');
+});
+
+test('pickTrick wiederholt nie das vorige Kunststück', () => {
+  for (let i = 0; i < IDLE_TRICKS.length; i++) {
+    const roll = (i + 0.5) / IDLE_TRICKS.length;
+    const first = pickTrick(null, roll);
+    assert.notEqual(pickTrick(first, roll), first);
+  }
+});
+
+test('pickTrick verträgt jede Zahl', () => {
+  for (const roll of [-1, 0, 0.999, 1, 7, Number.NaN]) {
+    assert.ok(IDLE_TRICKS.includes(pickTrick(null, roll)));
+  }
+});
+
+test('trickPause bleibt zwischen 3,5 und 6,5 Sekunden', () => {
+  assert.equal(trickPause(0), 3500);
+  assert.equal(trickPause(1), 6500);
+  assert.equal(trickPause(-5), 3500);
+  assert.equal(trickPause(Number.NaN), 5000);
+});
+
+test('Antippen: jedes Mal ein anderes Kunststück und Gesicht, im Kreis', () => {
+  for (let i = 1; i < POKE_REACTIONS.length; i++) {
+    const a = pokeReaction(i);
+    const b = pokeReaction(i + 1);
+    assert.ok(a.trick !== b.trick || a.mood !== b.mood, `gleich bei ${i}`);
+  }
+  assert.deepEqual(pokeReaction(POKE_REACTIONS.length + 1), pokeReaction(1));
+  assert.deepEqual(pokeReaction(Number.NaN), pokeReaction(1));
+});
+
+test('viele Gesichter und Kunststücke – und die Antipp-Reihe nutzt nur bekannte', () => {
+  assert.ok(MASCOT_MOODS.length >= 13);
+  assert.ok(MASCOT_TRICKS.length >= 14);
+  assert.equal(new Set(MASCOT_MOODS).size, MASCOT_MOODS.length);
+  for (const r of POKE_REACTIONS) {
+    assert.ok(MASCOT_MOODS.includes(r.mood), r.mood);
+    assert.ok(MASCOT_TRICKS.includes(r.trick), r.trick);
+  }
+  for (const t of IDLE_TRICKS) assert.ok(MASCOT_TRICKS.includes(t), t);
+  // Die Antipp-Reihe zeigt die meisten Gesichter mindestens einmal.
+  assert.ok(new Set(POKE_REACTIONS.map((r) => r.mood)).size >= 7);
 });

@@ -13,8 +13,8 @@ import {
 } from '@/lib/api';
 import { notifyUser } from '@/lib/confirm';
 import { migrateSavedLogin } from '@/lib/credential-store';
-import { clearSearchHistory } from '@/lib/search-history-store';
-import { clearToken, loadSessionUserId, loadToken, saveSessionUserId, saveToken } from '@/lib/token-store';
+import { clearOfflineCache } from '@/lib/offline-cache';
+import { clearToken, loadToken, saveSessionUserId, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
   /** true, solange beim App-Start der gespeicherte Token geprüft wird. */
@@ -31,25 +31,14 @@ type AuthContextValue = {
   completeTwoFactor: (challenge: string, code: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
-  /**
-   * Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat.
-   *
-   * Für Endpunkte, die das Konto ändern, ohne `updateProfile` zu sein – etwa
-   * Profilbild und Banner (siehe `api.setProfileImage`). Ohne das zeigten
-   * Kopfzeile und Konto-Blatt weiter das alte Bild. Bewusst kein zweiter
-   * Netzaufruf wie bei `refreshUser`: Die Antwort IST schon der neue Stand.
-   */
+  /** Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat. */
   applyUser: (user: User) => void;
   /**
-   * Die eigenen Daten neu vom Server holen.
-   *
-   * Nötig, weil sich das Konto auch OHNE Zutun der Person ändern kann: Ein Admin
-   * bestätigt eine Anfrage auf Creator (siehe admin-requests.tsx), und die App
-   * wüsste bis zum nächsten Anmelden nichts davon – Events erstellen wäre
-   * freigeschaltet, der Knopf dafür aber weiter versteckt. Scheitert still: Ein
-   * fehlgeschlagener Abgleich darf den Bildschirm nicht mit einem Fehler
-   * überziehen, der mit dem zu tun hat, was man dort gerade macht.
+   * Einzelne Felder sofort ändern – vor allem der Credit-Stand nach Kauf,
+   * Buchung oder Stempel. Die Kopfzeile zählt dann mit, ohne `/user` neu zu laden.
    */
+  patchUser: (patch: Partial<User>) => void;
+  /** Die eigenen Daten neu vom Server holen. Scheitert still. */
   refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -71,23 +60,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tokenRef.current = token;
   }, [token]);
 
-  /** The signed-in account's id, for the search history a sign-out removes (F-44). */
-  const userIdRef = useRef<number | null>(null);
-  useEffect(() => {
-    userIdRef.current = user?.id ?? null;
-  }, [user]);
-
   /**
    * The one way this device signs out (F-20): deliberate logout and a 401 during a session both
    * end here, so whatever else must leave the device at sign-out is added in this one place.
    * `notify` marks the 401 case and tells the person why. The order and the handling of a
    * storage error are in signOutLocally (src/domain/session.ts): memory first, then storage; a
-   * storage error rejects only a deliberate logout. The search history goes too (F-44), on every
-   * path - logout, the 401, and the logout after deleting the account - and never fails it.
+   * storage error rejects only a deliberate logout. The offline copy of the bookings and the pass
+   * (src/lib/offline-cache.ts) goes too (F-44), on every path - logout, the 401, and the logout
+   * after deleting the account - and never fails it.
    */
   const endLocalSession = useCallback((notify: boolean) => {
-    // Taken before forget() ends the session: whose search history to remove.
-    const signedOutId = userIdRef.current;
     return signOutLocally(
       {
         forget: () => {
@@ -96,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
         },
         clearStorage: clearToken,
-        clearHistory: () => clearSearchHistory(signedOutId),
+        clearHistory: () => clearOfflineCache(),
         notice: () =>
           notifyUser(
             'Abgemeldet',
@@ -128,8 +110,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const stored = await loadToken();
       if (stored) {
-        // Whose session this is, read before the server is asked (clearToken removes it).
-        const storedUserId = await loadSessionUserId();
         try {
           const { user: me } = await api.me(stored);
           // Kept beside the token, also for a session from before this version (F-44).
@@ -139,13 +119,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(me);
           }
         } catch (error) {
-          // Token ungültig (401) → verwerfen. Bei reinem Netzfehler behalten.
-          if (error instanceof ApiError && error.status === 401) {
+          // Token ungültig (401) oder Konto gesperrt (403) → verwerfen. Bei
+          // reinem Netzfehler behalten, damit man offline nicht abgemeldet wird.
+          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             await clearToken();
             // The session ended while the app was closed (the account deleted, the token
-            // revoked): the stored account id says whose search history goes, on phones too;
-            // a listable storage (web) also gives up every other history left (F-44).
-            await clearSearchHistory(storedUserId);
+            // revoked): its offline copy goes too (F-44).
+            await clearOfflineCache().catch(() => undefined);
           } else if (active && stored) {
             setToken(stored);
           }
@@ -191,6 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(updated);
       },
       applyUser: (updated) => setUser(updated),
+      patchUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
       refreshUser: async () => {
         if (!token) return;
         try {
@@ -227,4 +208,10 @@ export function useAuth(): AuthContextValue {
     throw new Error('useAuth muss innerhalb von <AuthProvider> benutzt werden.');
   }
   return ctx;
+}
+
+/** Das angemeldete Konto samt Token – für Screens hinter dem Login-Wächter. */
+export function useSession(): { token: string; user: User } | null {
+  const { token, user } = useAuth();
+  return token && user ? { token, user } : null;
 }

@@ -3,44 +3,32 @@
 namespace Tests\Feature;
 
 use App\Models\User;
-use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Tests\AppFeatureTestCase;
 
 /**
- * DELETE /api/me: Laravel checks (password or confirmation word, last admin, 2FA code), Node
- * deletes (server/src/account-deletion.js holds the file paths). Laravel calls Node's internal
- * route DELETE /internal/accounts/{id} with the shared secret and a one-time grant
- * (App\Support\NodeInternal); Node's side: server/test/account-deletion.test.js.
+ * DELETE /api/me: Laravel checks (password or confirmation word, last admin, 2FA code) and deletes
+ * (App\Support\AccountDeletion, the same deletion the admin area uses). No other backend is
+ * called: every outgoing HTTP request fails the test.
  *
  * The checks were also tested on Node's copy of the route (server/test/account.test.js); that
  * copy is deleted (F-01, one owner per path), and those tests moved here with the same
- * assertions. Node is faked: a call nobody faked fails the test.
+ * assertions. The deletion's own rules come from server/src/account-deletion.js and its tests.
  */
 class AccountDeletionTest extends AppFeatureTestCase
 {
-    /** Test-only shared secret (32+ characters). */
-    private const SECRET = 'test-only-internal-secret-not-a-secret-0000';
-
     protected function setUp(): void
     {
         parent::setUp();
-        config([
-            'services.node_fallback.url' => 'http://node.test',
-            'services.node_fallback.internal_secret' => self::SECRET,
-        ]);
         Http::preventStrayRequests();
-    }
-
-    private function fakeNode(int $status = 200, array $body = ['message' => 'Dein Konto wurde gelöscht.']): void
-    {
-        Http::fake(['node.test/*' => Http::response($body, $status)]);
+        Storage::fake('public');
+        Storage::fake('private');
     }
 
     public function test_delete_me_requires_the_password(): void
     {
-        $this->fakeNode();
         $user = $this->makeUser();
         $token = $this->issueToken($user);
 
@@ -58,7 +46,6 @@ class AccountDeletionTest extends AppFeatureTestCase
 
     public function test_passwordless_account_confirms_with_the_word(): void
     {
-        $this->fakeNode();
         $user = $this->makeUser(['password' => null]);
         $token = $this->issueToken($user);
 
@@ -66,100 +53,115 @@ class AccountDeletionTest extends AppFeatureTestCase
         $this->assertNotEmpty($missing->json('errors.confirm'));
 
         $this->withBearer($token)->deleteJson('/api/me', ['confirm' => 'ja'])->assertStatus(422);
-        Http::assertNothingSent();
+        $this->assertTrue(User::whereKey($user->id)->exists());
 
-        // Case, spaces and the spelling without umlaut do not matter; then Node deletes.
+        // Case, spaces and the spelling without umlaut do not matter; then the account is gone.
         $this->withBearer($token)->deleteJson('/api/me', ['confirm' => ' löschen '])
             ->assertOk()
             ->assertJsonPath('message', 'Dein Konto wurde gelöscht.');
-        Http::assertSentCount(1);
-    }
-
-    public function test_delete_me_calls_the_node_internal_route_with_secret_and_grant(): void
-    {
-        $this->fakeNode();
-        $user = $this->makeUser();
-
-        $this->withBearer($this->issueToken($user))->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])
-            ->assertOk()
-            ->assertJsonPath('message', 'Dein Konto wurde gelöscht.');
-
-        Http::assertSentCount(1);
-        Http::assertSent(function (ClientRequest $request) use ($user) {
-            $grant = $request->header('X-Account-Deletion-Grant')[0] ?? '';
-            $grantRow = DB::table('two_factor_challenges')
-                ->where('user_id', $user->id)
-                ->where('purpose', 'delete')
-                ->where('token_hash', hash('sha256', $grant))
-                ->exists();
-
-            return $request->method() === 'DELETE'
-                && $request->url() === 'http://node.test/internal/accounts/'.$user->id
-                && $request->header('X-Internal-Secret') === [self::SECRET]
-                && $grant !== '' && $grantRow
-                // Laravel's own call carries no user token: the secret and the grant are the proof.
-                && ! $request->hasHeader('Authorization');
-        });
-        Http::assertNotSent(fn (ClientRequest $request) => str_contains($request->url(), '/api/'));
-    }
-
-    public function test_delete_me_fails_closed_without_internal_secret_or_node_address(): void
-    {
-        $this->fakeNode();
-        $user = $this->makeUser();
-        $token = $this->issueToken($user);
-
-        $settings = [
-            'no secret' => ['services.node_fallback.internal_secret' => ''],
-            'too short a secret' => ['services.node_fallback.internal_secret' => substr(self::SECRET, 0, 31)],
-            'no Node address' => ['services.node_fallback.url' => ''],
-        ];
-        foreach ($settings as $case => $setting) {
-            config(['services.node_fallback.url' => 'http://node.test', 'services.node_fallback.internal_secret' => self::SECRET]);
-            config($setting);
-
-            $this->withBearer($token)->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])
-                ->assertStatus(503)
-                ->assertJsonPath('message', 'Serverfehler.');
-            $this->assertTrue(User::whereKey($user->id)->exists(), $case);
-        }
-
+        $this->assertFalse(User::whereKey($user->id)->exists());
         Http::assertNothingSent();
     }
 
-    public function test_delete_me_passes_node_answers_through(): void
+    public function test_delete_me_deletes_the_account_and_only_its_own_tokens(): void
     {
         $user = $this->makeUser();
+        $other = $this->makeUser();
         $token = $this->issueToken($user);
+        $this->issueToken($user);
+        $this->issueToken($other);
+        DB::table('password_reset_tokens')->insert(['email' => $user->email, 'token' => 'fixture-not-a-secret', 'created_at' => now()]);
 
-        $answers = [
-            409 => 'Du bist der letzte Admin – ernenne erst jemand anderen, bevor du dein Konto löschst.',
-            403 => 'Die Bestätigung ist abgelaufen – bitte versuch es noch einmal.',
-        ];
-        $sequence = Http::sequence();
-        foreach ($answers as $status => $message) {
-            $sequence->push(['message' => $message], $status);
-        }
-        Http::fake(['node.test/*' => $sequence]);
+        $this->withBearer($token)->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])
+            ->assertOk()
+            ->assertJsonPath('message', 'Dein Konto wurde gelöscht.');
 
-        foreach ($answers as $status => $message) {
-            $this->withBearer($token)->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])
-                ->assertStatus($status)
-                ->assertJsonPath('message', $message);
-        }
+        $this->assertFalse(User::whereKey($user->id)->exists());
+        $this->assertSame(0, DB::table('personal_access_tokens')->where('tokenable_id', $user->id)->count());
+        $this->assertSame(0, DB::table('password_reset_tokens')->where('email', $user->email)->count());
+        $this->assertSame(1, DB::table('personal_access_tokens')->where('tokenable_id', $other->id)->count());
+        $this->assertTrue(User::whereKey($other->id)->exists());
+        Http::assertNothingSent();
     }
 
-    public function test_the_public_fallback_never_passes_the_internal_headers_on(): void
+    public function test_delete_me_refuses_the_last_admin(): void
     {
-        $this->fakeNode(200, ['data' => []]);
+        // Other admins in the test database would make this account not the last one.
+        User::where('is_admin', true)->update(['is_admin' => false]);
+        $admin = $this->makeUser(['is_admin' => true]);
 
-        $this->withHeaders([
-            'X-Internal-Secret' => self::SECRET,
-            'X-Account-Deletion-Grant' => 'fixture-grant-not-a-secret',
-        ])->getJson('/api/activities')->assertOk();
+        $this->withBearer($this->issueToken($admin))->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'Du bist der letzte Admin – ernenne erst jemand anderen, bevor du dein Konto löschst.');
 
-        Http::assertSentCount(1);
-        Http::assertSent(fn (ClientRequest $request) => ! $request->hasHeader('X-Internal-Secret')
-            && ! $request->hasHeader('X-Account-Deletion-Grant'));
+        $this->assertTrue(User::whereKey($admin->id)->exists());
+    }
+
+    /**
+     * MySQL 8.4: an account with its own events and their history is deleted (its events first,
+     * see App\Support\AccountDeletion), and a participant's history keeps the event's title and
+     * loses only the picture.
+     */
+    public function test_an_account_with_own_events_and_history_is_deleted(): void
+    {
+        $host = $this->makeUser();
+        $guest = $this->makeUser();
+        $banner = 'banners/'.str_repeat('ab', 20).'.jpg';
+        Storage::disk('public')->put($banner, 'fixture');
+
+        $event = DB::table('activities')->insertGetId([
+            'user_id' => $host->id, 'title' => 'Fixture event', 'description' => 'Fixture', 'location' => 'Fixture place',
+            'starts_at' => now()->addDay(), 'banner_path' => $banner, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        foreach ([[$host->id, 'host'], [$guest->id, 'participant']] as [$userId, $role]) {
+            DB::table('activity_history')->insert([
+                'user_id' => $userId, 'activity_id' => $event, 'role' => $role, 'title' => 'Fixture event',
+                'location' => 'Fixture place', 'starts_at' => now()->addDay(), 'banner_path' => $banner,
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+        }
+
+        $this->withBearer($this->issueToken($host))->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])->assertOk();
+
+        $this->assertFalse(User::whereKey($host->id)->exists());
+        $this->assertFalse(DB::table('activities')->where('id', $event)->exists());
+        $kept = DB::table('activity_history')->where('user_id', $guest->id)->first();
+        $this->assertNotNull($kept, "the participant's history row stays");
+        $this->assertSame('Fixture event', $kept->title);
+        $this->assertNull($kept->activity_id);
+        $this->assertNull($kept->banner_path);
+        $this->assertNotNull($kept->removed_at);
+        Storage::disk('public')->assertMissing($banner);
+    }
+
+    public function test_the_moderation_log_and_every_own_file_go_with_the_account(): void
+    {
+        $user = $this->makeUser();
+        $admin = $this->makeUser(['is_admin' => true]);
+        $avatar = 'avatars/'.str_repeat('a1', 20).'.jpg';
+        $evidence = 'evidence/'.str_repeat('e2', 20).'.png';
+        $shared = 'avatars/'.str_repeat('c3', 20).'.webp';
+        Storage::disk('public')->put($avatar, 'fixture');
+        Storage::disk('public')->put($shared, 'fixture');
+        Storage::disk('private')->put($evidence, 'fixture');
+        $user->forceFill(['avatar' => $avatar, 'banner' => $shared])->save();
+        // Another account still shows the shared file: it stays.
+        $admin->forceFill(['avatar' => $shared])->save();
+        DB::table('ban_evidence')->insert([
+            'user_id' => $user->id, 'admin_id' => $admin->id, 'source' => 'admin', 'action' => 'timeout',
+            'reason' => 'Fixture reason', 'image_path' => $evidence, 'created_at' => now(),
+        ]);
+        DB::table('moderation_reports')->insert([
+            'user_id' => $user->id, 'context' => 'activity', 'verdict' => 'block', 'severity' => 2,
+            'action' => 'block', 'body' => 'Fixture text', 'image_path' => $evidence, 'created_at' => now(),
+        ]);
+
+        $this->withBearer($this->issueToken($user))->deleteJson('/api/me', ['password' => self::TEST_PASSWORD])->assertOk();
+
+        $this->assertSame(0, DB::table('moderation_reports')->where('body', 'Fixture text')->count());
+        $this->assertSame(0, DB::table('ban_evidence')->where('user_id', $user->id)->count());
+        Storage::disk('public')->assertMissing($avatar);
+        Storage::disk('private')->assertMissing($evidence);
+        Storage::disk('public')->assertExists($shared);
     }
 }

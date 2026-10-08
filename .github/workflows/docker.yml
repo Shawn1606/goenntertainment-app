@@ -47,8 +47,8 @@ jobs:
     runs-on: ubuntu-24.04
     # At least the sum of its steps' limits, so GitHub never cancels the job before the stack
     # test's after() and the log step have run: the static checks 10 min, the stack test 42 (its
-    # file limit in package.json is 40 min, most of it for the first build of the api and node
-    # images), the logs 5, and 3 for checkout, setup and the counts. deploy/test/budgets.test.mjs
+    # file limit in package.json is 40 min, most of it for the first build of the api image and
+    # the probe's), the logs 5, and 3 for checkout, setup and the counts. deploy/test/budgets.test.mjs
     # checks these numbers against each other and against the stack test's own budgets.
     timeout-minutes: 60
     env:

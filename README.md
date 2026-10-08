@@ -10,28 +10,23 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npm install
    ```
 
-2. Start the backend (required — the app loads accounts/activities from it)
+2. Start the backend (required — the app loads offers, bookings and the account from it)
 
-   The app talks to Laravel in [`api/`](api/) on port `8000`. Laravel serves sign-up,
-   sign-in and the account itself and forwards every other `/api` path to the Node backend
-   in [`server/`](server/), which runs behind it on port `8001`. Node no longer serves
-   Laravel's paths, so the app cannot talk to Node directly. Neither starts automatically;
-   run each in its own terminal (on Windows, `scripts/dev-up.ps1` starts both):
+   The app talks to Laravel in [`api/`](api/) on port `8000`, which answers every route. The
+   former Node backend in [`server/`](server/) is no longer needed by the app (its code and
+   tests stay in the repository). Laravel does not start automatically; run it in its own
+   terminal (on Windows, `scripts/dev-up.ps1` starts it together with Metro):
 
    ```bash
-   npm run server                                    # Node on 8001 (PORT in server/.env)
-   php api/artisan serve --host=0.0.0.0 --port=8000  # Laravel in front
+   php api/artisan serve --host=0.0.0.0 --port=8000
    ```
 
    First-time setup:
-   - Database: apply `server/schema.sql` to the MySQL database `goenntertainment`, then
-     run `npm run server:seed`.
-   - `server/.env` from `server/.env.example` (`PORT=8001`, `DB_*`).
    - `api/.env` from `api/.env.example`, then `php api/artisan key:generate`; set
-     `DB_CONNECTION=mysql` and the same database settings as in `server/.env`.
-     `NODE_FALLBACK_URL` points Laravel at Node, and `NODE_INTERNAL_SECRET` must be the same
-     value in both files (both examples carry the same dev-only value). An older `api/.env`
-     or `server/.env` takes these lines from the examples.
+     `DB_CONNECTION=mysql` and the database settings of the MySQL database `goenntertainment`.
+   - Database: `php api/artisan migrate` builds the tables and the category list (on a
+     database created from `server/schema.sql` earlier, it adds only what is missing).
+   - An admin account: sign up in the app, then `php api/artisan admin:grant <address>`.
 
 3. Start the app (in a second terminal)
 

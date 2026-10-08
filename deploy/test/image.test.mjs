@@ -246,10 +246,13 @@ test("F-28: the api site names the public https origin, so Apache's own redirect
   t.diagnostic(`RUN instructions in the final chain: ${run.length}`);
   assert.ok(insert, 'no RUN puts ServerName ${APP_URL} as the first line of <VirtualHost *:8080>');
   assert.match(insert, /grep -A1 -x '<VirtualHost \\\*:8080>' \S+000-default\.conf \| grep -qx '\[\[:space:\]\]\*ServerName \$\{APP_URL\}'/, 'the build does not check the inserted line');
-  // APP_URL is the public origin, https and without a port.
+  // APP_URL is the public origin, https and without a port, in every service of the image (api
+  // and the scheduler, whose mails link to the app).
   const compose = read('deploy/docker-compose.yml');
   const appUrl = [...compose.matchAll(/^\s+APP_URL:\s*(\S+)/gm)].map((m) => m[1]);
-  assert.deepEqual(appUrl, ['https://${DOMAIN:?DOMAIN'], 'the compose does not set APP_URL to https://<DOMAIN> for api');
+  t.diagnostic(`APP_URL lines in the compose: ${appUrl.length}`);
+  assert.ok(appUrl.length > 0, 'the compose sets no APP_URL for api');
+  assert.deepEqual([...new Set(appUrl)], ['https://${DOMAIN:?DOMAIN'], 'the compose sets an APP_URL that is not https://<DOMAIN>');
 });
 
 // ------------------------------------------------------------------ F-25 and the server image

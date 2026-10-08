@@ -1,8 +1,10 @@
 # Deploy runbook: the GÖ4Fun backend on one Linux server
 
 This is the one supported way to run the backend in production: Caddy in front, Laravel (`api/`)
-behind it, the Node backend (`server/`) behind Laravel, and MySQL, all as containers started by
-`deploy/docker-compose.yml`. The app reaches it under one fixed `https://` address.
+behind it with its scheduler, and MySQL, all as containers started by
+`deploy/docker-compose.yml`. The app reaches it under one fixed `https://` address. Laravel answers
+every route itself and builds the database schema with its migrations; the Node backend
+(`server/`) is no longer part of the production stack.
 
 The runbook is written for the operator: whoever runs the server. Every decision it does not make
 is a visible blank, `______`, with who decides it; the last section lists them all. Commands run
@@ -22,26 +24,25 @@ Contents: [What runs](#what-runs) · [Prerequisites](#prerequisites) · [Setting
 ```
 Internet ─► caddy :80/:443   HTTPS, security headers, the upload allow-list
               ├─► media :8080  public uploads (read-only files; holds no secrets)
-              └─► api :8080  Laravel: sign-up, sign-in, account, two-factor, password reset
-                    └─► node :8000   Node: everything Laravel does not answer itself
-            db    MySQL 8.4 ◄── api, node, and the backup, admin-gate and seed services
+              └─► api :8080    Laravel: the whole API, the uploads, the schema (migrations)
+            scheduler        Laravel's schedule: club renewals, credits, the retention prune
+            db    MySQL 8.4 ◄── api, the scheduler, and the backup, admin-gate and seed services
 ```
 
 | Service | Image | What it does | Networks | Volumes | Lifetime |
 |---|---|---|---|---|---|
 | `caddy` | `caddy:2-alpine` (pinned) | the only service with host ports; gets and renews the certificate for `<DOMAIN>`; sends the security headers; passes the allowed upload paths to `media` and everything else to `api` | edge, media | `caddy-data`, `caddy-config`, `deploy/Caddyfile` | long-running; starts only after `admin-gate` succeeded and `api` is healthy |
 | `media` | `caddy:2-alpine` (pinned) | serves the public uploads as plain files, for caddy only (`deploy/Caddyfile.media`); runs as `nobody`, read-only, without settings or keys | media | `uploads` (read-only), `deploy/Caddyfile.media` | long-running |
-| `api` | built from `api/Dockerfile` | Laravel on port 8080 as the user `www-data`; answers its own routes and forwards the rest to Node; sends mail over SMTP | edge, app | none | long-running |
-| `node` | built from `server/Dockerfile` | the Node backend on port 8000 as the user `node` (uid 1000); applies its schema step before it listens; stores uploads; calls the moderation provider | app, outbound | `uploads`, `private-media` | long-running |
-| `db` | `mysql:8.4` (pinned) | the database `goenntertainment`; on the very first start (empty volume) it loads `server/schema.sql` and creates the daily rotation of its binary log (`deploy/mysql/02-binlog-rotate.sql`) | app, data | `db-data` | long-running |
-| `backup` | `mysql:8.4` (pinned) | a database dump and an uploads archive every night at 02:30 UTC and once at start, then pruning (`deploy/scripts/backup.sh`) | data | `uploads` and `private-media` (read-only), `<BACKUP_DIR>` (host folder) | long-running |
-| `storage-init` | `busybox:1.37` (pinned) | creates the upload folders and gives them to uid 1000 | none | `uploads`, `private-media` | one-shot on every `up` |
+| `api` | built from `api/Dockerfile` | Laravel on port 8080 as the user `www-data` (uid 33); runs the migrations before Apache starts; answers every route; stores the uploads, checked and re-encoded, in two volumes outside its docroot; sends mail over SMTP | edge, app | `uploads`, `private-media` | long-running |
+| `scheduler` | built from `api/Dockerfile` | `php artisan schedule:work` (`api/routes/console.php`): club renewals every hour, credit expiry every five minutes, the credit reminder mails every day, the retention prune every hour; no Apache | app, outbound | `private-media` | long-running; starts once `api` is healthy |
+| `db` | `mysql:8.4` (pinned) | the database `goenntertainment`; on the very first start (empty volume) it creates the daily rotation of its binary log (`deploy/mysql/02-binlog-rotate.sql`); the tables come from api's migrations | app, data | `db-data` | long-running |
+| `backup` | `mysql:8.4` (pinned) | a database dump and an uploads archive every night at 02:30 UTC and once at start, then pruning (`deploy/scripts/backup.sh`) | data | `uploads` and `private-media` (read-only; the evidence images, mode 640, through the `www-data` group), `<BACKUP_DIR>` (host folder) | long-running |
+| `storage-init` | `busybox:1.37` (pinned) | creates the upload folders and gives them to uid 33 (`www-data`) | none | `uploads`, `private-media` | one-shot on every `up` |
 | `admin-gate` | `mysql:8.4` (pinned) | refuses to let `caddy` start while no admin account exists (`deploy/scripts/admin-gate.sh`) | data | none | one-shot on every `up` |
-| `seed` | built from `server/Dockerfile` | creates the admin account, or loads the start data; never started by `docker compose up` (profile `tools`) | data | none | one-off, `docker compose run --rm seed` |
+| `seed` | built from `api/Dockerfile` | creates the first admin account (`php artisan admin:create`); never started by `docker compose up` (profile `tools`) | data | none | one-off, `docker compose run --rm seed` |
 
-Keep exactly one `node` container (no `--scale node=…`, no replicas): Node counts its write limits
-in memory, so a second process would multiply every limit by the number of processes
-(`server/src/rate-limit.js`). Move the counters to a shared store before running more than one.
+Keep exactly one `scheduler` container (no `--scale scheduler=…`, no replicas): every scheduler
+runs every job that is due, and the locks only keep two runs of one job from overlapping.
 
 Networks (the compose file's footer has the details):
 
@@ -49,34 +50,36 @@ Networks (the compose file's footer has the details):
 |---|---|---|
 | edge | caddy (fixed address `<APP_NET_PREFIX>.10`), api | yes: certificates for caddy, SMTP for api |
 | media | caddy, media | none (internal) |
-| app | api (fixed address `<APP_NET_PREFIX>.140`), node, db | none (internal) |
+| app | api, scheduler, db | none (internal) |
 | data | db, backup, admin-gate, seed | none (internal) |
-| outbound | node | yes: the moderation provider |
+| outbound | scheduler | yes: SMTP for the credit reminders |
 
-caddy reaches neither node nor db, and db has no way out. Laravel trusts the client address only
-from caddy's fixed address, Node only from api's (F-31).
+caddy reaches neither the scheduler nor db, and db has no way out. Laravel trusts the client
+address only from caddy's fixed address (F-31).
 
 Why the uploads have a file server of their own: Caddy follows symbolic links, and it has no
 setting to refuse them. A link planted in the `uploads` volume under an allowed name would make
 the server that reads the volume hand out whatever the link points to. caddy holds the
 certificate and account keys (`caddy-data`), so it mounts no volume that another service writes;
-`media` has nothing to hand out but the uploads themselves.
+`media` has nothing to hand out but the uploads themselves. Apache in the api container never
+serves an upload: the volumes are mounted outside its docroot and outside `/var/www`, and its
+settings refuse requests there (`api/docker/apache.conf`).
 
 Volumes (named `deploy_<name>` on the server, after the compose file's folder; `docker volume ls`):
 
 | Volume | Holds | Notes |
 |---|---|---|
 | `db-data` | the database, including MySQL's binary log | the one part nothing else can rebuild |
-| `uploads` | public images: avatars, banners, posts, profile banners | node writes, media serves read-only (behind caddy) |
-| `private-media` | ban and moderation evidence, story images | node only (and the backup, read-only); never mounted into a web server |
+| `uploads` | public images: avatars, partner logos and covers, offer images | api writes, media serves read-only (behind caddy) |
+| `private-media` | ban and timeout evidence | api writes it and hands it to admins only, through a checked route; the scheduler's prune removes old images; the backup reads it; never mounted into a file server |
 | `caddy-data` | certificates and caddy's ACME account | lost: caddy requests new certificates, which the certificate authority rate-limits |
 | `caddy-config` | caddy's own saved configuration | |
 
-Only caddy publishes ports: `0.0.0.0:80` and `0.0.0.0:443`, IPv4 only. MySQL, Laravel and Node
-have no host port. No network has IPv6: published on IPv6 as well, Docker would relay every IPv6
-client with the network's gateway as its address, and all IPv6 clients would share one address in
-the rate limits. So the domain gets an A record and **no AAAA record** until IPv6 is set up end to
-end (`______`, the operator). Checks on the server, once caddy runs (written for a Linux host with
+Only caddy publishes ports: `0.0.0.0:80` and `0.0.0.0:443`, IPv4 only. MySQL and Laravel have no
+host port. No network has IPv6: published on IPv6 as well, Docker would relay every IPv6 client
+with the network's gateway as its address, and all IPv6 clients would share one address in the
+rate limits. So the domain gets an A record and **no AAAA record** until IPv6 is set up end to end
+(`______`, the operator). Checks on the server, once caddy runs (written for a Linux host with
 Docker's default port publishing; not yet run on a real host):
 
 ```bash
@@ -98,7 +101,7 @@ The mobile app is not a container: it is built with EAS and carries the server a
 | `deploy/scripts/preflight.sh` | checks `deploy/.env` and `<BACKUP_DIR>` before a start |
 | `deploy/scripts/backup.sh`, `deploy/scripts/admin-gate.sh`, `deploy/scripts/db-entrypoint.sh` | the scripts of the backup, admin-gate and db services |
 | `deploy/mysql/02-binlog-rotate.sql` | the event that rotates MySQL's binary log every day, created on the db service's first start |
-| `api/Dockerfile`, `server/Dockerfile` | the two images built on the server |
+| `api/Dockerfile` | the image built on the server (api, scheduler and seed) |
 | `deploy/docker-compose.ci.yml`, `deploy/ci.env` | CI and local tests only, never on a server |
 
 ## Prerequisites
@@ -106,20 +109,20 @@ The mobile app is not a container: it is built with EAS and carries the server a
 - **A Linux host** that runs Docker Engine and has `bash`, `git`, `openssl`, GNU `stat` and
   `realpath` (for the preflight), `curl`, and `ss` and `dig` for the checks. Which provider hosts
   it and how big it is: `______` (the operator). One data point, not a sizing: the idle test stack
-  this runbook was walked through on used 0.55 to 0.7 GB of memory in two runs (MySQL about
-  0.45 to 0.5 GB of it), and its images about 2.5 GB of disk.
+  of the earlier, Node-based setup used 0.55 to 0.7 GB of memory in two runs (MySQL about 0.45 to
+  0.5 GB of it), and its images about 2.5 GB of disk.
 - **Docker Compose v2.24.4 or newer** (`docker compose version`). The production files use
   `additional_contexts` and a bind mount with `create_host_path: false`; the CI override uses
   `!reset`, which needs 2.24.4 (`deploy/docker-compose.ci.yml`). The files were
   tested with Docker Compose v5.5.1; no older version was tried.
-- **The whole clone**: the images are built from `api/`, `server/` and `shared/` (the lists that
-  the app, Laravel and Node share: blocked terms, common passwords). Without `shared/` the build
-  stops on purpose.
+- **The whole clone**: the image is built from `api/` and `shared/` (what the app and Laravel
+  share: blocked terms, common passwords, reserved account names, the legal versions and the club
+  rules in `shared/club.json`). Without `shared/` the build stops on purpose.
 - **DNS**: an A record for `<DOMAIN>` pointing to the server's IPv4 address, in place before caddy
   starts for the first time (the certificate authority checks the name). No AAAA record.
 - **Firewall**: inbound 22 (SSH), 80 and 443, nothing else. Outbound: caddy to the certificate
-  authority, api to the SMTP provider, node to the moderation provider, and the image builds to
-  the container registries and package mirrors.
+  authority, api and the scheduler to the SMTP provider, and the image builds to the container
+  registries and package mirrors.
 - A **password manager** for the generated secrets and `APP_KEY` (below).
 
 ## Settings
@@ -140,18 +143,14 @@ missing one. `deploy/.env.example` carries the same list with longer comments.
 | Setting | What it is | Who decides | Format |
 |---|---|---|---|
 | `DOMAIN` | the backend's public name; the app calls `https://<DOMAIN>` and caddy gets its certificate for it | `______` (the operator, with the domain owner) | a host name without scheme or path; A record, no AAAA |
-| `DB_PASSWORD` | password of the database user `goenn` (api, node, backup, admin-gate, seed) | technical: generated | `openssl rand -base64 24` |
+| `DB_PASSWORD` | password of the database user `goenn` (api, scheduler, backup, admin-gate, seed) | technical: generated | `openssl rand -base64 24` |
 | `DB_ROOT_PASSWORD` | MySQL's root password (used for a restore) | technical: generated | `openssl rand -base64 24` |
 | `APP_KEY` | Laravel's encryption key; it encrypts the two-factor secrets | technical: generated once, never changed | `echo "base64:$(openssl rand -base64 32)"` |
-| `NODE_INTERNAL_SECRET` | the secret Laravel sends on Node's internal routes (account deletion) | technical: generated | `openssl rand -hex 32` (at least 32 characters) |
-| `APP_NET_PREFIX` | the first three parts of a private /24 that nothing else on the host uses; the compose splits it into the edge and app networks | technical: the operator | three numbers, e.g. `172.30.42`; check with `ip -4 addr` and `docker network inspect` |
-| `ANTHROPIC_API_KEY` | the key of the AI moderation that checks every new event, post, comment, profile image and story; node does not start without it | `______` (the operator: whose provider account, and the moderation policy) | the provider's key |
-| `MODERATION_DAILY_CALL_LIMIT` | the most AI moderation calls per UTC day for all accounts together; at the limit every moderated write is refused until the next UTC day, whatever `MODERATION_FAIL_OPEN` says; node does not start without it | `______` (the operator: how much may be spent on the provider per day) | a whole number, at least 1 |
-| `EVIDENCE_RETENTION_DAYS` | days to keep evidence images of bans and moderation reports (the image goes, the record stays) | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
-| `MODERATION_REPORT_RETENTION_DAYS` | days to keep the AI moderation log, which copies every checked text and image | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
-| `TOKEN_RETENTION_DAYS` | days to keep sign-in tokens and two-factor and reset codes after they stopped being valid | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
-| `USAGE_RETENTION_DAYS` | days to keep event views and active days | `______` (the operator, with whoever answers for data protection) | whole days, at least 120 (the streak window) |
-| `MAIL_HOST` | the SMTP host of the mail provider; two-factor and password-reset codes go out by mail | `______` (the operator: the mail provider) | a host name; port 587 unless `MAIL_PORT` says otherwise, `MAIL_SCHEME=smtps` for TLS from the start |
+| `APP_NET_PREFIX` | the first three parts of a private /24 that nothing else on the host uses; the compose puts the edge network, with caddy's fixed address, into it | technical: the operator | three numbers, e.g. `172.30.42`; check with `ip -4 addr` and `docker network inspect` |
+| `PAYMENTS_MODE` | whether buying credits, club plans and paid bookings works: `off` refuses them, `test` books them without real money (no payment provider is connected yet); on a public server `test` gives everyone credits and club plans for nothing | `______` (the operator, with whoever answers for the business) | `off` or `test` |
+| `EVIDENCE_RETENTION_DAYS` | days to keep evidence images of bans and timeouts (the image goes, the record stays) | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
+| `TOKEN_RETENTION_DAYS` | days to keep sign-in tokens and two-factor, reset and e-mail codes after they stopped being valid | `______` (the operator, with whoever answers for data protection) | whole days, at least 1 |
+| `MAIL_HOST` | the SMTP host of the mail provider; two-factor, password-reset and e-mail-change codes and the credit reminders go out by mail | `______` (the operator: the mail provider) | a host name; port 587 unless `MAIL_PORT` says otherwise, `MAIL_SCHEME=smtps` for TLS from the start |
 | `MAIL_USERNAME` | the SMTP login | `______` (the operator) | must be in the file; empty only for a relay without login |
 | `MAIL_PASSWORD` | the SMTP password | `______` (the operator) | must be in the file; empty only for a relay without login |
 | `MAIL_FROM_ADDRESS` | the sender address of every mail | `______` (the operator: the sender mailbox) | an e-mail address |
@@ -176,20 +175,17 @@ commit.
   once, for the one command that creates the account ([First start](#first-start)).
 
 Optional settings, with their defaults in the compose or the code (`deploy/.env.example` lists
-them): the moderation tuning (`MODERATION_MODEL`, `MODERATION_BLOCK_SEVERITY`,
-`MODERATION_TIMEOUT_SEVERITY`, `MODERATION_TIMEOUT_DAYS`; the defaults are the values in the
-code, to be confirmed by whoever is accountable for the app: `______`), `MODERATION_FAIL_OPEN` (default `false`:
-content the model cannot check is refused; `true` is an emergency switch during a provider
-outage, set on purpose), `SANCTUM_EXPIRATION` (access-token lifetime in minutes, default 30
-days), `MAIL_PORT`, `MAIL_SCHEME`, `LOG_LEVEL`, the hidden features `FEATURE_IMPORTED_EVENTS` and
-`FEATURE_ACCOUNT_TIERS`, and the rate limits `WRITE_LIMIT_*` and `AUTH_LIMIT_*`.
+them): `SANCTUM_EXPIRATION` (access-token lifetime in minutes, default 30 days), `MAIL_PORT`,
+`MAIL_SCHEME`, `LOG_LEVEL`, and the rate limits `AUTH_LIMIT_*` of the sign-in, sign-up, password
+and two-factor routes. The other write limits are fixed in the code (`api/config/ratelimits.php`).
 
 `scripts/preflight.sh` (also `scripts/preflight.sh <env-file>`) prints one line per check and a
 total, never a value, and exits 1 when a check fails. It checks that `deploy/.env` exists with mode
 600 or 400; that none of its settings is also set in the shell (docker compose would take the
 shell's value); that `<BACKUP_DIR>` is an existing absolute path outside the clone, owned by root
-with mode 700; the form of `BACKUP_RETENTION_DAYS`, `MYSQL_BINLOG_RETENTION_DAYS`, `LOG_MAX_SIZE`
-and `LOG_MAX_FILES`; and that docker compose renders the production compose with the file.
+with mode 700; the form of `BACKUP_RETENTION_DAYS`, `MYSQL_BINLOG_RETENTION_DAYS`, `LOG_MAX_SIZE`,
+`LOG_MAX_FILES`, `EVIDENCE_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS` and `PAYMENTS_MODE`; and that
+docker compose renders the production compose with the file.
 
 ## First start
 
@@ -221,24 +217,26 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
    docker compose --profile tools build --pull
    ```
 
-4. Start everything except caddy, and wait until db, node and api report `healthy` (node applies
-   its schema step first; the first start takes a few minutes):
+4. Start everything except caddy, and wait until db and api report `healthy` (api runs the
+   migrations first; the first start takes a few minutes):
 
    ```bash
-   docker compose up -d db storage-init node api backup
-   until [ "$(docker compose ps --format '{{.Health}}' db node api | grep -c '^healthy$')" = 3 ]; do sleep 5; done
+   docker compose up -d db storage-init api scheduler backup
+   until [ "$(docker compose ps --format '{{.Health}}' db api | grep -c '^healthy$')" = 2 ]; do sleep 5; done
    docker compose ps
    ```
 
-   The database schema comes from `server/schema.sql` on the very first start and from node's
-   schema step afterwards: never run `php artisan migrate` (Laravel's stock migrations would try to
-   create the `users` table a second time).
+   The database schema comes from Laravel's migrations (`api/database/migrations`), which api runs
+   on every start (`php artisan migrate --force`, `api/docker/entrypoint.sh`); they also create the
+   category list the app shows. Never load a schema file by hand.
 
 5. Create the admin account. Who the admin is (the address), how many admin accounts there are
    and who approves an admin grant: `______` (whoever is accountable for the app, to be named
    before go-live). The address and the password are typed in, exist only in the shell variables
-   and the one `--rm` container, and are removed right after. The seed does not apply the app's password rules: use a
-   long, unique password from the password manager.
+   and the one `--rm` container, and are removed right after. The command applies the app's
+   password rules (at least 8 characters with letters and digits, not a common password, neither
+   the username `admin` nor the address in it): use a long, unique password from the password
+   manager.
 
    ```bash
    read -r -p 'Admin e-mail: ' ADMIN_EMAIL
@@ -247,9 +245,10 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
    unset ADMIN_EMAIL ADMIN_PASSWORD
    ```
 
-   Expected: `Admin: account created (is_admin = 1).` It refuses (exit 1) and changes nothing when
-   an account with that address or the username `admin` exists; it never promotes an account or
-   resets a password.
+   Expected: `admin:create: account created (is_admin = 1).` It refuses (exit 1) and changes
+   nothing when an account with that address or the username `admin` exists; it never promotes an
+   account or resets a password. A further admin is an account that exists in the app, promoted
+   with `docker compose exec api php artisan admin:grant <address>` (`--revoke` takes it back).
 
 6. Check that an admin exists, without printing anything secret:
 
@@ -259,27 +258,14 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
 
    Expected: `admin-gate: 1 admin account(s); caddy may start.`
 
-7. Load the start data: the category list the app shows, and three permanent venue entries with
-   their host accounts (`server/src/seed.js`, `PERMANENT`). It can run again at any time without
-   creating duplicates. Nobody signs in to the host accounts: each gets a random password that
-   nobody knows and that is never printed (`server/src/system-accounts.js`). Whether the venue
-   entries belong on the production server: `______` (whoever is accountable for the app, to be
-   named before go-live).
-
-   ```bash
-   docker compose run --rm seed npm run seed
-   ```
-
-   Expected: `Interessen: 28 eingespielt/aktualisiert.` and `Seed fertig.`
-
-8. Start the rest. The gate passes, caddy starts and requests the certificate:
+7. Start the rest. The gate passes, caddy starts and requests the certificate:
 
    ```bash
    docker compose up -d
    docker compose ps
    ```
 
-9. Check from outside:
+8. Check from outside:
 
    ```bash
    curl -sSI https://<DOMAIN>/api/health
@@ -291,12 +277,16 @@ service enforces the order: while no admin exists, `docker compose up -d` stops 
    means the A record does not point to the server yet, or ports 80/443 are closed:
    `docker compose logs caddy --tail 50`. Then run the IPv4 checks of [What runs](#what-runs).
 
-10. Confirm the first backup: `docker compose logs backup` shows `run ... written`, and
-    `ls -l <BACKUP_DIR>` lists one `db-`, `uploads-` and `SHA256SUMS-` file.
+9. Confirm the first backup: `docker compose logs backup` shows `run ... written`, and
+   `ls -l <BACKUP_DIR>` lists one `db-`, `uploads-` and `SHA256SUMS-` file.
+
+Partners, offers and voucher batches are created by an admin in the app's admin area. There is no
+demo data for a server: `php artisan db:seed --class=DemoMarketplaceSeeder` refuses to run in
+production.
 
 Restoring onto a fresh server instead: steps 1 to 4 with the old `APP_KEY` (the other secrets may
 be new: the dump holds the app's data, not MySQL's accounts), then [Restore](#restore), without
-steps 5 to 7.
+steps 5 and 6.
 
 ## The app build
 
@@ -323,10 +313,10 @@ docker compose up -d
 ```
 
 Docker rebuilds only what changed and replaces the containers; the database and the uploads stay
-in their volumes. When an update adds a required setting, `scripts/preflight.sh` and
-`docker compose` name it: add it to `deploy/.env` ([Settings](#settings)) and run the steps again.
-Who approves an update before it goes live: `______` (whoever is accountable for the app, to be
-named before go-live).
+in their volumes, and api applies new migrations when it starts. When an update adds a required
+setting, `scripts/preflight.sh` and `docker compose` name it: add it to `deploy/.env`
+([Settings](#settings)) and run the steps again. Who approves an update before it goes live:
+`______` (whoever is accountable for the app, to be named before go-live).
 
 **Base images.** Every image is pinned by digest (`<name>:<tag>@sha256:<digest>`) in
 `api/Dockerfile`, `server/Dockerfile`, `deploy/docker-compose.yml` (mysql, caddy, busybox),
@@ -360,8 +350,9 @@ docker compose up -d
 
 Who does it, and when: `______` (the operator).
 
-**Support dates.** Node 22 gets security fixes until 2027-04-30 (`server/Dockerfile`); move to the
-next long-term-support line before then, together with CI's `NODE_VERSION`
+**Support dates.** The production stack runs no Node; CI's stack-test probe and the development
+tools do. Node 22 gets security fixes until 2027-04-30 (`server/Dockerfile`); move to the next
+long-term-support line before then, together with CI's `NODE_VERSION`
 (`scripts/ci/check-mirrors.mjs` fails while the two differ). Who tracks the support dates of PHP
 8.4 and MySQL 8.4: `______` (the operator).
 
@@ -375,16 +366,20 @@ changed by hand in the same pull request.
 project is named after its folder, `deploy`, as before, so the database, the certificates and
 caddy's configuration stay in their volumes (`deploy_db-data`, `deploy_caddy-data`,
 `deploy_caddy-config`). Before `git pull`, stop the old stack with the old files; this also
-removes its network `deploy_default`, whose address range could overlap `APP_NET_PREFIX`. Never
-add `-v`:
+removes its network `deploy_default`, whose address range could overlap `APP_NET_PREFIX`, and the
+containers of services this version no longer has (the Node backend). Never add `-v`:
 
 ```bash
 docker compose down
 ```
 
 Then add the new settings ([Settings](#settings)) and run the update steps above. A database
-volume from before has no binary-log rotation yet: create it once ([Logs](#logs)). Uploads that
-the old setup kept in folders of the clone move into volumes as described next.
+volume from before has no binary-log rotation yet: create it once ([Logs](#logs)). api's
+migrations take over a database that an earlier setup created from `server/schema.sql`: they
+create only what is missing (tried once on a database built from the schema of the earlier,
+Node-based setup: 41 tables before, 70 after, and a second run had nothing to do). Back it up first
+all the same ([Backups](#backups)). Uploads that the old setup kept in folders of the clone move
+into volumes as described next.
 
 **Moving from the old upload folders** (once, only if this server ran an earlier setup that kept
 uploads in `deploy/storage/` and `deploy/storage-private/`): with the stack stopped
@@ -393,7 +388,7 @@ uploads in `deploy/storage/` and `deploy/storage-private/`): with the stack stop
 ```bash
 docker compose run --rm --no-deps \
   -v "$PWD/storage:/old/storage:ro" -v "$PWD/storage-private:/old/storage-private:ro" \
-  storage-init sh -c 'cp -a /old/storage/. /storage/ && cp -a /old/storage-private/. /storage-private/ && chown -R 1000:1000 /storage /storage-private'
+  storage-init sh -c 'cp -a /old/storage/. /storage/ && cp -a /old/storage-private/. /storage-private/ && chown -R 33:33 /storage /storage-private'
 docker compose up -d
 ```
 
@@ -411,7 +406,7 @@ whenever the service starts:
 - **Where**: `<BACKUP_DIR>` on the host (`BACKUP_DIR`), outside the clone, owned by root, mode
   700. The files are mode 600: they hold personal data and need the same care as the database.
 - **Checks**: a set is assembled in a `.partial-<stamp>` folder, checked (`gzip -t`, the dump's
-  completion line, `tar -t`, the checksums) and only then moved into place. Node keeps writing
+  completion line, `tar -t`, the checksums) and only then moved into place. Laravel keeps writing
   while the uploads are archived: when files were added or removed meanwhile, the log says so and
   the set is kept (the archive holds the files as they were found); any other archive error fails
   the run.
@@ -452,7 +447,7 @@ of its own, not into the new `<BACKUP_DIR>`: the backup service deletes sets the
 2. Stop the services that write (on a new server: after step 4 of [First start](#first-start)):
 
    ```bash
-   docker compose stop caddy api node backup
+   docker compose stop caddy api scheduler backup
    ```
 
 3. Load the database dump. The root password is read inside the db container from its own
@@ -476,13 +471,13 @@ of its own, not into the new `<BACKUP_DIR>`: the backup service deletes sets the
      find /storage /storage-private -mindepth 1 -delete
      tar -xzf /backups/uploads-$stamp.tar.gz -C /storage --strip-components=1 uploads
      tar -xzf /backups/uploads-$stamp.tar.gz -C /storage-private --strip-components=1 private-media
-     chown -R 1000:1000 /storage /storage-private"
+     chown -R 33:33 /storage /storage-private"
    ```
 
-   The archive keeps symbolic links as links. Node writes only regular files into both volumes,
-   so a link did not come from the app: list them, expect nothing, and treat any link as a sign
-   that someone wrote into the volume outside the app (remove it, and find out how it got there
-   before going live again):
+   The archive keeps symbolic links as links. Laravel writes only regular files into both
+   volumes, so a link did not come from the app: list them, expect nothing, and treat any link as
+   a sign that someone wrote into the volume outside the app (remove it, and find out how it got
+   there before going live again):
 
    ```bash
    docker compose run --rm --no-deps storage-init find /storage /storage-private -type l
@@ -496,8 +491,8 @@ of its own, not into the new `<BACKUP_DIR>`: the backup service deletes sets the
    curl -sS https://<DOMAIN>/api/health
    ```
 
-   The gate passes with the restored admin account; node applies its schema step at start; the
-   backup service writes a first set of the restored state.
+   The gate passes with the restored admin account; api runs the migrations at start; the backup
+   service writes a first set of the restored state.
 
 ## Logs
 
@@ -509,7 +504,7 @@ compose's `x-logging` block with a `MaxRetentionSec` in the host's journald conf
 set up here).
 
 ```bash
-docker compose logs -f api node
+docker compose logs -f api scheduler
 docker compose logs caddy --since 1h
 ```
 
@@ -518,7 +513,7 @@ request: the client address and port, protocol, method, host, the full URI inclu
 string, every request header with the values of `Authorization` and `Cookie` replaced by
 `REDACTED` (the app sends its token in `Authorization`), the TLS version, cipher and server name,
 the status, the response size and duration, and the response headers. Laravel logs from
-`LOG_LEVEL` up (default `warning`), Node its start and error lines; the project's rule is that no
+`LOG_LEVEL` up (default `warning`), in api and in the scheduler; the project's rule is that no
 password, token or code is ever logged (`AGENTS.md`).
 
 MySQL's binary log is not a container log: it lives in the `db-data` volume. MySQL deletes a
@@ -554,16 +549,17 @@ operator, with whoever answers for data protection).
 | `scripts/preflight.sh` prints `FAIL` | the line says what to fix; the env file needs mode 600, `<BACKUP_DIR>` root and mode 700 outside the clone |
 | `service "admin-gate" didn't complete successfully: exit 1` on `docker compose up -d`, caddy stays `Created` | no admin account yet: steps 5 and 6 of [First start](#first-start); `docker compose run --rm admin-gate` says why |
 | `failed to create network ...: Pool overlaps with other one on this address space` | `APP_NET_PREFIX` is used by another network on the host: pick a free /24 |
-| node restarts again and again | `docker compose logs node`: `Required settings missing or invalid` names the settings; `Database setup failed; the server does not start (exit code 1)` means the schema step failed (database password, database not ready) |
-| api stays `unhealthy` | `docker compose logs api`: `ERROR: required settings missing or invalid` names them; otherwise usually a wrong `DB_PASSWORD` |
+| api stays `unhealthy` | `docker compose logs api`: `ERROR: required settings missing or invalid` names them; a failed migration shows its error before Apache starts; otherwise usually a wrong `DB_PASSWORD` |
+| club renewals, credit expiry or the reminder mails do not happen | `docker compose logs scheduler`; `Retention settings missing or invalid` names a setting of the prune |
 | db exits right away | `docker compose logs db`: `MYSQL_BINLOG_RETENTION_DAYS must be ...` means the value is not 1 to 9999 or `off` |
 | no container starts: `failed to initialize logging driver: compression cannot be enabled when max file count is 1` | `LOG_MAX_FILES=1`: set it to 2 or more (`scripts/preflight.sh` refuses 1), then `docker compose up -d` |
 | backup `unhealthy` | `docker compose logs backup`: `BACKUP_DIR` missing or not writable, an invalid `BACKUP_RETENTION_DAYS`, the database did not answer within about 5 minutes (`did not answer`; each run waits for it, also after a reboot), or a failed run (`nothing was deleted`) |
 | caddy logs certificate or challenge errors | the A record does not point to the server yet, or 80/443 are closed |
 | a request gets `413` from caddy | the body is over the edge's limit: 9 MB for uploads (multipart), 128 KiB for everything else |
 | images under `/storage/` answer `502` | the media service is not running: `docker compose ps media`, `docker compose logs media` |
-| uploads fail with "Serverfehler" | the upload volumes do not belong to uid 1000: `docker compose logs storage-init` |
-| `Das Bild darf hoechstens 5 MB gross sein.` | the image is over Node's 5 MB limit |
+| uploads fail with "Serverfehler" | the upload volumes do not belong to uid 33 (`www-data`): `docker compose logs storage-init` |
+| `Bitte ein Bild wählen (jpg, png oder webp, höchstens 5 MB).` | the file is no JPEG, PNG or WebP picture, or larger than 5 MB (`api/app/Support/Uploads.php`) |
+| a purchase says `Bezahlen ist noch nicht freigeschaltet` | `PAYMENTS_MODE` is `off`: no payment provider is connected yet |
 | the app shows only a timeout when signing in | `EXPO_PUBLIC_API_URL` in `eas.json` ([The app build](#the-app-build)) |
 
 ## What CI checks
@@ -571,24 +567,26 @@ operator, with whoever answers for data protection).
 On every pull request:
 
 - `.github/workflows/ci.yml`: the client tests, typecheck and lint; the server tests and the API
-  tests against MySQL 8.4 loaded from `server/schema.sql`; the schema drift check; the tooling
-  tests; `scripts/ci/check-repo.mjs` (among others: every setting the production compose requires
-  is named in this runbook); `scripts/ci/check-mirrors.mjs` (values written in several places,
-  such as the image pins); the workflow policy and actionlint; the dependency audit.
+  tests against MySQL 8.4 loaded from `server/schema.sql`; the schema drift check (the migrations
+  build the tables of `server/schema.sql`); the tooling tests; `scripts/ci/check-repo.mjs` (among
+  others: every setting the production compose requires is named in this runbook);
+  `scripts/ci/check-mirrors.mjs` (values written in several places, such as the image pins); the
+  workflow policy and actionlint; the dependency audit.
 - `.github/workflows/docker.yml`: the deploy tests (`npm run test:deploy`, the files in
   `deploy/test/`): the compose renders with `deploy/ci.env` and refuses to start without each
   required setting, the Caddyfile, the scripts, the image pins, the two Dockerfiles, and this
   runbook (its sections, the first-start order, the commands and the values it shares with the
   code); and the stack test, which builds the images, starts the whole stack with `deploy/ci.env`
-  and `deploy/docker-compose.ci.yml` on internal networks and checks it through caddy. Locally:
-  `npm run test:deploy` (Docker needed) and the root README's
+  and `deploy/docker-compose.ci.yml` on internal networks and checks it through caddy, a
+  marketplace pass included (sign-up, a partner with its logo, an offer, credits in test mode).
+  Locally: `npm run test:deploy` (Docker needed) and the root README's
   [Tests and checks](../README.md#tests-and-checks).
 
 Not checked by CI: the real host, DNS, a certificate from a public authority, the firewall, the
 published ports and the IPv6 path, a host reboot, and Dependabot's handling of the compose files.
 The first start, the backup and the restore of this runbook were walked through on a local test
-stack (`deploy/ci.env` and the CI override, internal networks, no published ports); the host parts
-were not.
+stack of the earlier, Node-based setup (`deploy/ci.env` and the CI override, internal networks, no
+published ports); the stack test runs the same steps on this one; the host parts were not.
 
 ## Decisions this runbook does not make
 
@@ -600,15 +598,14 @@ row are required: the stack does not start without them.
 | the backend domain (`DOMAIN`), and HSTS `includeSubDomains`/`preload` for the whole business domain | the operator, with the domain owner | `______` |
 | the hosting provider and the server size | the operator | `______` |
 | the mail provider and the sender mailbox (`MAIL_HOST`, `MAIL_USERNAME`, `MAIL_PASSWORD`, `MAIL_FROM_ADDRESS`) | the operator | `______` |
-| whose moderation provider account and key (`ANTHROPIC_API_KEY`), how many moderation calls per day may be spent (`MODERATION_DAILY_CALL_LIMIT`), the moderation policy, and the moderation tuning defaults | the operator, with whoever is accountable for the app | `______` |
-| retention of evidence, moderation reports, expired tokens and usage data (`EVIDENCE_RETENTION_DAYS`, `MODERATION_REPORT_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS`, `USAGE_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
+| whether the server takes payments in test mode, without real money (`PAYMENTS_MODE`) | the operator, with whoever answers for the business | `______` |
+| retention of evidence images and expired sign-in data (`EVIDENCE_RETENTION_DAYS`, `TOKEN_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | where the backups live, who looks after them, the offsite copy, encryption at rest, and how long sets are kept (`BACKUP_DIR`, `BACKUP_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | how much container log is kept, whether a time limit is required (`LOG_MAX_SIZE`, `LOG_MAX_FILES`) | the operator, with whoever answers for data protection | `______` |
 | how long MySQL keeps its binary log, or `off` (`MYSQL_BINLOG_RETENTION_DAYS`) | the operator, with whoever answers for data protection | `______` |
 | whether the access log masks client addresses or query strings; who may read production logs | the operator, with whoever answers for data protection | `______` |
 | the backup time (02:30 UTC is a technical constant) | the operator | `______` |
 | who the admin is (the address typed in at the first start), how many admin accounts there are, and who approves an admin grant | whoever is accountable for the app, to be named before go-live | `______` |
-| whether the data seed's venue entries belong on the production server | whoever is accountable for the app, to be named before go-live | `______` |
 | the access-token lifetime (default 30 days, `SANCTUM_EXPIRATION`) | the operator | `______` |
 | IPv6 (an AAAA record) once it is set up end to end | the operator | `______` |
 | who approves updates and the go-live; who reviews and merges Dependabot's pull requests | whoever is accountable for the app, to be named before go-live | `______` |

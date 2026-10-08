@@ -6,7 +6,6 @@ use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Rules\NoBlockedTerms;
 use App\Rules\ValidEmail;
-use App\Support\AccountTypes;
 use App\Support\EmailAddress;
 use App\Support\Legal;
 use App\Support\Passwords;
@@ -92,14 +91,6 @@ class AuthController extends Controller
             'email' => ['bail', 'required', new ValidEmail, self::notReservedEmail()],
             'password' => ['bail', 'required', $this->passwordRule()],
             /**
-             * `required` steht hier nicht zur Zierde: Ohne es ueberspringt Laravel
-             * eine eigene Regel, wenn das Feld gar nicht mitgeschickt wurde - und
-             * eine Registrierung ohne Kontostufe waere stillschweigend in Ordnung.
-             * Bisher war ein fehlender Wert genau so falsch wie ein erfundener,
-             * und beide bekommen dieselbe Meldung.
-             */
-            'account_type' => ['bail', 'required', $this->registrableAccountTypeRule()],
-            /**
              * F-14: the sign-up records on the server that the person accepted the CURRENT terms
              * and confirmed the minimum age, both from shared/legal.json (App\Support\Legal).
              * Without them, or with an older version or another age, the sign-up is refused.
@@ -120,7 +111,6 @@ class AuthController extends Controller
             'username.regex' => self::MSG_USERNAME_FORMAT,
             'email.required' => self::MSG_EMAIL,
             'password.required' => self::MSG_PASSWORD,
-            'account_type.required' => 'Ungueltiger Kontotyp.',
             'terms_version.required' => self::MSG_TERMS,
             'terms_version.string' => self::MSG_TERMS,
             'terms_version.in' => self::MSG_TERMS,
@@ -172,7 +162,6 @@ class AuthController extends Controller
          * dass die Passwortregel ihn je gesehen hat.
          */
         $user->password = Hash::make((string) $request->input('password'));
-        $user->account_type = AccountTypes::normalize($request->input('account_type'));
 
         /**
          * The confirmations checked above (F-14), each with the time it was given: which terms
@@ -327,31 +316,6 @@ class AuthController extends Controller
             }];
         }
 
-        /**
-         * Kontostufe umstellen - Admins vorbehalten.
-         *
-         * Die Stufe schaltet Rechte frei (Events erstellen, Business-Bereich), die
-         * sich niemand im Selbstbedienungsverfahren geben soll. Die Pruefung sitzt
-         * am FELD statt am ganzen Endpunkt - Name/E-Mail/Interessen bleiben fuer
-         * alle offen.
-         *
-         * Und sie steht VOR der Auswertung der uebrigen Felder: Wer die Stufe ohne
-         * Recht aendern will, bekommt 403 - auch dann, wenn zugleich der Name leer
-         * waere. Ein 422 ueber den Namen wuerde verschweigen, dass der eigentliche
-         * Wunsch ohnehin abgelehnt ist. Genau diese Reihenfolge hatte das vorige
-         * Backend.
-         */
-        if ($request->has('account_type')) {
-            if (! $user->is_admin) {
-                return response()->json(['message' => 'Nur Admins duerfen den Kontotyp aendern.'], 403);
-            }
-
-            // `required` aus demselben Grund wie bei der Registrierung: sonst
-            // rutscht `account_type: null` ungepruefet durch.
-            $rules['account_type'] = ['bail', 'required', $this->assignableAccountTypeRule()];
-            $messages['account_type.required'] = 'Ungueltiger Kontotyp.';
-        }
-
         $interests = null;
         $rawInterests = $request->input('interests');
         $interestsGiven = $request->has('interests');
@@ -392,10 +356,6 @@ class AuthController extends Controller
         }
         if ($request->has('email')) {
             // Unchanged (checked above); counts as a sent field, as before.
-            $touched = true;
-        }
-        if ($request->has('account_type')) {
-            $user->account_type = AccountTypes::normalize($request->input('account_type'));
             $touched = true;
         }
 
@@ -469,27 +429,6 @@ class AuthController extends Controller
     }
 
     /**
-     * Kontostufe bei der Registrierung.
-     *
-     * Unbekannte Werte werden abgewiesen statt stillschweigend auf Standard
-     * gedreht: Ein Tippfehler im Client soll auffallen, nicht durchrutschen. Und
-     * eine Stufe, die es GIBT, aber nicht zur Selbstbedienung, bekommt eine eigene
-     * Meldung - sonst suchte jemand den Fehler im Wort, obwohl das Wort richtig ist.
-     */
-    private function registrableAccountTypeRule(): Closure
-    {
-        return static function (string $attribute, mixed $value, Closure $fail): void {
-            if (in_array($value, AccountTypes::registrable(), true)) {
-                return;
-            }
-
-            $fail(in_array($value, AccountTypes::ALL, true)
-                ? 'Diese Stufe gibt es erst nach Freischaltung – frag sie in der App an.'
-                : 'Ungueltiger Kontotyp.');
-        };
-    }
-
-    /**
      * A username the system reserves for itself (shared/reserved-accounts.json) is refused, unless
      * it is the account's current one (the admin may keep sending its own name with a profile).
      */
@@ -513,16 +452,6 @@ class AuthController extends Controller
         return static function (string $attribute, mixed $value, Closure $fail): void {
             if (ReservedAccounts::default()->isReservedEmailInDatabase($value, DB::connection())) {
                 $fail(ReservedAccounts::MSG_EMAIL);
-            }
-        };
-    }
-
-    /** Was ein Admin per PATCH setzen darf. */
-    private function assignableAccountTypeRule(): Closure
-    {
-        return static function (string $attribute, mixed $value, Closure $fail): void {
-            if (! in_array($value, AccountTypes::assignable(), true)) {
-                $fail('Ungueltiger Kontotyp.');
             }
         };
     }

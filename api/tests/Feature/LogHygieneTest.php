@@ -5,7 +5,6 @@ namespace Tests\Feature;
 use Illuminate\Database\QueryException;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use PDOException;
 use Symfony\Component\Mailer\Exception\TransportException;
@@ -16,9 +15,8 @@ use Throwable;
 
 /**
  * Logs carry no request data (F-38): a failed query is reported without its bound
- * values, its statement or the driver's message; a failed call to the Node fallback and a code
- * mail that could not be sent (two-factor, reset, a new e-mail address) log the exception class
- * only (their messages carry the URL with the client's path, or the recipient).
+ * values, its statement or the driver's message; a code mail that could not be sent (two-factor,
+ * reset, a new e-mail address) logs the exception class only (its message carries the recipient).
  *
  * Every log call is captured as text, exceptions included with their messages, so whatever a log
  * formatter could print is checked. Each test first proves that something was logged at all.
@@ -72,18 +70,6 @@ class LogHygieneTest extends AppFeatureTestCase
 
         $this->assertLoggedWithoutCanary();
         $this->assertStringContainsString(QueryException::class, implode("\n", $this->logged));
-    }
-
-    public function test_a_failed_fallback_call_logs_the_exception_class_only(): void
-    {
-        config(['services.node_fallback.url' => 'http://node.test']);
-        Http::preventStrayRequests();
-        // A refused connection; its message names the full URL, path included.
-        Http::fake(['node.test/*' => Http::failedConnection()]);
-
-        $this->getJson('/api/users/'.self::CANARY.'/profile')->assertStatus(502);
-
-        $this->assertLoggedWithoutCanary();
     }
 
     public function test_a_code_mail_that_cannot_be_sent_logs_the_exception_class_only(): void

@@ -26,7 +26,6 @@ import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
 import { GlassCard, GlassChip } from '@/components/ui/glass';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
-import { formatDay } from '@/domain/date-format';
 import { useBrandSurface, useGlass } from '@/hooks/use-theme';
 import { ApiError, api, type BlockedPerson } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -160,10 +159,7 @@ export default function BlockedScreen() {
                   {person.name}
                 </ThemedText>
                 <ThemedText type="small" style={{ color: surface.textMuted }} numberOfLines={1}>
-                  {[person.username ? `@${person.username}` : null,
-                    person.since ? `blockiert seit ${formatDay(person.since)}` : null]
-                    .filter(Boolean)
-                    .join(' · ')}
+                  {person.username ? `@${person.username}` : 'blockiert'}
                 </ThemedText>
               </View>
               <GlassChip label="Freigeben" onPress={() => unblock(person)} />

@@ -6,6 +6,6 @@
     "Named mirrors in the app, which cannot import JSON in its unit tests: LEGAL_VERSION in src/domain/legal.ts and MIN_AGE in src/constants/operator.ts. src/domain/legal.test.ts fails when either differs from this file.",
     "A new terms version is a change to the legal texts in src/domain/legal.ts: change both places in the same commit. How age is verified beyond this confirmation is an operator decision and not made here."
   ],
-  "terms_version": "2026-09-29",
+  "terms_version": "2026-10-05",
   "min_age": 16
 }

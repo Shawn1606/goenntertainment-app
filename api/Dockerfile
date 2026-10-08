@@ -42,6 +42,9 @@ FROM php:8.4-apache@sha256:75325cceea4f9a8200f4e9e146e8155ec1b6466b2957b87accf02
 #            ohne sie rutschen gestylte Buchstaben (𝐟𝐞𝐭𝐭) durch
 # bcmath     große Zahlen (TOTP)
 # opcache    hält übersetzten PHP-Code im Speicher
+# gd         every uploaded image is decoded and encoded again (App\Support\ImageCheck): only
+#            real JPEG, PNG and WebP pictures are stored, without their metadata
+# exif       a photo's orientation from its EXIF data, applied before the metadata goes
 # mbstring und sodium sind im offiziellen Abbild schon eingebaut.
 # zip is installed in the build stage only: the package manager unpacks packages with it, the
 # running app never needs it.
@@ -51,7 +54,7 @@ FROM php:8.4-apache@sha256:75325cceea4f9a8200f4e9e146e8155ec1b6466b2957b87accf02
 # Von Hand müsste man deren Namen hinschreiben – und die ändern sich mit jeder
 # Debian-Version des Basis-Abbilds (libicu72 → libicu76 …).
 COPY --from=php-ext-installer /usr/bin/install-php-extensions /usr/local/bin/
-RUN install-php-extensions pdo_mysql intl bcmath opcache \
+RUN install-php-extensions pdo_mysql intl bcmath opcache gd exif \
     && rm /usr/local/bin/install-php-extensions
 
 COPY docker/php.ini /usr/local/etc/php/conf.d/zz-goenn.ini

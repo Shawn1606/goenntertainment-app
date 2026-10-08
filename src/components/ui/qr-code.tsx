@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 import Svg, { Path, Rect } from 'react-native-svg';
 
 /**
- * QR-Code als SVG – für die Einrichtung der Authenticator-App.
+ * QR-Code als SVG – für die Authenticator-App, den Kunden-Pass und Aufkleber-Codes.
  *
  * `qrcode` rechnet nur das Punkteraster aus (reines JavaScript, läuft in Expo Go
  * ohne nativen Teil); gezeichnet wird mit react-native-svg, das die App ohnehin
@@ -13,7 +13,7 @@ import Svg, { Path, Rect } from 'react-native-svg';
  * Immer schwarz auf weiß, unabhängig vom Dunkelmodus: Viele Scanner lesen
  * invertierte Codes nicht.
  */
-export function QrCode({ value, size = 200 }: { value: string; size?: number }) {
+export function QrCode({ value, size = 200, label = 'QR-Code' }: { value: string; size?: number; label?: string }) {
   const { path, count } = useMemo(() => {
     const qr = create(value, { errorCorrectionLevel: 'M' });
     const n = qr.modules.size;
@@ -31,7 +31,7 @@ export function QrCode({ value, size = 200 }: { value: string; size?: number }) 
   const total = count + quiet * 2;
 
   return (
-    <Svg width={size} height={size} viewBox={`${-quiet} ${-quiet} ${total} ${total}`} accessibilityLabel="QR-Code für die Authenticator-App">
+    <Svg width={size} height={size} viewBox={`${-quiet} ${-quiet} ${total} ${total}`} accessibilityLabel={label}>
       <Rect x={-quiet} y={-quiet} width={total} height={total} fill="#ffffff" />
       <Path d={path} fill="#000000" />
     </Svg>

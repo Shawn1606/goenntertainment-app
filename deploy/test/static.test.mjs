@@ -53,14 +53,10 @@ const REQUIRED = {
   DB_PASSWORD: 'secret',
   DB_ROOT_PASSWORD: 'secret',
   APP_KEY: 'secret',
-  NODE_INTERNAL_SECRET: 'secret',
   APP_NET_PREFIX: 'technical',
-  ANTHROPIC_API_KEY: 'decision',
-  MODERATION_DAILY_CALL_LIMIT: 'decision',
+  PAYMENTS_MODE: 'decision',
   EVIDENCE_RETENTION_DAYS: 'decision',
-  MODERATION_REPORT_RETENTION_DAYS: 'decision',
   TOKEN_RETENTION_DAYS: 'decision',
-  USAGE_RETENTION_DAYS: 'decision',
   MAIL_HOST: 'decision',
   MAIL_USERNAME: 'decision',
   MAIL_PASSWORD: 'decision',
@@ -75,7 +71,6 @@ const REQUIRED_NAMES = Object.keys(REQUIRED).sort();
 /** Required to be present, but empty is allowed (`${NAME?}`): a mail relay without a login. */
 const MAY_BE_EMPTY = ['MAIL_PASSWORD', 'MAIL_USERNAME'];
 
-const WRITE_CLASSES = ['MODERATED', 'COMMENT', 'CHAT', 'REACTION', 'RELATIONSHIP', 'BLOCK', 'REPORT', 'STATE', 'CONTENT', 'ACCOUNT', 'ADMIN', 'WEBHOOK'];
 const AUTH_LIMITS = [
   'REGISTER_IP', 'REGISTER_ACCOUNT', 'LOGIN_ACCOUNT_IP', 'LOGIN_IP', 'LOGIN_ACCOUNT', 'FORGOT_IP',
   'FORGOT_ACCOUNT', 'RESET_IP', 'RESET_ACCOUNT', '2FA_CHALLENGE', '2FA_IP', '2FA_ACCOUNT',
@@ -88,21 +83,18 @@ const AUTH_LIMITS = [
  * `value`: the default it must have, when one is fixed.
  */
 const ALLOWED_DEFAULTS = {
-  MODERATION_FAIL_OPEN: { value: 'false', why: 'moderation fails closed; true is an explicit emergency switch' },
-  MODERATION_ENABLED: { value: 'true', why: 'on is the safe value; production refuses false (server/src/config.js)' },
-  MODERATION_MODEL: { why: "the maintainer's tuning, the same default as server/src/moderation.js; listed for confirmation" },
-  MODERATION_BLOCK_SEVERITY: { why: "the maintainer's tuning, the same default as server/src/moderation.js; listed for confirmation" },
-  MODERATION_TIMEOUT_SEVERITY: { why: "the maintainer's tuning, the same default as server/src/moderation.js; listed for confirmation" },
-  MODERATION_TIMEOUT_DAYS: { why: "the maintainer's tuning, the same default as server/src/moderation.js; listed for confirmation" },
   SANCTUM_EXPIRATION: { value: '', why: 'empty = the security default in code (30 days), listed for confirmation' },
-  FEATURE_IMPORTED_EVENTS: { value: '', why: 'empty = the hidden feature stays off' },
-  FEATURE_ACCOUNT_TIERS: { value: '', why: 'empty = the hidden feature stays off' },
   LOG_LEVEL: { why: 'technical: how much Laravel logs' },
   MAIL_PORT: { why: 'technical: the mail submission port, overridden for providers that differ' },
   MAIL_SCHEME: { value: '', why: 'technical: empty = derived from the port' },
-  ...Object.fromEntries(WRITE_CLASSES.map((c) => [`WRITE_LIMIT_${c}`, { value: '', why: 'empty = the engineering default in code (server/src/rate-limit.js)' }])),
   ...Object.fromEntries(AUTH_LIMITS.map((c) => [`AUTH_LIMIT_${c}`, { value: '', why: 'empty = the engineering default in code (api/config/ratelimits.php)' }])),
 };
+
+/** The Laravel services: one image (api/Dockerfile), built for each. */
+const LARAVEL_SERVICES = ['api', 'scheduler', 'seed'];
+/** Apache's docroot in the api image, and the folder Debian's Apache settings open (`<Directory /var/www/>`). */
+const API_DOCROOT = '/var/www/api/public';
+const APACHE_OPEN = '/var/www';
 
 const servicesOf = (config) => Object.entries(config.services ?? {});
 const healthTest = (s) => {
@@ -212,7 +204,7 @@ test('required settings: dropping any single required setting blocks rendering',
   assert.deepEqual(wrong, []);
 });
 
-test('required settings: only allow-listed settings have defaults, and fail-open defaults to false', () => {
+test('required settings: only allow-listed settings have defaults', () => {
   const text = composeText();
   const { defaulted, bare } = interpolations(text);
   assert.ok(defaulted.size > 0, 'no defaulted setting found: refusing to report clean');
@@ -224,27 +216,22 @@ test('required settings: only allow-listed settings have defaults, and fail-open
     const expected = ALLOWED_DEFAULTS[name].value;
     if (expected !== undefined) assert.equal([...values][0], expected, `${name}'s default`);
   }
-  assert.equal([...defaulted.get('MODERATION_FAIL_OPEN') ?? []][0], 'false');
-  // The production compose never passes ANTHROPIC_BASE_URL: compose would prefer a value
-  // exported in the operator's shell and send the moderation somewhere else.
-  assert.equal(/ANTHROPIC_BASE_URL/.test(text.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')), false);
-  assert.equal(base().services.node.environment.ANTHROPIC_BASE_URL, undefined);
-  // The log mailer would write every code into the container log.
-  assert.equal(base().services.api.environment.MAIL_MAILER, 'smtp');
+  // The log mailer would write every code into the container log: SMTP in every service that mails.
+  for (const name of ['api', 'scheduler']) assert.equal(base().services[name].environment.MAIL_MAILER, 'smtp', name);
 });
 
-test('required settings: the moderation defaults in the compose are the defaults in server/src/moderation.js', () => {
-  const code = readText(path.join(REPO_ROOT, 'server', 'src', 'moderation.js'));
-  const inCode = {
-    MODERATION_MODEL: /env\.MODERATION_MODEL \|\| '([^']+)'/.exec(code)?.[1],
-    ...Object.fromEntries([...code.matchAll(/intEnv\(env, '(MODERATION_[A-Z_]+)', (\d+)\)/g)].map((m) => [m[1], m[2]])),
-  };
-  const { defaulted } = interpolations(composeText());
-  const names = ['MODERATION_MODEL', 'MODERATION_BLOCK_SEVERITY', 'MODERATION_TIMEOUT_SEVERITY', 'MODERATION_TIMEOUT_DAYS'];
-  for (const name of names) {
-    assert.ok(inCode[name] !== undefined, `cannot find ${name}'s default in server/src/moderation.js`);
-    assert.equal([...(defaulted.get(name) ?? [])][0], inCode[name], name);
+test('required settings: PAYMENTS_MODE is required, the same in api and the scheduler, and its modes are the code\'s', () => {
+  const config = base();
+  const code = readText(path.join(REPO_ROOT, 'api', 'config', 'club.php'));
+  assert.match(code, /'payments' => env\('PAYMENTS_MODE'/, 'api/config/club.php no longer reads PAYMENTS_MODE');
+  const payments = readText(path.join(REPO_ROOT, 'api', 'app', 'Support', 'Payments.php'));
+  assert.match(payments, /return self::mode\(\) === 'test';/, "payments run only in the mode 'test' (App\\Support\\Payments::enabled)");
+  for (const name of ['api', 'scheduler']) {
+    assert.equal(config.services[name].environment.PAYMENTS_MODE, ciValues().PAYMENTS_MODE, `${name}: PAYMENTS_MODE`);
   }
+  assert.equal(config.services.seed.environment.PAYMENTS_MODE, undefined, 'the seed creates an account only');
+  const preflight = readText(path.join(DEPLOY_DIR, 'scripts', 'preflight.sh'));
+  assert.equal(/PAYMENTS_PATTERN='([^']+)'/.exec(preflight)?.[1], '^(off|test)$', 'the preflight accepts exactly off and test');
 });
 
 test('settings are documented in .env.example (blank, with who decides), deploy/ci.env and the runbook', () => {
@@ -287,11 +274,13 @@ test('ci-only env file is labelled and holds only fake values', () => {
     /^http:\/\/(127\.0\.0\.1|\[::1\]|localhost)(:\d+)?\/?$/,
     /^(10|172\.(1[6-9]|2\d|3[01])|192\.168)(\.\d{1,3}){1,2}$/,
   ];
+  // A mode of the code rather than a value, one per setting: the one that moves no real money.
+  const ciModes = { PAYMENTS_MODE: 'test' };
   const problems = [];
   for (const { name, value, line } of settings) {
     if (name.startsWith('ADMIN_')) problems.push(`${line}: ${name} (admin values never live in an env file)`);
     if (secretName.test(name) && value !== '' && !value.includes('not-a-secret')) problems.push(`${line}: ${name} has no not-a-secret marker`);
-    if (!fakeValue.some((re) => re.test(value)) && !services.has(value)) problems.push(`${line}: ${name} does not look like a fake or ci-only value`);
+    if (!fakeValue.some((re) => re.test(value)) && !services.has(value) && ciModes[name] !== value) problems.push(`${line}: ${name} does not look like a fake or ci-only value`);
   }
   console.log(`deploy/ci.env: ${settings.length} settings checked`);
   assert.deepEqual(problems, []);
@@ -299,7 +288,7 @@ test('ci-only env file is labelled and holds only fake values', () => {
 
 // ------------------------------------------------------------------------------ F-10
 
-test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> node -> db', async (t) => {
+test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> db', async (t) => {
   await t.test('the only compose files are docker-compose.yml and the labelled CI override', () => {
     const files = fs.readdirSync(DEPLOY_DIR).filter((f) => /\.ya?ml$/i.test(f)).sort();
     console.log(`compose files in ${posix(DEPLOY_DIR)}: ${files.join(', ')}`);
@@ -311,16 +300,20 @@ test('F-10: deploy/ holds exactly one production compose wired caddy -> api -> n
     }
   });
 
-  await t.test('the stack is caddy -> api (Laravel, api/) -> node (Node, server/) -> db', () => {
-    const config = renderConfig();
+  await t.test('the stack is caddy -> api (Laravel, api/) -> db, with Laravel answering every path', () => {
+    const config = renderConfig({ profiles: ['tools'] });
     const services = config.services ?? {};
-    for (const name of ['db', 'node', 'api', 'caddy']) assert.ok(services[name], `no service ${name}`);
+    for (const name of ['db', 'api', 'scheduler', 'caddy']) assert.ok(services[name], `no service ${name}`);
     assert.match(posix(services.api.build?.context), /\/api$/, 'api is not built from api/ (Laravel)');
-    assert.match(posix(services.node.build?.context), /\/server$/, 'node is not built from server/ (Node)');
+    // One image for every Laravel service, and no other backend behind Laravel.
+    for (const name of LARAVEL_SERVICES) assert.deepEqual(services[name]?.build, services.api.build, `${name} is not built like api`);
+    const otherBuilds = Object.entries(services).filter(([name, s]) => s.build && !LARAVEL_SERVICES.includes(name)).map(([name]) => name);
+    assert.deepEqual(otherBuilds, [], 'a service built from something other than api/');
+    assert.equal(services.node, undefined, 'a node service: the stack has no backend behind Laravel');
+    const fallback = Object.entries(services).filter(([, s]) => Object.keys(s.environment ?? {}).some((k) => /^NODE_/.test(k))).map(([name]) => name);
+    assert.deepEqual(fallback, [], 'a service with a NODE_* setting (a fallback or an internal secret)');
     assert.match(services.db.image, /^mysql:/);
-    assert.equal(services.api.environment.NODE_FALLBACK_URL, 'http://node:8000');
-    assert.equal(services.api.environment.DB_HOST, 'db');
-    assert.equal(services.node.environment.DB_HOST, 'db');
+    for (const name of ['api', 'scheduler', 'seed']) assert.equal(services[name].environment.DB_HOST, 'db', name);
     // Two upstreams: the allow-listed uploads go to the media file server, everything else to
     // Laravel (the last route, without a matcher).
     const routes = siteRoutes();
@@ -367,9 +360,14 @@ test('F-05/F-18: ADMIN_EMAIL and ADMIN_PASSWORD reach only the one-off seed serv
   // No value in the compose: they come from the operator's shell for one run.
   assert.equal(seed.environment.ADMIN_EMAIL, null);
   assert.equal(seed.environment.ADMIN_PASSWORD, null);
-  assert.deepEqual(seed.command, ['npm', 'run', 'seed:admin']);
-  // The seed runs the Node image: the same build as node.
-  assert.deepEqual(seed.build, config.services.node.build);
+  // Laravel's command (App\Support\AdminAccount), on the api image, without the image's
+  // entrypoint: no key, no mail login, no migrations; the database settings and the two values.
+  assert.deepEqual(seed.entrypoint, ['php', 'artisan', 'admin:create']);
+  assert.ok(!seed.command, 'the seed runs exactly its entrypoint');
+  assert.deepEqual(seed.build, config.services.api.build);
+  const extra = Object.keys(seed.environment).filter((k) => !/^(APP_ENV|APP_DEBUG|APP_TIMEZONE|LOG_CHANNEL|CACHE_STORE|DB_[A-Z]+|ADMIN_EMAIL|ADMIN_PASSWORD)$/.test(k));
+  assert.deepEqual(extra, [], 'the seed gets settings beyond the database and the two admin values');
+  assert.match(readText(path.join(REPO_ROOT, 'api', 'routes', 'console.php')), /Artisan::command\('admin:create'/, 'no admin:create command in api/routes/console.php');
 });
 
 test('F-05: caddy starts only after the admin gate found an admin account', () => {
@@ -382,6 +380,11 @@ test('F-05: caddy starts only after the admin gate found an admin account', () =
   const script = readText(path.join(DEPLOY_DIR, 'scripts', 'admin-gate.sh'));
   assert.match(script, /SELECT COUNT\(\*\) FROM users WHERE is_admin = 1/);
   assert.match(readText(path.join(REPO_ROOT, 'server', 'schema.sql')), /^\s+is_admin\s+TINYINT\(1\)/m, 'users.is_admin, which the gate counts');
+  // The production schema comes from the migrations: they create the column the gate counts, and
+  // the gate waits until api has run them.
+  const migrations = fs.readdirSync(path.join(REPO_ROOT, 'api', 'database', 'migrations')).map((f) => readText(path.join(REPO_ROOT, 'api', 'database', 'migrations', f))).join('\n');
+  assert.match(migrations, /->boolean\('is_admin'\)/, 'no migration creates users.is_admin');
+  assert.equal(gate.depends_on?.api?.condition, 'service_healthy', 'the gate does not wait for the migrations');
 });
 
 test('F-18: no healthcheck carries a password', () => {
@@ -401,17 +404,34 @@ test('F-18: no healthcheck carries a password', () => {
 
 // ------------------------------------------------------------------------------ F-29
 
-test('F-29: uploads are mounted read-only into media, read-write only into node, never into api or caddy', () => {
+test('F-29: uploads are mounted read-only into media, read-write into api outside its docroot, never into caddy', () => {
   const config = base();
   const all = mounts(config);
   console.log(`mounts: ${all.length} checked`);
-  assert.deepEqual(all.filter((m) => m.service === 'api').map((m) => `${posix(m.source)} -> ${m.target}`), [], 'api mounts something');
   const binds = all.filter((m) => m.type === 'bind' && /storage/.test(posix(m.source)));
   assert.deepEqual(binds.map((m) => `${m.service}: ${posix(m.source)}`), [], 'an upload folder bound from the clone');
   const of = (source) => all.filter((m) => m.type === 'volume' && m.source === source)
     .map((m) => `${m.service}:${m.read_only ? 'ro' : 'rw'}`).sort();
-  assert.deepEqual(of('uploads'), ['backup:ro', 'media:ro', 'node:rw', 'storage-init:rw']);
-  assert.deepEqual(of('private-media'), ['backup:ro', 'node:rw', 'storage-init:rw']);
+  // api writes both; the scheduler's retention prune removes old evidence images.
+  assert.deepEqual(of('uploads'), ['api:rw', 'backup:ro', 'media:ro', 'storage-init:rw']);
+  assert.deepEqual(of('private-media'), ['api:rw', 'backup:ro', 'scheduler:rw', 'storage-init:rw']);
+  // Where Laravel stores them is where they are mounted, and Apache never reaches it: outside the
+  // docroot, and outside /var/www, which Debian's Apache settings open.
+  const roots = { uploads: 'UPLOADS_ROOT', 'private-media': 'PRIVATE_MEDIA_ROOT' };
+  for (const name of ['api', 'scheduler']) {
+    const env = config.services[name].environment;
+    const own = all.filter((m) => m.service === name);
+    assert.deepEqual(own.filter((m) => m.type !== 'volume' || !roots[m.source]).map((m) => `${posix(m.source)} -> ${m.target}`), [], `${name} mounts something else`);
+    for (const m of own) {
+      assert.equal(m.target, env[roots[m.source]], `${name}: ${m.source} is mounted where ${roots[m.source]} points`);
+      for (const dir of [API_DOCROOT, APACHE_OPEN]) assert.ok(!`${m.target}/`.startsWith(`${dir}/`), `${name}: ${m.source} is mounted under ${dir}`);
+    }
+  }
+  assert.ok(config.services.api.environment.UPLOADS_ROOT && config.services.api.environment.PRIVATE_MEDIA_ROOT, 'api has no upload roots');
+  // A refusal in Apache's own settings for the folder the volumes live in, should a link ever lead there.
+  const conf = readText(path.join(REPO_ROOT, 'api', 'docker', 'apache.conf'));
+  const parent = path.posix.dirname(config.services.api.environment.UPLOADS_ROOT);
+  assert.match(conf, new RegExp(`<Directory ${parent.replaceAll('/', '\\/')}>\\s*AllowOverride None\\s*Options None\\s*Require all denied\\s*php_admin_flag engine off\\s*</Directory>`), `api/docker/apache.conf does not refuse ${parent}`);
 });
 
 test('F-29: caddy, which holds the certificate and account keys, mounts no volume another service mounts', () => {
@@ -428,13 +448,17 @@ test('F-29: caddy, which holds the certificate and account keys, mounts no volum
   assert.deepEqual(binds, ['Caddyfile -> /etc/caddy/Caddyfile:ro']);
 });
 
-/** PUBLIC_FOLDERS, PRIVATE_FOLDERS and the allow-list pattern built from server/src/storage.js. */
+/**
+ * PUBLIC_FOLDERS, PRIVATE_FOLDERS and the allow-list pattern built from api/app/Support/Uploads.php,
+ * the one writer of the uploads.
+ */
 function uploadAllowList() {
-  const storage = readText(path.join(REPO_ROOT, 'server', 'src', 'storage.js'));
-  const folders = /export const PUBLIC_FOLDERS = \[([^\]]+)\]/.exec(storage)?.[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
-  const privateFolders = /export const PRIVATE_FOLDERS = \[([^\]]+)\]/.exec(storage)?.[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
-  const name = /export const STORED_NAME = \/\^(.+)\$\/;/.exec(storage)?.[1];
-  assert.ok(folders?.length && privateFolders?.length && name, 'cannot read PUBLIC_FOLDERS, PRIVATE_FOLDERS or STORED_NAME in server/src/storage.js');
+  const uploads = readText(path.join(REPO_ROOT, 'api', 'app', 'Support', 'Uploads.php'));
+  const list = (name) => new RegExp(`public const ${name} = \\[([^\\]]+)\\];`).exec(uploads)?.[1].match(/'([^']+)'/g)?.map((s) => s.slice(1, -1));
+  const folders = list('PUBLIC_FOLDERS');
+  const privateFolders = list('PRIVATE_FOLDERS');
+  const name = /public const STORED_NAME = '\/\^(.+)\$\/';/.exec(uploads)?.[1];
+  assert.ok(folders?.length && privateFolders?.length && name, 'cannot read PUBLIC_FOLDERS, PRIVATE_FOLDERS or STORED_NAME in api/app/Support/Uploads.php');
   return { folders, privateFolders, expected: `^/storage/(${folders.join('|')})/${name}$` };
 }
 
@@ -445,7 +469,7 @@ test('F-29: caddy passes only stored public images to the media file server and 
   const storageAt = routes.findIndex((r) => r.match?.[0]?.path?.includes('/storage/*'));
   assert.ok(uploadAt >= 0, 'caddy has no route for uploads');
   assert.ok(storageAt > uploadAt, 'no /storage 404 after the upload route');
-  assert.equal(routes[uploadAt].match[0].path_regexp.pattern, expected, 'the allow-list mirrors server/src/storage.js');
+  assert.equal(routes[uploadAt].match[0].path_regexp.pattern, expected, 'the allow-list mirrors api/app/Support/Uploads.php');
   for (const folder of privateFolders) assert.ok(!expected.includes(folder), `private folder ${folder} is served`);
   const upload = caddyHandlers(routes[uploadAt]);
   assert.deepEqual(upload.map((h) => h.handler), ['subroute', 'headers', 'reverse_proxy']);
@@ -472,7 +496,7 @@ test('F-29: the media file server serves only the same allow-list from /srv and 
   assert.equal(Object.keys(config.apps).join(','), 'http', 'media runs another app (tls, pki: keys of its own)');
   const routes = server.routes;
   assert.equal(routes.length, 2, 'the allow-list and the 404 for everything else');
-  assert.equal(routes[0].match?.[0]?.path_regexp?.pattern, expected, "media's allow-list mirrors server/src/storage.js");
+  assert.equal(routes[0].match?.[0]?.path_regexp?.pattern, expected, "media's allow-list mirrors api/app/Support/Uploads.php");
   const files = caddyHandlers(routes[0]);
   assert.deepEqual(files.map((h) => h.handler), ['subroute', 'vars', 'file_server']);
   assert.equal(files[1].root, '/srv');
@@ -544,7 +568,8 @@ test('request bodies: 9 MB only for multipart uploads, otherwise the largest bod
   const kb = ['JSON_LIMIT_KB', 'WEBHOOK_JSON_LIMIT_KB', 'URLENCODED_LIMIT_KB']
     .map((n) => Number(new RegExp(`const ${n} = (\\d+);`).exec(php)?.[1]));
   assert.ok(kb.every((n) => n > 0), 'cannot read the limits in LimitRequestBody.php');
-  const upload = Number(/MAX_UPLOAD_BYTES = (\d+) \* 1024 \* 1024/.exec(readText(path.join(REPO_ROOT, 'server', 'src', 'uploads.js')))?.[1]) * 1024 * 1024;
+  // The image limit of the one upload writer (Laravel's validation rule, in kB).
+  const upload = Number(/public const MAX_KB = (\d+);/.exec(readText(path.join(REPO_ROOT, 'api', 'app', 'Support', 'Uploads.php')))?.[1]) * 1024;
   const post = Number(/^post_max_size = (\d+)M/m.exec(readText(path.join(REPO_ROOT, 'api', 'docker', 'php.ini')))?.[1]) * 1024 * 1024;
   assert.ok(upload > 0 && post > 0, 'cannot read the upload limit or post_max_size');
 
@@ -555,7 +580,7 @@ test('request bodies: 9 MB only for multipart uploads, otherwise the largest bod
   assert.ok(multipart && other, 'one limit for multipart, one for every other body, never both');
   assert.equal(multipart.handle[0].max_size, 9000000);
   assert.ok(multipart.handle[0].max_size > upload && multipart.handle[0].max_size < post, 'between the image limit and post_max_size');
-  assert.equal(other.handle[0].max_size, Math.max(...kb) * 1024, 'the largest non-upload limit of Laravel and Node');
+  assert.equal(other.handle[0].max_size, Math.max(...kb) * 1024, "the largest of Laravel's non-upload limits");
 });
 
 // ------------------------------------------------------------------------------ F-45, F-17
@@ -749,6 +774,10 @@ test('F-17: backups go to the required BACKUP_DIR bind, never created implicitly
     `deploy/${COMPOSE_FILE}: the backup service's /backups bind must be written in the long syntax with create_host_path: false (the short syntax implies true)`,
   );
   assert.equal(backup.environment.BACKUP_RETENTION_DAYS, ciValues().BACKUP_RETENTION_DAYS);
+  // Root without capabilities reads the evidence images only through the www-data group, which
+  // Laravel gives read access and nobody else (api/config/filesystems.php, the private disk).
+  assert.deepEqual((backup.group_add ?? []).map(String), ['33'], 'the backup does not read the evidence images through the www-data group');
+  assert.match(readText(path.join(REPO_ROOT, 'api', 'config', 'filesystems.php')), /'permissions' => \[\s*'file' => \['public' => 0640, 'private' => 0640\],\s*'dir' => \['public' => 0750, 'private' => 0750\],/, 'the private disk does not give owner and group, and only them, read access');
   assert.deepEqual(backup.healthcheck.test, ['CMD', 'bash', '/opt/deploy/backup.sh', '--check']);
   assert.ok(backup.restart, 'the backup service is long-running');
   const ciBackup = ci().services.backup.volumes.find((v) => v.target === '/backups');
@@ -787,6 +816,10 @@ test('F-17: the preflight refuses a BACKUP_DIR inside the clone and checks the e
     "envfile /work/backups; sed -i 's/^LOG_MAX_SIZE=.*/LOG_MAX_SIZE=10/' /work/prod.env; run log-size",
     "envfile /work/backups; sed -i 's/^LOG_MAX_FILES=.*/LOG_MAX_FILES=1/' /work/prod.env; run log-files-one",
     "envfile /work/backups; sed -i 's/^LOG_MAX_FILES=.*/LOG_MAX_FILES=2/' /work/prod.env; run log-files-two",
+    "envfile /work/backups; sed -i 's/^EVIDENCE_RETENTION_DAYS=.*/EVIDENCE_RETENTION_DAYS=0/' /work/prod.env; run evidence-zero",
+    "envfile /work/backups; sed -i 's/^TOKEN_RETENTION_DAYS=.*/TOKEN_RETENTION_DAYS=7d/' /work/prod.env; run token-days",
+    "envfile /work/backups; sed -i 's/^PAYMENTS_MODE=.*/PAYMENTS_MODE=on/' /work/prod.env; run payments-on",
+    "envfile /work/backups; sed -i 's/^PAYMENTS_MODE=.*/PAYMENTS_MODE=off/' /work/prod.env; run payments-off",
     'envfile /work/backups; DB_PASSWORD=shell-value-not-a-secret run shell-export',
     'envfile /work/backups; FAKE_DOCKER_STATUS=1 run compose-fails',
     'ENV_FILE=/work/none.env run no-env-file',
@@ -817,6 +850,10 @@ test('F-17: the preflight refuses a BACKUP_DIR inside the clone and checks the e
     // Docker's local log driver refuses one file while it compresses the rotated ones.
     'log-files-one': [1, 'FAIL  LOG_MAX_FILES has a valid form: a number of files, at least 2'],
     'log-files-two': [0, null],
+    'evidence-zero': [1, 'FAIL  EVIDENCE_RETENTION_DAYS has a valid form: whole days, at least 1'],
+    'token-days': [1, 'FAIL  TOKEN_RETENTION_DAYS has a valid form: whole days, at least 1'],
+    'payments-on': [1, 'FAIL  PAYMENTS_MODE has a valid form: off or test'],
+    'payments-off': [0, null],
     'shell-export': [1, "FAIL  set in this shell as well, docker compose would use the shell's value (unset them): DB_PASSWORD"],
     'compose-fails': [1, 'FAIL  docker compose renders the production compose'],
     'no-env-file': [1, 'FAIL  the env file exists'],
@@ -1103,7 +1140,7 @@ test('F-25: Dependabot watches the Dockerfiles and the compose files of deploy/'
 
 // ------------------------------------------------------------------------------ networks
 
-test('networks: only caddy publishes ports (IPv4), db and the jobs sit on internal networks, caddy reaches neither node nor db', () => {
+test('networks: only caddy publishes ports (IPv4), db and the jobs sit on internal networks, caddy reaches neither the scheduler nor db', () => {
   const config = base();
   const services = servicesOf(config);
   const published = services.filter(([, s]) => (s.ports ?? []).length > 0).map(([n]) => n);
@@ -1118,7 +1155,8 @@ test('networks: only caddy publishes ports (IPv4), db and the jobs sit on intern
   const shared = (a, b) => on(a).filter((n) => on(b).includes(n));
   assert.deepEqual(Object.keys(nets).filter((n) => !internal(n)).sort(), ['edge', 'outbound'], 'networks with a way out');
   assert.deepEqual(services.filter(([n]) => on(n).includes('edge')).map(([n]) => n).sort(), ['api', 'caddy']);
-  assert.deepEqual(services.filter(([n]) => on(n).includes('outbound')).map(([n]) => n), ['node']);
+  // The scheduler's way out (SMTP for the credit reminders), not the edge's.
+  assert.deepEqual(services.filter(([n]) => on(n).includes('outbound')).map(([n]) => n), ['scheduler']);
   // The file server: caddy only, on an internal network of their own.
   assert.deepEqual(services.filter(([n]) => on(n).includes('media')).map(([n]) => n).sort(), ['caddy', 'media']);
   assert.deepEqual(on('media'), ['media']);
@@ -1126,11 +1164,11 @@ test('networks: only caddy publishes ports (IPv4), db and the jobs sit on intern
   assert.ok(on('db').length > 0 && on('db').every(internal), 'db sits on internal networks only');
   for (const job of ['backup', 'admin-gate', 'seed']) assert.deepEqual(on(job), ['data'], job);
   assert.equal(config.services['storage-init'].network_mode, 'none');
-  assert.deepEqual(shared('caddy', 'node'), []);
+  assert.deepEqual(shared('caddy', 'scheduler'), []);
   assert.deepEqual(shared('caddy', 'db'), []);
-  // Exactly one shared network per hop: each backend sees the one before it at one address.
+  // Exactly one shared network between caddy and api: api sees caddy at one address.
   assert.deepEqual(shared('caddy', 'api'), ['edge']);
-  assert.deepEqual(shared('api', 'node'), ['app']);
+  for (const backend of ['api', 'scheduler']) assert.deepEqual(shared(backend, 'db'), ['app'], `${backend} reaches db on the app network`);
   console.log(`networks: ${Object.keys(nets).length} networks, ${services.length} services checked`);
 });
 
@@ -1150,31 +1188,59 @@ function hop(config, front, back) {
   return { network, ip, subnet: ipam.subnet, range: ipam.ip_range };
 }
 
-test('F-31: the trusted proxy addresses are the fixed addresses of caddy and api (mirror)', () => {
+test("F-31: the trusted proxy address is caddy's fixed address (mirror)", () => {
   for (const [label, config] of [['production', base()], ['CI', ci()]]) {
     const edge = hop(config, 'caddy', 'api');
-    const app = hop(config, 'api', 'node');
     assert.equal(config.services.api.environment.TRUSTED_PROXIES, edge.ip, `${label}: Laravel trusts caddy's address`);
-    assert.equal(config.services.node.environment.NODE_TRUST_PROXY, app.ip, `${label}: Node trusts api's address`);
-    for (const h of [edge, app]) {
-      assert.ok(h.subnet && inCidr(h.ip, h.subnet), `${label}: ${h.ip} lies in ${h.network}'s fixed subnet`);
-      assert.ok(h.range && !inCidr(h.ip, h.range), `${label}: ${h.ip} lies outside ${h.network}'s dynamic range: no other container can take it`);
-      assert.notEqual(ipToInt(h.ip) % 2 ** (32 - Number(h.subnet.split('/')[1])), 1, `${label}: ${h.ip} is not the gateway`);
-    }
-    if (edge.network !== app.network) {
-      assert.ok(!inCidr(app.subnet.split('/')[0], edge.subnet) && !inCidr(edge.subnet.split('/')[0], app.subnet), `${label}: the two subnets do not overlap`);
-    }
-    console.log(`${label}: caddy ${edge.ip} on ${edge.network} (TRUSTED_PROXIES), api ${app.ip} on ${app.network} (NODE_TRUST_PROXY)`);
+    assert.ok(edge.subnet && inCidr(edge.ip, edge.subnet), `${label}: ${edge.ip} lies in ${edge.network}'s fixed subnet`);
+    assert.ok(edge.range && !inCidr(edge.ip, edge.range), `${label}: ${edge.ip} lies outside ${edge.network}'s dynamic range: no other container can take it`);
+    assert.notEqual(ipToInt(edge.ip) % 2 ** (32 - Number(edge.subnet.split('/')[1])), 1, `${label}: ${edge.ip} is not the gateway`);
+    // The scheduler serves nothing; the image's entrypoint requires the setting, and it is the same.
+    assert.equal(config.services.scheduler.environment.TRUSTED_PROXIES, edge.ip, `${label}: the scheduler's TRUSTED_PROXIES`);
+    // Nobody else holds a fixed address: the one that is trusted belongs to caddy alone.
+    const fixed = servicesOf(config).flatMap(([name, s]) => Object.entries(s.networks ?? {}).filter(([, n]) => n?.ipv4_address).map(([net]) => `${name}@${net}`));
+    assert.deepEqual(fixed, [`caddy@${edge.network}`], `${label}: fixed addresses`);
+    console.log(`${label}: caddy ${edge.ip} on ${edge.network} (TRUSTED_PROXIES)`);
   }
 });
 
-test('the CI override closes every network, publishes no port and keeps the moderation provider unreachable', () => {
+test('the CI override closes every network, publishes no port and sends every mail to Mailpit', () => {
   const config = ci();
   for (const [name, n] of Object.entries(config.networks)) assert.equal(n.internal, true, `${name} is internal in CI`);
   assert.deepEqual(servicesOf(config).filter(([, s]) => (s.ports ?? []).length > 0).map(([n]) => n), []);
-  assert.equal(config.services.node.environment.ANTHROPIC_BASE_URL, 'http://127.0.0.1:9');
-  assert.equal(config.services.api.environment.MAIL_HOST, 'mailpit');
+  for (const name of ['api', 'scheduler']) {
+    assert.equal(config.services[name].environment.MAIL_HOST, 'mailpit', name);
+    assert.equal(config.services[name].depends_on?.mailpit?.condition, 'service_healthy', name);
+  }
   assert.deepEqual(Object.keys(config.services.mailpit.networks), ['app']);
+});
+
+test("the scheduler runs Laravel's schedule on the api image with api's settings; only api migrates", () => {
+  const config = base();
+  const { api, scheduler } = config.services;
+  assert.deepEqual(scheduler.command, ['php', 'artisan', 'schedule:work']);
+  assert.deepEqual(scheduler.build, api.build, 'the scheduler is not built like api');
+  assert.ok(scheduler.restart, 'the scheduler is long-running');
+  assert.equal(scheduler.depends_on?.api?.condition, 'service_healthy', 'the scheduler starts before the migrations ran');
+  assert.equal(scheduler.healthcheck?.disable, true, "the image's healthcheck asks Apache, which does not run there");
+  // Every setting both read has the same value, except where api alone serves requests.
+  const shared = Object.keys(scheduler.environment).filter((k) => k in api.environment);
+  const differ = shared.filter((k) => scheduler.environment[k] !== api.environment[k]);
+  console.log(`scheduler: ${Object.keys(scheduler.environment).length} settings, ${shared.length} shared with api`);
+  assert.ok(shared.length >= 20, `only ${shared.length} settings shared with api`);
+  assert.deepEqual(differ, [], 'settings the scheduler and api read with different values');
+  assert.equal(api.environment.RUN_MIGRATIONS, 'true', 'api runs the migrations');
+  const migrating = servicesOf(config).filter(([, s]) => s.environment?.RUN_MIGRATIONS === 'true').map(([n]) => n);
+  assert.deepEqual(migrating, ['api'], 'two services migrating at once could get in each other\'s way');
+  // The retention prune's settings reach the one service that runs it.
+  for (const name of ['EVIDENCE_RETENTION_DAYS', 'TOKEN_RETENTION_DAYS']) {
+    assert.equal(scheduler.environment[name], ciValues()[name], `scheduler: ${name}`);
+    assert.equal(api.environment[name], undefined, `api: ${name}`);
+  }
+  const schedule = readText(path.join(REPO_ROOT, 'api', 'routes', 'console.php'));
+  for (const job of ['club:renew', 'credits:expire', 'credits:remind', 'retention:prune']) {
+    assert.match(schedule, new RegExp(`Schedule::command\\('${job}'\\)`), `${job} is not on the schedule`);
+  }
 });
 
 test('every deploy test file is run by exactly one npm script: test:deploy (static) or test:deploy:stack', () => {
@@ -1212,8 +1278,8 @@ test("the stack test's probe runs the image built from server/Dockerfile, so the
   assert.ok(probe, 'no probe service in the CI override');
   assert.equal(probe.image, undefined, `the probe pins an image of its own: ${probe.image}`);
   assert.ok(probe.build, 'the probe is not built');
-  assert.deepEqual(probe.build, config.services.node.build, 'the probe is not built like the node service');
   assert.match(posix(probe.build.context), /\/server$/);
+  assert.match(posix(probe.build.additional_contexts?.shared ?? ''), /\/shared$/, 'the probe is not built the way server/Dockerfile expects (shared/ as a context)');
   const pins = readText(path.join(REPO_ROOT, 'server', 'Dockerfile')).match(/^FROM\s+node:\S+@sha256:[0-9a-f]{64}/gm) ?? [];
   assert.equal(pins.length, 1, 'server/Dockerfile holds the one Node pin');
   const copies = servicesOf(config).filter(([, s]) => /^node:/.test(s.image ?? '')).map(([n, s]) => `${n}: ${s.image}`);
@@ -1221,13 +1287,13 @@ test("the stack test's probe runs the image built from server/Dockerfile, so the
   assert.deepEqual(copies, [], 'a service pins a Node image of its own');
 });
 
-test('hardening: no new privileges anywhere, and no capabilities for api, node and the jobs', () => {
+test('hardening: no new privileges anywhere, and no capabilities for api, the scheduler and the jobs', () => {
   const services = servicesOf(base());
   const problems = [];
   for (const [name, s] of services) {
     if (!(s.security_opt ?? []).includes('no-new-privileges:true')) problems.push(`${name}: no-new-privileges`);
   }
-  for (const name of ['api', 'node', 'caddy', 'media', 'backup', 'admin-gate', 'seed']) {
+  for (const name of ['api', 'scheduler', 'caddy', 'media', 'backup', 'admin-gate', 'seed']) {
     const s = base().services[name];
     if (!s) problems.push(`${name}: no such service`);
     else if (!(s.cap_drop ?? []).includes('ALL')) problems.push(`${name}: cap_drop ALL`);

@@ -3,15 +3,14 @@
 namespace App\Support;
 
 /**
- * One spelling per request path, for the decision whether a path belongs to Laravel
- * (NodeFallbackController, F-01).
+ * One spelling per request path (F-01).
  *
- * Laravel matches its routes case-sensitively against the path decoded once. Node's routers used
- * to match case-insensitively, and the fallback forwarded the path as the client wrote it. So a
- * path Laravel owns could reach Node's copy under another spelling (other case, doubled or
- * trailing slashes, dot segments, percent-encoding), past Laravel's throttles. normalise() maps all
- * those spellings onto one; the fallback refuses a path whose normalised form Laravel owns and
- * forwards only the normalised form.
+ * Laravel matches its routes case-sensitively against the path decoded once. While a Node backend
+ * sat behind Laravel, its routers matched case-insensitively, and the fallback forwarded the path
+ * as the client wrote it: a path Laravel owns could reach Node's copy under another spelling
+ * (other case, doubled or trailing slashes, dot segments, percent-encoding), past Laravel's
+ * throttles. normalise() maps all those spellings onto one. The fallback is gone with Node;
+ * LimitRequestBody still uses it, so every spelling of the webhook path gets the same body limit.
  */
 final class ApiPath
 {
@@ -70,7 +69,7 @@ final class ApiPath
         return implode('/', array_map('rawurlencode', explode('/', $normalised)));
     }
 
-    /** Whether a normalised path lies under /api (the only paths the fallback may forward). */
+    /** Whether a normalised path lies under /api. */
     public static function isUnderApi(string $normalised): bool
     {
         return $normalised === '/api' || str_starts_with($normalised, '/api/');

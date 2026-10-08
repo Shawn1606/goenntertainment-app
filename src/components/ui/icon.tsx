@@ -19,8 +19,20 @@
 import type { SvgProps } from 'react-native-svg';
 
 import {
+  AgeIcon,
   AtIcon,
   BalloonIcon,
+  CoinIcon,
+  CrownIcon,
+  GiftIcon,
+  MinusIcon,
+  NfcIcon,
+  PercentIcon,
+  QrIcon,
+  RefreshIcon,
+  ScanIcon,
+  StampIcon,
+  WalletIcon,
   BanIcon,
   BellIcon,
   BoltIcon,
@@ -200,6 +212,19 @@ const REGISTRY: Record<UiIconName, IconComponent> = {
   more: MoreIcon,
   history: HistoryIcon,
   'arrow-up': ArrowUpIcon,
+  // Marktplatz und Club
+  coin: CoinIcon,
+  gift: GiftIcon,
+  nfc: NfcIcon,
+  qr: QrIcon,
+  scan: ScanIcon,
+  stamp: StampIcon,
+  crown: CrownIcon,
+  percent: PercentIcon,
+  wallet: WalletIcon,
+  minus: MinusIcon,
+  refresh: RefreshIcon,
+  age: AgeIcon,
 };
 
 /**

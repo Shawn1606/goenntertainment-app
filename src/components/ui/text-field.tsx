@@ -161,6 +161,7 @@ const SIGNAL_ERROR = '#ef4444';
 const styles = StyleSheet.create({
   container: {
     gap: Spacing.two,
+    minWidth: 0,
   },
   label: {
     marginLeft: Spacing.half,
@@ -192,6 +193,9 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
+    // Im Web hat ein <input> sonst eine Mindestbreite (~20 Zeichen) und schiebt
+    // schmale Reihen über den Rand ihrer Karte.
+    minWidth: 0,
     paddingVertical: Spacing.three,
     fontSize: 16,
     fontFamily: FontFamily.regular,

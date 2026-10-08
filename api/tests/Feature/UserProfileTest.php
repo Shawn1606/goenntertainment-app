@@ -13,23 +13,15 @@ use Tests\AppFeatureTestCase;
  *
  * Both belong to Laravel; Node's copies are deleted (F-01, one owner per path). These tests were
  * Node tests of those copies and moved here with the same assertions: server/test/account.test.js
- * (2FA fields), server/test/api.test.js (tiers, image addresses) and
- * server/test/blocked-terms-routes.test.js (word filter).
+ * (2FA fields), server/test/api.test.js (image addresses) and
+ * server/test/blocked-terms-routes.test.js (word filter). The account tiers and the profile banner
+ * are gone with the marketplace.
  */
 class UserProfileTest extends AppFeatureTestCase
 {
     private function patchUser(string $token, array $body): TestResponse
     {
         return $this->withBearer($token)->patchJson('/api/user', $body);
-    }
-
-    /** An admin account (is_admin is never mass-assignable) and its token. */
-    private function admin(): array
-    {
-        $user = $this->makeUser();
-        $user->forceFill(['is_admin' => true])->save();
-
-        return [$user, $this->issueToken($user)];
     }
 
     public function test_user_payload_exposes_only_the_two_factor_method(): void
@@ -52,58 +44,28 @@ class UserProfileTest extends AppFeatureTestCase
         }
     }
 
-    public function test_admin_switches_tier_and_back(): void
+    /**
+     * The profile update takes name, username and interests only: what grants rights or is worth
+     * money (admin flag, club plan, credits) is never set by the account itself.
+     */
+    public function test_the_profile_update_cannot_change_admin_plan_or_credits(): void
     {
-        [, $token] = $this->admin();
-
-        $this->patchUser($token, ['account_type' => 'business'])
-            ->assertOk()
-            ->assertJsonPath('user.account_type', 'business');
-
-        $this->patchUser($token, ['account_type' => 'standard'])
-            ->assertOk()
-            ->assertJsonPath('user.account_type', 'standard');
-    }
-
-    public function test_admin_reaches_all_four_tiers(): void
-    {
-        [, $token] = $this->admin();
-
-        foreach (['standard', 'creator', 'business', 'business_plus'] as $type) {
-            $this->patchUser($token, ['account_type' => $type])
-                ->assertOk()
-                ->assertJsonPath('user.account_type', $type);
-        }
-    }
-
-    public function test_legacy_personal_is_stored_as_standard(): void
-    {
-        // Older app versions still send 'personal'; that must not fail.
-        [, $token] = $this->admin();
-
-        $this->patchUser($token, ['account_type' => 'personal'])
-            ->assertOk()
-            ->assertJsonPath('user.account_type', 'standard');
-    }
-
-    public function test_non_admin_cannot_change_tier(): void
-    {
-        $user = $this->makeUser(['account_type' => 'standard']);
+        $user = $this->makeUser();
         $token = $this->issueToken($user);
 
-        $this->patchUser($token, ['account_type' => 'business'])->assertForbidden();
+        $this->patchUser($token, [
+            'name' => 'Selbst Erhoben',
+            'is_admin' => true,
+            'club_plan' => 'platinum',
+            'credits_balance' => 999999,
+            'club_renews_at' => '2099-01-01 00:00:00',
+        ])->assertOk()->assertJsonPath('user.name', 'Selbst Erhoben');
 
-        $this->withBearer($token)->getJson('/api/user')
-            ->assertOk()
-            ->assertJsonPath('user.account_type', 'standard');
-    }
-
-    public function test_unknown_tier_is_rejected(): void
-    {
-        [, $token] = $this->admin();
-
-        $response = $this->patchUser($token, ['account_type' => 'enterprise'])->assertStatus(422);
-        $this->assertNotEmpty($response->json('errors.account_type'), 'field error for account_type expected');
+        $row = DB::table('users')->where('id', $user->id)->first();
+        $this->assertSame(0, (int) $row->is_admin);
+        $this->assertSame('free', $row->club_plan);
+        $this->assertSame(0, (int) $row->credits_balance);
+        $this->assertNull($row->club_renews_at);
     }
 
     public function test_other_fields_stay_editable_for_everyone(): void
@@ -115,9 +77,10 @@ class UserProfileTest extends AppFeatureTestCase
             ->assertJsonPath('user.name', 'Neuer Name');
     }
 
-    public function test_user_payload_has_avatar_and_banner_urls(): void
+    /** The profile banner is gone with the old profile screens: the payload carries the avatar only. */
+    public function test_user_payload_has_the_avatar_url_and_no_banner(): void
     {
-        $user = $this->makeUser(['account_type' => 'creator']);
+        $user = $this->makeUser();
         DB::table('users')->where('id', $user->id)->update([
             'avatar' => 'avatars/fixture-avatar.png',
             'banner' => 'user-banners/fixture-banner.png',
@@ -126,7 +89,7 @@ class UserProfileTest extends AppFeatureTestCase
         $response = $this->withBearer($this->issueToken($user))->getJson('/api/user')->assertOk();
 
         $this->assertMatchesRegularExpression('#/storage/avatars/#', (string) $response->json('user.avatar'));
-        $this->assertMatchesRegularExpression('#/storage/user-banners/#', (string) $response->json('user.banner'));
+        $this->assertArrayNotHasKey('banner', $response->json('user'));
     }
 
     public function test_new_blocked_value_is_rejected_old_value_blocks_nothing(): void

@@ -3,8 +3,9 @@
 #
 # Security headers on every answer (F-30), also on Caddy's own errors (handle_errors below).
 # `-Server` makes the block apply when the answer is written, so it also overwrites what
-# Laravel or Node sent. `?Content-Security-Policy` only sets a default: the stricter policy of the
-# uploads below stays. HSTS without includeSubDomains/preload: that would bind every subdomain of
+# Laravel sent. `?Content-Security-Policy` only sets a default: the stricter policy of the uploads
+# below stays, and so does the one Laravel sends with the page behind sticker and invite links
+# (api/routes/web.php). HSTS without includeSubDomains/preload: that would bind every subdomain of
 # the domain, an operator decision (deploy/.env.example, DOMAIN).
 (security_headers) {
 	header {
@@ -22,13 +23,13 @@
 {$DOMAIN} {
 	import security_headers
 
-	# Request body limits. Multipart (image uploads): etwas über dem 5-MB-Limit des
-	# Node-Backends und unter post_max_size von PHP (api/docker/php.ini). So lehnt das
-	# Backend zu große Bilder mit seiner eigenen, in der App lesbaren Fehlermeldung ab,
+	# Request body limits. Multipart (image uploads): etwas über dem 5-MB-Limit für Bilder
+	# (api/app/Support/Uploads.php) und unter post_max_size von PHP (api/docker/php.ini). So
+	# lehnt das Backend zu große Bilder mit seiner eigenen, in der App lesbaren Fehlermeldung ab,
 	# statt dass Caddy die Verbindung vorher mit einem nackten 413 kappt.
-	# Every other body: the largest limit Laravel and Node apply to a body that is not an upload
-	# (the webhook's JSON, LimitRequestBody::WEBHOOK_JSON_LIMIT_KB); they keep their own, smaller
-	# limits per type (deploy/test/static.test.mjs compares the numbers).
+	# Every other body: the largest limit Laravel applies to a body that is not an upload (the
+	# webhook's JSON, LimitRequestBody::WEBHOOK_JSON_LIMIT_KB); it keeps its own, smaller limits
+	# per type (deploy/test/static.test.mjs compares the numbers).
 	@multipart header Content-Type multipart/form-data*
 	@not_multipart not header Content-Type multipart/form-data*
 	request_body @multipart {
@@ -39,14 +40,15 @@
 	}
 
 	# Public uploads (F-29): plain files from the read-only `uploads` volume, never through PHP.
-	# Only the public folders and the names Node gives a stored image (server/src/storage.js:
-	# PUBLIC_FOLDERS, STORED_NAME); everything else under /storage is a 404 from Caddy, so no
-	# other file there is ever served or handed to Laravel. Evidence and story images live in the
-	# private-media volume, which no web server mounts; Node serves them through checked routes.
+	# Only the public folders and the names Laravel gives a stored image (api/app/Support/
+	# Uploads.php: PUBLIC_FOLDERS, STORED_NAME); everything else under /storage is a 404 from
+	# Caddy, so no other file there is ever served or handed to Laravel. Evidence images live in
+	# the private-media volume, which no file server mounts; Laravel hands them to admins only,
+	# through a checked route (GET /api/admin/evidence-files/{file}).
 	# The files themselves come from the `media` service (deploy/Caddyfile.media), not from this
 	# container: Caddy follows symbolic links, and this container holds the certificate and
 	# account keys (caddy-data), so it mounts no volume anyone else writes to.
-	@upload path_regexp upload ^/storage/(avatars|banners|posts|user-banners)/[0-9a-f]{40}\.(jpg|png|webp)$
+	@upload path_regexp upload ^/storage/(avatars|partners|offers)/[0-9a-f]{40}\.(jpg|png|webp)$
 	handle @upload {
 		# The browser shows the image and runs nothing in it. Set when the answer is written, so
 		# this policy is the one sent, whatever the file server answers.
@@ -59,12 +61,11 @@
 	}
 
 	handle {
-		# Everything else goes to Laravel (container `api`).
-		# Laravel beantwortet, was es kann, und reicht den Rest an das Node-Backend weiter –
-		# genau wie am PC.
+		# Everything else goes to Laravel (container `api`): the API and the pages behind sticker
+		# and invite links (/c/..., /g/...). Laravel answers every path itself.
 		reverse_proxy api:8080 {
 			# Sagt dem Backend, dass außen HTTPS anliegt. Laravel vertraut dem
-			# (trustProxies in api/bootstrap/app.php) und gibt es an Node weiter.
+			# (trustProxies in api/bootstrap/app.php) und baut Bild-Adressen mit https.
 			header_up X-Forwarded-Proto {scheme}
 			# The client address: always the TCP peer Caddy sees, never a value the client sent
 			# (overwrite, not append). Laravel trusts this header from Caddy only (TRUSTED_PROXIES)

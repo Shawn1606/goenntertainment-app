@@ -2,7 +2,7 @@
   "about": "Known differences between server/schema.sql and its copies (F-33). May only shrink: the check fails on a difference not listed here, on an entry that no longer matches a difference, and (with --ratchet) on an entry the base commit's copy of this file does not have. Every group needs a reason. README.md explains the keys.",
   "groups": [
     {
-      "reason": "server/src/db.js ensureSchema() creates only the tables added after the original schema. The base tables come from server/schema.sql alone (MySQL initdb in deploy/docker-compose.yml), imported_events also from the importer's ensureImportSchema(). A database not built from schema.sql never gets them. Open part of F-33, not fixed in PR 1.",
+      "reason": "server/src/db.js ensureSchema() creates only the tables added after the original schema. The base tables come from server/schema.sql alone in the test databases (CI loads it), imported_events also from the importer's ensureImportSchema(); a fresh production database is built by the Laravel migrations (api/docker/entrypoint.sh runs migrate), not by db.js. Open part of F-33, not fixed in PR 1.",
       "entries": [
         "db.js/create table-not-defined activities",
         "db.js/create table-not-defined activity_interest",
@@ -34,35 +34,6 @@
       "reason": "Laravel's own migration ledger, created by `php artisan migrate` itself; it is not part of the application schema.",
       "entries": [
         "laravel/migrate table-extra migrations(id,migration,batch)"
-      ]
-    },
-    {
-      "reason": "The stock Laravel skeleton users migration lacks the application's profile, moderation, terms and two-factor columns and their unique indexes. server/schema.sql owns the users table and the deploy never runs Laravel migrations (api/docker/entrypoint.sh), so the skeleton only shapes a local `composer setup` database. A new users column still needs a Laravel migration (see README.md).",
-      "entries": [
-        "laravel/migrate column-missing users.account_type",
-        "laravel/migrate column-missing users.avatar",
-        "laravel/migrate column-missing users.ban_reason",
-        "laravel/migrate column-missing users.banned_until",
-        "laravel/migrate column-missing users.banner",
-        "laravel/migrate column-missing users.google_id",
-        "laravel/migrate column-missing users.granted_account_type",
-        "laravel/migrate column-missing users.is_admin",
-        "laravel/migrate column-missing users.terms_accepted_at",
-        "laravel/migrate column-missing users.terms_version",
-        "laravel/migrate column-missing users.two_factor_confirmed_at",
-        "laravel/migrate column-missing users.two_factor_last_step",
-        "laravel/migrate column-missing users.two_factor_method",
-        "laravel/migrate column-missing users.two_factor_recovery_codes",
-        "laravel/migrate column-missing users.two_factor_secret",
-        "laravel/migrate column-missing users.username",
-        "laravel/migrate index-missing users.users_google_id_unique",
-        "laravel/migrate index-missing users.users_username_unique"
-      ]
-    },
-    {
-      "reason": "server/schema.sql keeps users.password nullable for accounts created through Google sign-in, which have no password; the stock skeleton declares it NOT NULL. Same scope as the group above: the skeleton only shapes a local `composer setup` database.",
-      "entries": [
-        "laravel/migrate column-attr users.password nullable ref=\"YES\" copy=\"NO\""
       ]
     }
   ]

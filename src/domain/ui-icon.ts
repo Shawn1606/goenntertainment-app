@@ -122,6 +122,19 @@ export const UI_ICON_NAMES = [
   'more',
   'history',
   'arrow-up',
+  // Marktplatz und Club
+  'coin',
+  'gift',
+  'nfc',
+  'qr',
+  'scan',
+  'stamp',
+  'crown',
+  'percent',
+  'wallet',
+  'minus',
+  'refresh',
+  'age',
 ] as const;
 
 export type UiIconName = (typeof UI_ICON_NAMES)[number];

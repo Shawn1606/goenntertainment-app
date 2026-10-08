@@ -6,9 +6,10 @@
  * COVERAGE_ROUTES (R01-R20) are the cross-user routes the security review checked for block
  * enforcement; EXTRA_ROUTES (R21-R29) are further cross-user paths of F-13: joining an event, the
  * leaderboard, event comments and likes, participant lists, notifications and deleting one's own
- * comment under the other person's post. Every route has at least one row in ROWS below, or is
- * delegated to the backend that owns it (the leaderboard is Laravel's). The first test checks
- * that, checks that every Node row names a route the app really serves, and refuses a count of 0.
+ * comment under the other person's post. Every route has at least one row in ROWS below, is
+ * delegated to the backend that owns it, or is listed as removed: no backend serves it any more
+ * (the leaderboard, which the marketplace removed from Laravel). The first test checks that,
+ * checks that every Node row names a route the app really serves, and refuses a count of 0.
  *
  * ## What a block means (the same for every row)
  *
@@ -80,8 +81,14 @@ const EXTRA_ROUTES = [
 ];
 
 /** Routes another backend owns, with the test that covers them there. */
-const DELEGATED = {
-  'R22 GET /api/leaderboard': 'api/tests/Feature/LeaderboardBlocksTest.php',
+const DELEGATED = {};
+
+/**
+ * Routes of the denominator that no backend serves any more, with the reason. The first test
+ * checks that neither Node nor Laravel (api/routes/api.php) has them.
+ */
+const REMOVED = {
+  'R22 GET /api/leaderboard': 'the marketplace removed the leaderboard from Laravel (with ProgressController and its LeaderboardBlocksTest)',
 };
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
@@ -576,7 +583,7 @@ test('denominator: each of the 29 cross-user routes listed above has a row or a 
 
   const rowKeys = ROWS.map((row) => `${row.id} ${row.route}`);
   assert.ok(rowKeys.length > 0, 'no rows');
-  const missing = keys.filter((key) => !rowKeys.includes(key) && !DELEGATED[key]);
+  const missing = keys.filter((key) => !rowKeys.includes(key) && !DELEGATED[key] && !REMOVED[key]);
   assert.deepEqual(missing, [], 'routes without a row');
   assert.deepEqual(rowKeys.filter((key) => !keys.includes(key)), [], 'rows outside the denominator');
 
@@ -588,7 +595,15 @@ test('denominator: each of the 29 cross-user routes listed above has a row or a 
     assert.ok(!served.has(key.slice(4)), `${key} is delegated, but Node serves it`);
     assert.ok(fs.existsSync(path.join(REPO, file)), `${key}: ${file} is missing`);
   }
-  console.log(`${keys.length} cross-user routes: ${ROWS.length} Node rows, ${Object.keys(DELEGATED).length} delegated`);
+  // A removed route is served by neither backend: no Node route, no Laravel route of that path.
+  const laravel = fs.readFileSync(path.join(REPO, 'api', 'routes', 'api.php'), 'utf8');
+  for (const key of Object.keys(REMOVED)) {
+    const route = key.slice(4);
+    assert.ok(!served.has(route), `${key} is listed as removed, but Node serves it`);
+    const uri = route.split(' ')[1].replace(/^\/api/, '').replace(/:(\w+)/g, '{$1}');
+    assert.ok(!laravel.includes(`'${uri}'`), `${key} is listed as removed, but api/routes/api.php has ${uri}`);
+  }
+  console.log(`${keys.length} cross-user routes: ${ROWS.length} Node rows, ${Object.keys(DELEGATED).length} delegated, ${Object.keys(REMOVED).length} removed`);
 });
 
 for (const row of ROWS) {

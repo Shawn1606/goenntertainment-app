@@ -15,6 +15,9 @@
 #     valid form (the backup and db services check the first two again when they start);
 #     LOG_MAX_FILES is at least 2: Docker's `local` log driver compresses the rotated files and
 #     then refuses a single file, so with 1 no container would start;
+#   - EVIDENCE_RETENTION_DAYS and TOKEN_RETENTION_DAYS are whole days (the scheduler's prune
+#     refuses anything else), and PAYMENTS_MODE is `off` or `test` (Laravel would treat any other
+#     value as off, without a word);
 #   - docker compose renders the production compose with this file, so every required setting
 #     is there.
 set -Euo pipefail
@@ -33,6 +36,8 @@ readonly BINLOG_RETENTION_PATTERN='^([1-9][0-9]{0,3}|off)$'
 # driver compresses rotated files and refuses compression with one file).
 readonly LOG_SIZE_PATTERN='^[1-9][0-9]{0,5}[kmg]$'
 readonly LOG_FILES_PATTERN='^([2-9]|[1-9][0-9]{1,2})$'
+# The two modes of api/config/club.php (App\Support\Payments).
+readonly PAYMENTS_PATTERN='^(off|test)$'
 
 checks=0
 failed=0
@@ -125,6 +130,9 @@ valid BACKUP_RETENTION_DAYS "$RETENTION_PATTERN" 'whole days, at least 1'
 valid MYSQL_BINLOG_RETENTION_DAYS "$BINLOG_RETENTION_PATTERN" 'whole days from 1 to 9999, or off'
 valid LOG_MAX_SIZE "$LOG_SIZE_PATTERN" 'a size such as 10m (unit k, m or g)'
 valid LOG_MAX_FILES "$LOG_FILES_PATTERN" 'a number of files, at least 2'
+valid EVIDENCE_RETENTION_DAYS "$RETENTION_PATTERN" 'whole days, at least 1'
+valid TOKEN_RETENTION_DAYS "$RETENTION_PATTERN" 'whole days, at least 1'
+valid PAYMENTS_MODE "$PAYMENTS_PATTERN" 'off or test'
 
 if docker compose --project-directory "$deploy_dir" --env-file "$env_file" \
   -f "$deploy_dir/docker-compose.yml" config --quiet; then

@@ -1,72 +1,83 @@
-import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Tabs, TabList, TabSlot, TabTrigger, type TabListProps, type TabTriggerSlotProps } from 'expo-router/ui';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { createContext, useContext, useLayoutEffect, useState, type ReactNode } from 'react';
+import { Pressable, StyleSheet, Text, View, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import Animated, { Easing, useAnimatedStyle, useReducedMotion, useSharedValue, withTiming, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { initialsOf } from '@/components/story-avatar';
+import { MascotDock, useMascotDock } from '@/components/mascot-dock';
 import { Icon } from '@/components/ui/icon';
-import { BrandGradient, FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BrandGradient, FontFamily, Spacing, Stroke } from '@/constants/theme';
+import { nextExpiring } from '@/domain/booking-status';
+import type { MascotScene } from '@/domain/mascot-lines';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import { useAuth } from '@/lib/auth-context';
 import * as feedback from '@/lib/feedback';
+import { useMarket } from '@/lib/market-context';
 
 /**
- * Untere Leiste im Instagram-/TikTok-Muster:
+ * Die untere Leiste – fünf Ziele:
  *
- *   Home · Karte · ＋ Erstellen · Freunde · (dein Profilbild)
+ *   Home  ·  Gruppen  ·  ( Entdecken )  ·  Tickets  ·  Karte
  *
- * ## Warum eine eigene Leiste statt der nativen
+ * ## Warum Gruppen und Tickets eigene Tabs sind
  *
- * Rechts außen steht das eigene Profilbild – rund, in Farbe, mit Ring, wenn der
- * Tab aktiv ist. Genau das kann die native Leiste nicht: iOS färbt jedes Bild
- * darin als Schablone einfarbig ein, Android ebenso, und rund zuschneiden kann
- * keine von beiden. Ein Foto würde dort zum grauen Quadrat. Instagram und TikTok
- * zeichnen ihre Leiste aus demselben Grund selbst.
+ * Vorher hingen beide am Konto (Profilbild → Konto → Gruppen). So fand man sie
+ * nicht: Gruppen sind der Grund für den Rabatt, Tickets das, was man beim
+ * Partner vorzeigt – beides gehört mit einem Tipp erreichbar in die Leiste.
+ * Gruppen zeigen Ungelesenes als Zahl, Tickets einen Punkt, wenn eins bald
+ * verfällt.
  *
- * Nebeneffekt, der ohnehin richtig ist: iOS, Android und Web sehen jetzt gleich
- * aus – vorher gab es für das Web eine zweite, nachgebaute Leiste.
+ * ## Warum „Entdecken" in der Mitte heraussticht
  *
- * ## Warum genau diese fünf
+ * Der Finder ist der Kern: Wie viele seid ihr, was wollt ihr – und die App sagt,
+ * was passt. Er sitzt als runder Verlaufsknopf erhöht in der Mitte, genau dort,
+ * wo der Daumen liegt.
  *
- * Links das Stöbern, in der Mitte das Erstellen, rechts außen das eigene Profil –
- * die Reihenfolge, die man aus Instagram und TikTok kennt, und genau deshalb
- * braucht sie keine Erklärung. Beschriftungen bleiben stehen: Sie kosten kaum
- * Platz und nehmen jedes Rätselraten, wofür ein Symbol steht.
+ * ## Der Wechsel
  *
- * ## Fünf ist die Grenze
+ * Tabs gleiten seitlich hinein und hinaus wie Seiten (`SlidingSlot`): nach
+ * rechts, wenn das Ziel rechts liegt, sonst nach links. So sieht man, wohin man
+ * „gegangen" ist. Bei „Bewegung reduzieren" wechselt der Inhalt sofort.
  *
- * Mehr Ziele passen auf ein schmales Handy nicht, ohne dass die Treffer zu klein
- * werden. Alles Weitere (Chats, Einstellungen, Admin) liegt als Stack-Route hinter
- * einem Knopf im jeweiligen Kopf.
+ * Über der Leiste sitzt Goenni als Begleiter (src/components/mascot-dock.tsx).
  *
- * ## `backBehavior: 'history'`
- *
- * Die Zurück-Taste auf Android geht dorthin, wo man herkam – unabhängig davon,
- * welcher Tab zuerst deklariert ist.
+ * Eigene Leiste statt der nativen: Nur so lässt sich der Mittelknopf erhöht und
+ * im Markenverlauf zeichnen, und iOS, Android und Web sehen gleich aus.
  */
+type TabName = 'index' | 'groups' | 'finder' | 'bookings' | 'map';
+
 type TabDef = {
-  name: string;
-  href: '/' | '/map' | '/create' | '/friends' | '/me';
+  name: TabName;
+  href: '/' | '/groups' | '/finder' | '/bookings' | '/map';
   label: string;
   icon: UiIconName;
 };
 
 const TABS: TabDef[] = [
   { name: 'index', href: '/', label: 'Home', icon: 'home' },
+  { name: 'groups', href: '/groups', label: 'Gruppen', icon: 'users' },
+  { name: 'finder', href: '/finder', label: 'Entdecken', icon: 'compass' },
+  { name: 'bookings', href: '/bookings', label: 'Tickets', icon: 'ticket' },
   { name: 'map', href: '/map', label: 'Karte', icon: 'map' },
-  { name: 'create', href: '/create', label: 'Erstellen', icon: 'plus' },
-  { name: 'friends', href: '/friends', label: 'Freunde', icon: 'users' },
-  { name: 'me', href: '/me', label: 'Profil', icon: 'user' },
 ];
 
+const SCENE: Record<string, MascotScene> = { index: 'home', groups: 'groups', finder: 'finder', bookings: 'bookings', map: 'map' };
+
+/** Grobe Höhe der Leiste, bis sie gemessen ist. */
+const BAR_ESTIMATE = 62;
+
 export default function AppTabs() {
+  const insets = useSafeAreaInsets();
+  const [barHeight, setBarHeight] = useState(BAR_ESTIMATE + Math.max(insets.bottom, Spacing.two));
+
   return (
     <Tabs style={styles.root} options={{ backBehavior: 'history' }}>
-      <TabSlot style={styles.slot} />
+      <SlidingSlot />
+      {/* Vor der Leiste gezeichnet: Beim Ducken verschwindet Goenni HINTER ihr. */}
+      <MascotDock bottom={barHeight} />
       <TabList asChild>
-        <BottomBar>
+        <BottomBar onHeight={setBarHeight}>
           {TABS.map((tab) => (
             <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
               <TabButton tab={tab} />
@@ -78,9 +89,108 @@ export default function AppTabs() {
   );
 }
 
+/* ============================================================ Übergang */
+
+type Motion = {
+  from: SharedValue<number>;
+  to: SharedValue<number>;
+  progress: SharedValue<number>;
+  /** Welcher Tab zuletzt vorn war – −1 bis zum ersten. */
+  current: SharedValue<number>;
+  width: number;
+};
+
+const MotionContext = createContext<Motion | null>(null);
+
+/**
+ * Der Inhalt der Tabs, jeder als eigene Seite übereinander. Beim Wechsel
+ * schieben sich alte und neue Seite gemeinsam zur Seite (wie ein Blättern);
+ * alle übrigen liegen unsichtbar außerhalb.
+ */
+function SlidingSlot() {
+  const { width } = useWindowDimensions();
+  const from = useSharedValue(0);
+  const to = useSharedValue(0);
+  const progress = useSharedValue(1);
+  const current = useSharedValue(-1);
+
+  return (
+    <MotionContext.Provider value={{ from, to, progress, current, width }}>
+      <TabSlot
+        style={styles.slot}
+        detachInactiveScreens={false}
+        renderFn={(descriptor, { index, isFocused, loaded }) => {
+          if (!loaded && !isFocused) return null;
+          return (
+            <TabPane key={descriptor.route.key} index={index} name={descriptor.route.name} focused={isFocused}>
+              {descriptor.render()}
+            </TabPane>
+          );
+        }}
+      />
+    </MotionContext.Provider>
+  );
+}
+
+function TabPane({ index, name, focused, children }: { index: number; name: string; focused: boolean; children: ReactNode }) {
+  const motion = useContext(MotionContext)!;
+  const reduced = useReducedMotion();
+  const dock = useMascotDock();
+  const { from, to, progress, current, width } = motion;
+
+  useLayoutEffect(() => {
+    if (!focused) return;
+    const previous = current.get();
+    current.set(index);
+    if (previous < 0 || previous === index || reduced) {
+      from.set(index);
+      to.set(index);
+      progress.set(1);
+    } else {
+      from.set(previous);
+      to.set(index);
+      progress.set(0);
+      progress.set(withTiming(1, { duration: 320, easing: Easing.out(Easing.cubic) }));
+    }
+    dock.setScene(SCENE[name] ?? 'home');
+    // Nur beim Fokuswechsel – die Werte selbst sind stabil.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focused]);
+
+  const style = useAnimatedStyle(() => {
+    const a = from.value;
+    const b = to.value;
+    const p = progress.value;
+    const dir = b >= a ? 1 : -1;
+    if (index === b) return { opacity: 1, transform: [{ translateX: (1 - p) * dir * width }] };
+    if (index === a && p < 1) return { opacity: 1 - p * 0.35, transform: [{ translateX: -p * dir * width }] };
+    return { opacity: 0, transform: [{ translateX: width * 2 }] };
+  });
+
+  return (
+    <Animated.View
+      style={[StyleSheet.absoluteFill, style]}
+      pointerEvents={focused ? 'auto' : 'none'}
+      accessibilityElementsHidden={!focused}
+      importantForAccessibility={focused ? 'auto' : 'no-hide-descendants'}>
+      {children}
+    </Animated.View>
+  );
+}
+
+/* ============================================================ Leiste */
+
 function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & { tab: TabDef }) {
   const colors = useTheme();
-  const color = isFocused ? colors.text : colors.textSecondary;
+  const market = useMarket();
+  const color = isFocused ? colors.tint : colors.textSecondary;
+  const center = tab.name === 'finder';
+
+  const unread = market.groups.reduce((sum, g) => sum + g.unread, 0);
+  const expiring = nextExpiring(market.bookings, new Date());
+  const badge = tab.name === 'groups' && unread > 0 ? (unread > 9 ? '9+' : String(unread)) : null;
+  /** Punkt statt Zahl: „da läuft bald etwas ab" – die Zahl steht auf dem Ticket. */
+  const dot = tab.name === 'bookings' && expiring?.info.tone === 'urgent';
 
   return (
     <Pressable
@@ -90,22 +200,37 @@ function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & 
         onPress?.(event);
       }}
       accessibilityRole="tab"
-      accessibilityLabel={tab.label}
+      accessibilityLabel={center ? 'Entdecken: was passt zu uns?' : `${tab.label}${badge ? `, ${badge} neu` : ''}${dot ? ', ein Ticket verfällt bald' : ''}`}
       accessibilityState={{ selected: !!isFocused }}
       style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
-      <View style={styles.iconSlot}>
-        {tab.name === 'create' ? (
-          <CreateGlyph />
-        ) : tab.name === 'me' ? (
-          <ProfileGlyph focused={!!isFocused} />
-        ) : (
-          <Icon name={tab.icon} size={26} color={color} />
-        )}
-      </View>
+      {center ? (
+        <View style={styles.centerSlot}>
+          <LinearGradient
+            colors={[...BrandGradient]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[styles.centerButton, { borderColor: colors.background }, isFocused && styles.centerFocused]}>
+            <Icon name="compass" size={27} color="#ffffff" />
+          </LinearGradient>
+        </View>
+      ) : (
+        <View style={styles.iconSlot}>
+          {/* Aktiver Tab: getönte Pille hinter dem Symbol – man sieht sofort, wo man ist. */}
+          <View style={[styles.pill, isFocused && { backgroundColor: colors.backgroundSelected }]}>
+            <Icon name={tab.icon} size={24} color={color} />
+          </View>
+          {badge ? (
+            <View style={[styles.badge, { backgroundColor: colors.tint, borderColor: colors.background }]}>
+              <Text style={styles.badgeText}>{badge}</Text>
+            </View>
+          ) : null}
+          {dot ? <View style={[styles.dot, { borderColor: colors.background }]} /> : null}
+        </View>
+      )}
       <Text
         style={[
           styles.label,
-          { color, fontFamily: isFocused ? FontFamily.bold : FontFamily.medium },
+          { color: center ? (isFocused ? colors.tint : colors.text) : isFocused ? colors.text : colors.textSecondary, fontFamily: isFocused || center ? FontFamily.bold : FontFamily.medium },
         ]}
         numberOfLines={1}>
         {tab.label}
@@ -114,68 +239,18 @@ function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & 
   );
 }
 
-/**
- * Das ＋ in der Mitte – als kleine Verlaufs-Kachel.
- *
- * Es ist die eine Handlung, zu der die Leiste einlädt, also trägt sie als einzige
- * Farbe, auch im Ruhezustand. Die Kachel statt eines Kreises ist das TikTok-Zitat:
- * Man erkennt den Knopf sofort als „hier entsteht etwas".
- */
-function CreateGlyph() {
-  return (
-    <LinearGradient
-      colors={[...BrandGradient]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.create}>
-      <Icon name="plus" size={20} color="#ffffff" />
-    </LinearGradient>
-  );
-}
-
-/**
- * Das eigene Profilbild – oder die Initialen, solange es keins gibt.
- *
- * Aktiv bekommt es einen Ring in Schriftfarbe, mit etwas Luft dazwischen: So
- * liest sich „hier bist du gerade", ohne dass das Foto selbst kleiner wird.
- */
-function ProfileGlyph({ focused }: { focused: boolean }) {
-  const colors = useTheme();
-  const { user } = useAuth();
-  const name = user?.name ?? '';
-
-  return (
-    <View style={[styles.avatarRing, { borderColor: focused ? colors.text : 'transparent' }]}>
-      <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
-        {user?.avatar ? (
-          <Image
-            source={{ uri: user.avatar }}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            cachePolicy="memory-disk"
-            accessible={false}
-          />
-        ) : name ? (
-          <Text style={[styles.initials, { color: colors.text }]}>{initialsOf(name)}</Text>
-        ) : (
-          <Icon name="user" size={16} color={colors.textSecondary} />
-        )}
-      </View>
-    </View>
-  );
-}
-
-function BottomBar(props: TabListProps) {
+function BottomBar({ onHeight, ...props }: TabListProps & { onHeight: (height: number) => void }) {
   const colors = useTheme();
   const insets = useSafeAreaInsets();
   return (
     <View
       {...props}
+      onLayout={(event: LayoutChangeEvent) => onHeight(Math.round(event.nativeEvent.layout.height))}
       style={[
         styles.bar,
         {
           backgroundColor: colors.background,
-          borderTopColor: colors.backgroundSelected,
+          borderTopColor: colors.border,
           paddingBottom: Math.max(insets.bottom, Spacing.two),
         },
       ]}>
@@ -184,55 +259,47 @@ function BottomBar(props: TabListProps) {
   );
 }
 
-const AVATAR = 26;
-const RING = 2;
-const RING_GAP = 1.5;
+const CENTER = 58;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-  slot: { flex: 1 },
-  bar: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    paddingTop: Spacing.one + 2,
-    alignItems: 'center',
-  },
-  inner: {
-    flexDirection: 'row',
-    width: '100%',
-    maxWidth: MaxContentWidth,
-  },
-  button: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: Spacing.one,
-  },
-  /** Gleiche Höhe für alle Symbole – sonst tanzen die Beschriftungen. */
+  slot: { flex: 1, overflow: 'hidden' },
+  bar: { borderTopWidth: Stroke, paddingTop: Spacing.one + 2, alignItems: 'center' },
+  inner: { flexDirection: 'row', width: '100%', maxWidth: 560, alignSelf: 'center' },
+  button: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: Spacing.one },
   iconSlot: { height: 32, alignItems: 'center', justifyContent: 'center' },
-  pressed: { opacity: 0.6 },
+  pill: { width: 48, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  /** Gleiche Höhe wie die anderen – der Knopf ragt nach OBEN hinaus, die Beschriftungen bleiben auf einer Linie. */
+  centerSlot: { height: 32, alignItems: 'center', justifyContent: 'flex-end' },
+  centerButton: {
+    width: CENTER,
+    height: CENTER,
+    borderRadius: CENTER / 2,
+    borderWidth: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: -4,
+    shadowColor: '#dd2a7b',
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  centerFocused: { transform: [{ scale: 1.06 }] },
+  pressed: { opacity: 0.7 },
   label: { fontSize: 11 },
-  create: {
-    width: 42,
-    height: 30,
+  badge: {
+    position: 'absolute',
+    top: -3,
+    right: -2,
+    minWidth: 19,
+    height: 19,
     borderRadius: 10,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 4,
   },
-  avatarRing: {
-    width: AVATAR + (RING + RING_GAP) * 2,
-    height: AVATAR + (RING + RING_GAP) * 2,
-    borderRadius: 999,
-    borderWidth: RING,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatar: {
-    width: AVATAR,
-    height: AVATAR,
-    borderRadius: AVATAR / 2,
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  initials: { fontFamily: FontFamily.bold, fontSize: 11 },
+  badgeText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 10 },
+  dot: { position: 'absolute', top: 0, right: 6, width: 11, height: 11, borderRadius: 6, borderWidth: 2, backgroundColor: '#f59e0b' },
 });

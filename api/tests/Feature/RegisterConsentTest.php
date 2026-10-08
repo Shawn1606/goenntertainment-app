@@ -48,7 +48,6 @@ class RegisterConsentTest extends AppFeatureTestCase
             'username' => $username,
             'email' => $username.'@example.invalid',
             'password' => self::TEST_PASSWORD,
-            'account_type' => 'standard',
             'terms_version' => $legal['terms_version'] ?? null,
             'confirmed_min_age' => $legal['min_age'] ?? null,
         ], $overrides);
@@ -94,8 +93,8 @@ class RegisterConsentTest extends AppFeatureTestCase
     public function test_the_consent_errors_come_after_the_errors_of_the_other_fields(): void
     {
         // The app shows the first message; an existing failure keeps its own message first.
-        [, $response] = $this->register(['account_type' => 'enterprise', 'terms_version' => null, 'confirmed_min_age' => null]);
-        $response->assertStatus(422)->assertJsonPath('message', 'Ungueltiger Kontotyp.');
+        [, $response] = $this->register(['password' => 'nurbuchstaben', 'terms_version' => null, 'confirmed_min_age' => null]);
+        $response->assertStatus(422)->assertJsonPath('message', 'Das Passwort muss mindestens 8 Zeichen mit Buchstaben und Zahlen haben.');
     }
 
     public function test_a_sign_up_records_the_terms_version_and_the_minimum_age_with_timestamps(): void

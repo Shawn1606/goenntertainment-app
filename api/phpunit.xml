@@ -33,11 +33,6 @@
         <env name="DB_DATABASE" value=":memory:"/>
         <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
-        <!-- No Node backend in tests: a test that needs one sets the address (and the internal
-             secret) itself and fakes every call (Http::fake). These win over a developer's
-             api/.env, so a test never reaches a Node that happens to run on this machine. -->
-        <env name="NODE_FALLBACK_URL" value=""/>
-        <env name="NODE_INTERNAL_SECRET" value=""/>
         <env name="QUEUE_CONNECTION" value="sync"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>

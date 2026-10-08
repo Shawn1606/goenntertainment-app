@@ -14,11 +14,11 @@ use RuntimeException;
  *
  * Every token expires: issue() writes `expires_at` = now + the lifetime, Sanctum rejects a token
  * whose `expires_at` has passed or is missing (AppServiceProvider) or that is older than the
- * lifetime (config/sanctum.php), and Node's requireAuth (server/src/auth.js) applies the same
- * rule, the lifetime included: it reads SANCTUM_EXPIRATION too, so a lower value ends older
- * sessions on both backends at once. The lifetime's default and its accepted format are a named
- * mirror of server/src/config.js (scripts/ci/check-mirrors.mjs). Laravel is the only issuer; the
- * Node server only reads and deletes tokens.
+ * lifetime (config/sanctum.php). The former Node backend (server/, no longer deployed) applies the
+ * same rule in its requireAuth (server/src/auth.js), the lifetime included. The lifetime's
+ * default and its accepted format are a named mirror of server/src/config.js
+ * (scripts/ci/check-mirrors.mjs), and the retention prune counts from the same lifetime
+ * (App\Support\Retention). Laravel is the only issuer.
  *
  * Revoking: a change of password, e-mail address or two-factor settings signs out every other
  * device (revokeOthers); a password reset, where nobody is signed in, signs out all (revokeAll).

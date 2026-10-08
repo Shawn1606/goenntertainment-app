@@ -7,8 +7,8 @@ use App\Mail\AccountSecurityNotice;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
 use App\Rules\ValidEmail;
+use App\Support\AccountDeletion;
 use App\Support\AddressCode;
-use App\Support\NodeInternal;
 use App\Support\PasswordPolicy;
 use App\Support\PasswordReset;
 use App\Support\Passwords;
@@ -298,24 +298,14 @@ class AccountController extends Controller
      *
      * ## Wer hier was tut
      *
-     * PRUEFEN tut Laravel: Passwort (oder das Bestaetigungswort), „letzter
-     * Admin" und - nur hier moeglich, weil das TOTP-Secret mit APP_KEY
-     * verschluesselt ist - den Zwei-Faktor-Code. LOESCHEN tut Node
-     * (server/src/account-deletion.js): Dort liegen die Datei-Pfade, und
-     * derselbe Ablauf dient dem Admin-Panel. Zwei Implementierungen davon liefen
-     * frueher oder spaeter auseinander - und eine vergessene Upload-Art hiesse
-     * Bilder, die nach der Loeschung oeffentlich weiterleben.
+     * Geprueft werden Passwort (oder das Bestaetigungswort), „letzter Admin" und
+     * der Zwei-Faktor-Code; geloescht wird mit App\Support\AccountDeletion -
+     * demselben Ablauf, den der Admin-Bereich nimmt, samt Dateien.
      *
      * Die Reihenfolge der Pruefungen ist Absicht: erst das Passwort, dann „letzter
      * Admin", zuletzt der Code. Ein Code wird beim Pruefen VERBRAUCHT (ein
      * Wiederherstellungscode fuer immer) - er soll nicht an einem Tippfehler im
      * Passwort oder an einer 409 verloren gehen.
-     *
-     * Danach eine Freigabe (TwoFactor::createDeletionGrant) und der Aufruf von
-     * Node's internal route DELETE /internal/accounts/{id} with the shared secret
-     * (App\Support\NodeInternal), not the public fallback: /api/me is a path
-     * Laravel owns, and the fallback never forwards those. Without a Node address
-     * or secret the answer is a 503 and nothing is deleted.
      */
     public function destroy(Request $request): Response
     {
@@ -343,7 +333,11 @@ class AccountController extends Controller
             TwoFactor::assertCode($user, $request->input('code'));
         }
 
-        return NodeInternal::deleteAccount($user, TwoFactor::createDeletionGrant($user));
+        if (AccountDeletion::delete($user, refuseLastAdmin: true) === 'last_admin') {
+            return response()->json(['message' => self::MSG_LAST_ADMIN], 409);
+        }
+
+        return response()->json(['message' => 'Dein Konto wurde gelöscht.']);
     }
 
     /**

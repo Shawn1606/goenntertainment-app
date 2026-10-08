@@ -213,8 +213,9 @@ jobs:
         with:
           php-version: ${{ env.PHP_VERSION }}
           # pdo_mysql for the database feature tests; pdo_sqlite for the unit test that shows
-          # what those tests do without MySQL.
-          extensions: intl, mbstring, pdo_mysql, pdo_sqlite, sqlite3, bcmath
+          # what those tests do without MySQL; gd and exif for the image check of every upload
+          # (App\Support\ImageCheck), as in api/Dockerfile.
+          extensions: intl, mbstring, pdo_mysql, pdo_sqlite, sqlite3, bcmath, gd, exif
           coverage: none
           tools: composer:v2
       - name: composer.lock matches composer.json

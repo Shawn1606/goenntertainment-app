@@ -1,9 +1,11 @@
 <?php
 
+use App\Http\Middleware\EnsureAdmin;
 use App\Http\Middleware\EnsureNotBanned;
 use App\Http\Middleware\LimitRequestBody;
 use App\Http\Middleware\ThrottleRequestsExactly;
 use App\Http\Middleware\UnescapedJsonResponses;
+use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Database\QueryException;
@@ -11,6 +13,8 @@ use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpKernel\Exception\MethodNotAllowedHttpException;
+use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -21,7 +25,7 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         /**
-         * First of all: a request body over Node's limits (32 kB JSON, 16 kB urlencoded, 128 kB
+         * First of all: a request body over the limits (32 kB JSON, 16 kB urlencoded, 128 kB
          * for the RevenueCat webhook) is refused with 413, ahead of ValidatePostSize and before
          * TrimStrings and ConvertEmptyStringsToNull rebuild the decoded body (F-02).
          * public/index.php makes the same check before Request::capture(); this one covers every
@@ -45,8 +49,8 @@ return Application::configure(basePath: dirname(__DIR__))
          *
          * Trusted is only the proxy named in config/trustedproxy.php (TRUSTED_PROXIES; in
          * production Caddy's fixed address), never '*' (F-31): with '*' every client could set
-         * X-Forwarded-For itself and so choose the address that the rate limits count and that
-         * the Node fallback receives. No `at:` here, so the middleware reads the addresses from
+         * X-Forwarded-For itself and so choose the address that the rate limits count. No `at:`
+         * here, so the middleware reads the addresses from
          * the config on each request. Only these three headers are read.
          */
         $middleware->trustProxies(
@@ -58,6 +62,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'banned' => EnsureNotBanned::class,
             'throttle' => ThrottleRequestsExactly::class,
+            'admin' => EnsureAdmin::class,
         ]);
 
         // Gilt fuer JEDE Antwort der API, auch fuer die Fehler-Antworten des
@@ -86,6 +91,30 @@ return Application::configure(basePath: dirname(__DIR__))
                 'driver_code' => $e->errorInfo[1] ?? null,
             ]);
         })->stop();
+
+        /**
+         * Unknown paths and methods under /api answer in German, as the former Node fallback
+         * answered them (the app shows `message` as it is): a path no route serves, or a route
+         * parameter that names no row, is "Nicht gefunden." - which also says nothing about the
+         * model behind it. A 404 with a message of its own (abort(404, '...')) keeps it.
+         */
+        $exceptions->render(function (NotFoundHttpException $e, Request $request) {
+            if (! $request->is('api/*')) {
+                return null;
+            }
+            $unknown = $e->getPrevious() instanceof ModelNotFoundException
+                || str_starts_with($e->getMessage(), 'The route ');
+
+            return $unknown ? response()->json(['message' => 'Nicht gefunden.'], 404) : null;
+        });
+
+        $exceptions->render(function (MethodNotAllowedHttpException $e, Request $request) {
+            if (! $request->is('api/*')) {
+                return null;
+            }
+
+            return response()->json(['message' => 'Diese Methode ist hier nicht erlaubt.'], 405, $e->getHeaders());
+        });
 
         /**
          * Fehlerhafte Eingaben im gewohnten Format.

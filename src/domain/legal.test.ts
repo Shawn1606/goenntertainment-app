@@ -78,8 +78,8 @@ test('die Haftung sagt die drei Dinge, um die es geht', () => {
     .join(' ')
     .toLowerCase();
 
-  // 1. Die Plattform ist nicht die Veranstalterin.
-  assert.ok(text.includes('veranstalt'), 'Veranstalterrolle muss vorkommen');
+  // 1. Die Leistung erbringt der Partner, wir vermitteln.
+  assert.ok(text.includes('partner') && text.includes('vermittel'), 'Rolle von Partner und Vermittler muss vorkommen');
   // 2. Teilnahme auf eigene Gefahr.
   assert.ok(text.includes('eigene verantwortung') || text.includes('eigene gefahr'));
   // 3. Ein Notruf-Hinweis – das ist der Satz, der im Ernstfall zählt.

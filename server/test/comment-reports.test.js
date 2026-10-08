@@ -10,8 +10,6 @@
  */
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 
 import { createApp } from '../src/app.js';
 import { ensureSchema, first, pool } from '../src/db.js';
@@ -230,12 +228,10 @@ test('an admin in a block relation with the post owner can still remove a commen
   assert.equal(await first('SELECT 1 AS ok FROM post_comments WHERE id = ?', [commentId]), null);
 });
 
-test('server and app know the same notification types', () => {
-  const file = path.join(import.meta.dirname, '..', '..', 'src', 'domain', 'notification.ts');
-  const block = fs.readFileSync(file, 'utf8').match(/export const NOTIFICATION_TYPES = \[([^\]]*)\]/);
-  const app = block ? [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
-  assert.ok(app.length > 0, 'NOTIFICATION_TYPES not found in src/domain/notification.ts');
-  assert.deepEqual([...app].sort(), [...NOTIFICATION_TYPES].sort());
+// The app's own list of these types went with its notification screen (the marketplace removed
+// both); the server's types still have to fit the column.
+test('every notification type fits notifications.type', () => {
+  assert.ok(NOTIFICATION_TYPES.length > 0, 'no notification types');
   for (const type of NOTIFICATION_TYPES) assert.ok(type.length <= 20, `${type} does not fit notifications.type`);
 });
 

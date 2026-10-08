@@ -2,7 +2,7 @@
 
 /*
 |--------------------------------------------------------------------------
-| Rate limits of the sign-in, sign-up, password and two-factor routes
+| Rate limits of the sign-in, sign-up, password and two-factor routes, and of every other write
 |--------------------------------------------------------------------------
 |
 | One entry per named limiter (App\Providers\AppServiceProvider). Each scope is a key the limiter
@@ -86,6 +86,32 @@ return [
     'profile' => [
         'user' => RateLimitRules::env('AUTH_LIMIT_PROFILE_USER', '30/60,300/3600'),
     ],
+
+    /*
+    | The other write routes; every one of them is signed in, so `user` is the account. The first
+    | five are the marketplace's own limits (voucher and invite codes, money and credits, check-ins
+    | and stickers, the profile image, the group chat). `chat-send` keeps the marketplace's burst
+    | brake (10 in 10 seconds) and adds the chat class below it. The write-* classes are the
+    | classes the former Node backend gave its write routes (server/src/rate-limit.js,
+    | DEFAULT_WRITE_LIMITS), with the same numbers, for the routes of the same kind:
+    |   write-content  creating, changing and deleting groups, members, messages
+    |   write-state    cheap state the app sends by itself (read markers)
+    |   write-report   reports, which land in the admins' inbox
+    |   write-block    blocks and their removal
+    |   write-admin    every admin write: caps what a stolen admin token can do in a hurry
+    | Engineering values without an override setting: a change is a code change here and in
+    | tests/Feature/RateLimitRulesTest.php.
+    */
+    'voucher-redeem' => ['user' => '10/60', 'ip' => '30/60'],
+    'payments' => ['user' => '12/60'],
+    'checkin' => ['user' => '20/60'],
+    'avatar' => ['user' => '10/60'],
+    'chat-send' => ['user' => '10/10,30/60,1000/86400', 'ip' => '300/60'],
+    'write-content' => ['user' => '60/600,500/86400', 'ip' => '600/600'],
+    'write-state' => ['user' => '120/60', 'ip' => '1200/60'],
+    'write-report' => ['user' => '10/600,50/86400', 'ip' => '100/600'],
+    'write-block' => ['user' => '30/600,200/86400', 'ip' => '300/600'],
+    'write-admin' => ['user' => '120/600', 'ip' => '600/600'],
 
     // Not a route limiter: wrong second-factor codes per account, across every sign-in challenge
     // and step-up (App\Support\TwoFactor). At the cap no code is accepted and none is mailed

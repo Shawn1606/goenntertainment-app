@@ -35,27 +35,4 @@ return [
         ],
     ],
 
-    /*
-    |--------------------------------------------------------------------------
-    | Rueckfall auf das alte Node-Backend
-    |--------------------------------------------------------------------------
-    |
-    | Solange das Backend etappenweise nach Laravel zieht, beantwortet Laravel
-    | die schon portierten Pfade selbst und schickt alle anderen hierhin weiter
-    | (siehe App\Http\Controllers\NodeFallbackController).
-    |
-    | LEER = der Umzug ist fertig. Dann gibt es keinen Rueckfall mehr, und ein
-    | unbekannter Pfad ist ein 404. Das ist der Zustand, auf den das hinauslaeuft:
-    | Diese Einstellung soll wieder verschwinden.
-    |
-    */
-
-    'node_fallback' => [
-        'url' => env('NODE_FALLBACK_URL', ''),
-        // Shared secret for Node's internal routes (App\Support\NodeInternal; Node checks it in
-        // server/src/internal-secret.js). At least 32 characters; without it Laravel does not call
-        // them (fail closed). Required in production (deploy/docker-compose.yml).
-        'internal_secret' => env('NODE_INTERNAL_SECRET', ''),
-    ],
-
 ];

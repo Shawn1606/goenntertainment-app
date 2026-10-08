@@ -26,7 +26,8 @@ use Laravel\Sanctum\HasApiTokens;
  *
  * `is_admin` fehlt in `#[Fillable]`, und das ist der Kern der Rechtevergabe:
  * Sonst genuegte ein `is_admin: true` im Anmelde-Formular. Wo ein Admin gesetzt
- * wird, geschieht das durch ausdrueckliche Zuweisung im Admin-Bereich.
+ * wird, geschieht das durch ausdrueckliche Zuweisung im Admin-Bereich. Dasselbe
+ * gilt fuer Club-Stufe und Credits: Die schreibt nur der Server selbst.
  */
 #[Fillable([
     'name',
@@ -88,7 +89,26 @@ class User extends Authenticatable
             'two_factor_recovery_codes' => 'encrypted:array',
             'two_factor_confirmed_at' => 'datetime',
             'two_factor_last_step' => 'integer',
+            // Club und Credits (Marktplatz). Geschrieben nur ueber
+            // App\Support\ClubMembership und App\Support\Wallet.
+            'club_since' => 'datetime',
+            'club_renews_at' => 'datetime',
+            'club_cancel_at_period_end' => 'boolean',
+            'club_credits_next_at' => 'datetime',
+            'credits_balance' => 'integer',
         ];
+    }
+
+    /** Die Partner, fuer die dieses Konto im Partner-Modus scannen darf. */
+    public function staffPartners(): BelongsToMany
+    {
+        return $this->belongsToMany(Partner::class, 'partner_staff')->withPivot('role', 'created_at');
+    }
+
+    /** Die Gruppen, in denen dieses Konto Mitglied ist (auch die eigenen). */
+    public function groups(): BelongsToMany
+    {
+        return $this->belongsToMany(Group::class, 'group_members', 'user_id', 'group_id')->withPivot('created_at');
     }
 
     /**
@@ -141,12 +161,17 @@ class User extends Authenticatable
     }
 
     /**
-     * Profil vollstaendig: Benutzername + Kontostufe gesetzt und mindestens drei
-     * Kategorien gewaehlt. Die App schickt sonst niemanden in die Anwendung.
+     * Profil vollstaendig: Benutzername gesetzt und mindestens drei Kategorien
+     * gewaehlt - daraus entstehen die Vorschlaege auf der Startseite. Die App
+     * schickt sonst niemanden in die Anwendung.
+     *
+     * Die Kontostufe gehoert seit dem Marktplatz-Umbau nicht mehr dazu: Die alten
+     * Stufen (Creator/Business) gibt es nicht mehr, und die Club-Stufe hat jedes
+     * Konto von Anfang an (Free).
      */
     public function profileComplete(): bool
     {
-        if ($this->username === null || $this->account_type === null) {
+        if ($this->username === null) {
             return false;
         }
 

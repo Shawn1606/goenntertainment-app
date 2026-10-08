@@ -8,24 +8,21 @@
 //                  deploy/docker-compose.yml;
 //   - MySQL image digest: the same lines carry one `@sha256:` digest, so CI tests the MySQL build
 //                  the server runs (Dependabot updates the compose, never a workflow's services);
-//   - the access-token lifetime (one token-validity rule on both backends): its default in
-//                  api/app/Support/Sessions.php, server/src/config.js and the three .env examples,
-//                  its accepted format in both backends, and the SANCTUM_EXPIRATION that the
-//                  deploy hands to api and to node;
-//   - the minimum length of NODE_INTERNAL_SECRET: server/src/config.js, api/app/Support/
-//                  NodeInternal.php and api/docker/entrypoint.sh;
-//   - the development NODE_INTERNAL_SECRET: api/.env.example and server/.env.example;
-//   - the upload size limit: server/src/uploads.js and Laravel's NodeFallbackController;
+//   - the access-token lifetime (one token-validity rule in both backends of the repository): its
+//                  default in api/app/Support/Sessions.php, server/src/config.js and the three .env
+//                  examples, its accepted format in both, and the SANCTUM_EXPIRATION that the
+//                  deploy hands to api and to the scheduler (whose retention prune counts from it);
+//   - the upload size limit: Laravel's (api/app/Support/Uploads.php, the deploy's one upload
+//                  writer) and server/src/uploads.js;
 //   - the 429 message: server/src/rate-limit.js and api/app/Providers/AppServiceProvider.php;
-//   - the interests per event: the app's create-activity screen and server/src/routes/activities.js;
-//   - the hours after its start from which an event is over: server/src/activity-pages.js (the
-//                  event list leaves it out) and the app (urgency.ts, the feed and the search);
-//   - the page size of the event list: the server's largest page and the one the app asks for;
-//   - the streak window (active days the app shows): server/src/streak.js and api/app/Support/
-//                  Streak.php, and the smallest USAGE_RETENTION_DAYS in server/src/config.js;
+//   - the page size of the event list: the server's largest page and the one the client pager asks for;
+//   - the streak window (active days): server/src/streak.js and the smallest USAGE_RETENTION_DAYS
+//                  in server/src/config.js;
 //   - the request body limits (JSON, webhook JSON with its path, urlencoded) and their 413 message:
 //                  server/src/app.js and server/src/client-errors.js against Laravel's
 //                  LimitRequestBody, which applies them before Laravel parses a body.
+// The production stack runs Laravel only; server/ (the former Node backend) is still built for the
+// stack test's probe, tested in CI and run locally, so its values stay in step as well.
 // CI tests what production runs only while these agree. A Dependabot update of a base image
 // that moves Node or PHP fails here until CI (and composer.json) move with it, on purpose.
 //
@@ -139,39 +136,22 @@ export const MIRRORS = [
     ],
   },
   {
-    // Both containers must read the same setting, or a lower value ends sessions on one only.
+    // Both containers must read the same setting: api refuses older tokens with it, and the
+    // scheduler's retention prune counts from it.
     name: 'SANCTUM_EXPIRATION in the deploy',
     sources: [
       { file: 'deploy/docker-compose.yml', what: 'api SANCTUM_EXPIRATION', extract: composeServiceEnv('api', 'SANCTUM_EXPIRATION') },
-      { file: 'deploy/docker-compose.yml', what: 'node SANCTUM_EXPIRATION', extract: composeServiceEnv('node', 'SANCTUM_EXPIRATION') },
+      { file: 'deploy/docker-compose.yml', what: 'scheduler SANCTUM_EXPIRATION', extract: composeServiceEnv('scheduler', 'SANCTUM_EXPIRATION') },
     ],
   },
   {
-    // Node refuses to start with, Laravel refuses to send, and the api container refuses to start
-    // with a shorter NODE_INTERNAL_SECRET: one minimum, written in three places.
-    name: 'Internal secret minimum length',
-    sources: [
-      { file: 'server/src/config.js', what: 'INTERNAL_SECRET_MIN_LENGTH', extract: all(/^export const INTERNAL_SECRET_MIN_LENGTH = (\d+);/gm) },
-      { file: 'api/app/Support/NodeInternal.php', what: 'SECRET_MIN_LENGTH', extract: all(/\bconst SECRET_MIN_LENGTH = (\d+);/g) },
-      { file: 'api/docker/entrypoint.sh', what: 'NODE_INTERNAL_SECRET length check', extract: all(/"\$\{#NODE_INTERNAL_SECRET\}" -lt (\d+)/g) },
-    ],
-  },
-  {
-    // Development: Laravel (api/.env) and Node (server/.env) must hold the same value, or deleting
-    // an account fails; both .env files start from these examples.
-    name: 'Development NODE_INTERNAL_SECRET',
-    sources: [
-      { file: 'api/.env.example', what: 'NODE_INTERNAL_SECRET', extract: all(/^NODE_INTERNAL_SECRET=(\S+)\s*$/gm) },
-      { file: 'server/.env.example', what: 'NODE_INTERNAL_SECRET', extract: all(/^NODE_INTERNAL_SECRET=(\S+)\s*$/gm) },
-    ],
-  },
-  {
-    // Node refuses larger images (uploads.js); Laravel names the same limit to the app when PHP
-    // refuses a file before Node sees it (NodeFallbackController::uploadLimitMb).
+    // Laravel refuses larger images (Uploads::MAX_KB in its validation rule, whole MB only), and so
+    // does the Node backend of server/; the edge's multipart limit sits above both
+    // (deploy/test/static.test.mjs).
     name: 'Upload size limit (MB)',
     sources: [
+      { file: 'api/app/Support/Uploads.php', what: 'MAX_KB', extract: (text) => all(/\bconst MAX_KB = (\d+);/g)(text).filter((kb) => Number(kb) % 1024 === 0).map((kb) => String(Number(kb) / 1024)) },
       { file: 'server/src/uploads.js', what: 'MAX_UPLOAD_BYTES', extract: all(/^export const MAX_UPLOAD_BYTES = (\d+) \* 1024 \* 1024;/gm) },
-      { file: 'api/app/Http/Controllers/NodeFallbackController.php', what: '$nodeLimit', extract: all(/\$nodeLimit = (\d+) \* 1024 \*\* 2;/g) },
     ],
   },
   {
@@ -184,30 +164,9 @@ export const MIRRORS = [
     ],
   },
   {
-    // The app lets a host pick at most this many interests per event; the server refuses longer
-    // lists before it loops over them.
-    name: 'Interests per event',
-    sources: [
-      { file: 'src/app/create-activity.tsx', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
-      { file: 'server/src/routes/activities.js', what: 'MAX_INTERESTS', extract: all(/^const MAX_INTERESTS = (\d+);/gm) },
-    ],
-  },
-  {
-    // A dated event is over this many hours after its start (the database stores no end). The
-    // server leaves it out of the event list from then on (F-12); the app shows "Vorbei" and hides
-    // it from the feed and the search. A smaller server value would drop events the app still
-    // shows as running.
-    name: 'Event over after (hours)',
-    sources: [
-      { file: 'server/src/activity-pages.js', what: 'PAST_AFTER_HOURS', extract: all(/^export const PAST_AFTER_HOURS = (\d+);/gm) },
-      { file: 'src/domain/urgency.ts', what: 'LIVE_MS', extract: all(/^export const LIVE_MS = (\d+) \* HOUR;/gm) },
-      { file: 'src/app/(app)/index.tsx', what: 'the feed cutoff', extract: all(/const cutoff = now\.getTime\(\) - (\d+) \* 60 \* 60 \* 1000;/g) },
-      { file: 'src/app/search.tsx', what: 'PAST_CUTOFF_MS', extract: all(/^const PAST_CUTOFF_MS = (\d+) \* 60 \* 60 \* 1000;/gm) },
-    ],
-  },
-  {
-    // The app asks for the server's largest page of the event list (F-12); a smaller server value
-    // would only cost requests, a larger one would leave it unused.
+    // The client pager (src/domain/activity-pages.ts, which the server's tests drive) asks for the
+    // server's largest page of the event list (F-12); a smaller server value would only cost
+    // requests, a larger one would leave it unused.
     name: 'Event list page size',
     sources: [
       { file: 'server/src/activity-pages.js', what: 'PAGE_SIZE_MAX', extract: all(/^export const PAGE_SIZE_MAX = (\d+);/gm) },
@@ -215,12 +174,11 @@ export const MIRRORS = [
     ],
   },
   {
-    // Both backends read the active days of this many days back; the retention prune must keep at
-    // least as many (USAGE_RETENTION_DAYS), or it would cut streaks.
+    // The Node backend reads the active days of this many days back; its retention prune must keep
+    // at least as many (USAGE_RETENTION_DAYS), or it would cut streaks.
     name: 'Streak window (days)',
     sources: [
       { file: 'server/src/streak.js', what: 'ACTIVE_DAYS_WINDOW', extract: all(/^export const ACTIVE_DAYS_WINDOW = (\d+);/gm) },
-      { file: 'api/app/Support/Streak.php', what: 'ACTIVE_DAYS_WINDOW', extract: all(/\bconst ACTIVE_DAYS_WINDOW = (\d+);/g) },
       { file: 'server/src/config.js', what: 'USAGE_RETENTION_MIN_DAYS', extract: all(/^export const USAGE_RETENTION_MIN_DAYS = (\d+);/gm) },
     ],
   },

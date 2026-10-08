@@ -2,17 +2,20 @@
 
 namespace Tests\Feature;
 
-use Illuminate\Http\Client\Request as ClientRequest;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Testing\TestResponse;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 /**
  * The real client address (F-31): Laravel trusts forwarding headers from the configured proxy only
- * (config/trustedproxy.php; in production Caddy), and passes on to Node exactly the client address
- * it established, never a header the client wrote. No database: the requests either go to the
- * faked Node or fail validation before any query.
+ * (config/trustedproxy.php; in production Caddy), never a header the client wrote. What it
+ * establishes is what its rate limits count and what its image addresses are built from: a probe
+ * route registered here reports the address, host and scheme Laravel took (the former Node
+ * fallback, which passed them on, played that part). No database: the requests either go to the
+ * probe or fail validation before any query.
  */
 class TrustedProxiesTest extends TestCase
 {
@@ -22,58 +25,49 @@ class TrustedProxiesTest extends TestCase
 
     private const OTHER_PEER = '198.51.100.20';
 
+    private const PROBE = '/api/_client-probe';
+
     protected function setUp(): void
     {
         parent::setUp();
-        config(['services.node_fallback.url' => 'http://node.test', 'trustedproxy.proxies' => self::PROXY]);
+        config(['trustedproxy.proxies' => self::PROXY]);
         Http::preventStrayRequests();
-        Http::fake(['node.test/*' => Http::response(['data' => []], 200)]);
+        Route::get(self::PROBE, static fn (Request $request) => response()->json([
+            'ip' => $request->ip(),
+            'host' => $request->getHost(),
+            'scheme' => $request->getScheme(),
+        ]));
     }
 
-    /** GET /api/activities (a Node path) from $peer with these headers. */
-    private function fromPeer(string $peer, array $headers): TestResponse
+    /** GET the probe from $peer with these headers. */
+    private function fromPeer(string $peer, array $headers, string $host = 'localhost'): TestResponse
     {
-        return $this->withServerVariables(['REMOTE_ADDR' => $peer])->withHeaders($headers)->getJson('/api/activities');
-    }
-
-    /** The one header value Node received. */
-    private function sentHeader(string $name): ?string
-    {
-        $values = Http::recorded()->first()[0]->header($name);
-        $this->assertCount(1, Http::recorded(), 'exactly one call to Node expected');
-        $this->assertLessThanOrEqual(1, count($values), "{$name} sent more than once");
-
-        return $values[0] ?? null;
+        return $this->withServerVariables(['REMOTE_ADDR' => $peer])->withHeaders($headers)->getJson("http://{$host}".self::PROBE);
     }
 
     public function test_forwarded_for_is_honoured_only_from_the_configured_proxy(): void
     {
-        $this->fromPeer(self::PROXY, ['X-Forwarded-For' => self::CLIENT])->assertOk();
-
-        $this->assertSame(self::CLIENT, $this->sentHeader('X-Forwarded-For'));
+        $this->fromPeer(self::PROXY, ['X-Forwarded-For' => self::CLIENT])->assertOk()->assertJsonPath('ip', self::CLIENT);
     }
 
     public function test_untrusted_peer_cannot_choose_its_address(): void
     {
-        $this->fromPeer(self::OTHER_PEER, ['X-Forwarded-For' => self::CLIENT])->assertOk();
-
-        $this->assertSame(self::OTHER_PEER, $this->sentHeader('X-Forwarded-For'));
+        $this->fromPeer(self::OTHER_PEER, ['X-Forwarded-For' => self::CLIENT])->assertOk()->assertJsonPath('ip', self::OTHER_PEER);
     }
 
     public function test_an_appended_chain_is_reduced_to_the_client(): void
     {
-        $this->fromPeer(self::PROXY, ['X-Forwarded-For' => '192.0.2.66, '.self::CLIENT])->assertOk();
-
-        $this->assertSame(self::CLIENT, $this->sentHeader('X-Forwarded-For'));
+        $this->fromPeer(self::PROXY, ['X-Forwarded-For' => '192.0.2.66, '.self::CLIENT])->assertOk()->assertJsonPath('ip', self::CLIENT);
     }
 
     public function test_without_a_configured_proxy_nobody_is_trusted(): void
     {
         config(['trustedproxy.proxies' => self::configuredProxies('')]);
 
-        $this->fromPeer('127.0.0.1', ['X-Forwarded-For' => self::CLIENT])->assertOk();
+        $this->fromPeer('127.0.0.1', ['X-Forwarded-For' => self::CLIENT])->assertOk()->assertJsonPath('ip', '127.0.0.1');
 
-        $this->assertSame('127.0.0.1', $this->sentHeader('X-Forwarded-For'));
+        $this->assertSame([], self::configuredProxies(null));
+        $this->assertSame(self::PROXY, self::configuredProxies(self::PROXY));
     }
 
     /**
@@ -138,10 +132,7 @@ class TrustedProxiesTest extends TestCase
         }
 
         try {
-            $this->withServerVariables(['REMOTE_ADDR' => self::OTHER_PEER])
-                ->withHeaders(['X-Forwarded-For' => self::CLIENT])
-                ->getJson("http://{$host}/api/activities")
-                ->assertOk();
+            $response = $this->fromPeer(self::OTHER_PEER, ['X-Forwarded-For' => self::CLIENT], $host)->assertOk();
         } finally {
             if ($savedCloud === null) {
                 unset($_SERVER['LARAVEL_CLOUD']);
@@ -150,7 +141,7 @@ class TrustedProxiesTest extends TestCase
             }
         }
 
-        $this->assertSame(self::OTHER_PEER, $this->sentHeader('X-Forwarded-For'));
+        $response->assertJsonPath('ip', self::OTHER_PEER);
     }
 
     /** The guard behind the test above: no later edit of the config file brings the null back. */
@@ -166,24 +157,19 @@ class TrustedProxiesTest extends TestCase
         $this->fromPeer(self::OTHER_PEER, [
             'X-Forwarded-Host' => 'spoofed.example.invalid',
             'X-Forwarded-Proto' => 'https',
-        ])->assertOk();
-
-        $this->assertSame('localhost', $this->sentHeader('X-Forwarded-Host'));
-        $this->assertSame('http', $this->sentHeader('X-Forwarded-Proto'));
+        ])->assertOk()->assertJsonPath('host', 'localhost')->assertJsonPath('scheme', 'http');
     }
 
-    public function test_host_and_scheme_from_the_proxy_are_passed_on(): void
+    public function test_host_and_scheme_from_the_proxy_are_used(): void
     {
         $this->fromPeer(self::PROXY, [
             'X-Forwarded-Host' => 'app.example.invalid',
             'X-Forwarded-Proto' => 'https',
-        ])->assertOk();
-
-        $this->assertSame('app.example.invalid', $this->sentHeader('X-Forwarded-Host'));
-        $this->assertSame('https', $this->sentHeader('X-Forwarded-Proto'));
+        ])->assertOk()->assertJsonPath('host', 'app.example.invalid')->assertJsonPath('scheme', 'https');
     }
 
-    public function test_other_client_address_headers_are_not_passed_on(): void
+    /** Only X-Forwarded-For, -Host and -Proto are read (bootstrap/app.php): no other header sets the address. */
+    public function test_other_client_address_headers_do_not_change_the_address(): void
     {
         $this->fromPeer(self::PROXY, [
             'X-Forwarded-For' => self::CLIENT,
@@ -192,13 +178,14 @@ class TrustedProxiesTest extends TestCase
             'True-Client-IP' => '192.0.2.3',
             'X-Client-IP' => '192.0.2.4',
             'X-Forwarded-Port' => '8443',
-        ])->assertOk();
+        ])->assertOk()->assertJsonPath('ip', self::CLIENT);
 
-        Http::assertSent(fn (ClientRequest $request) => ! $request->hasHeader('X-Real-IP')
-            && ! $request->hasHeader('Forwarded')
-            && ! $request->hasHeader('True-Client-IP')
-            && ! $request->hasHeader('X-Client-IP')
-            && ! $request->hasHeader('X-Forwarded-Port'));
+        $this->fromPeer(self::OTHER_PEER, [
+            'X-Real-IP' => '192.0.2.1',
+            'Forwarded' => 'for=192.0.2.2',
+            'True-Client-IP' => '192.0.2.3',
+            'X-Client-IP' => '192.0.2.4',
+        ])->assertOk()->assertJsonPath('ip', self::OTHER_PEER);
     }
 
     /**
