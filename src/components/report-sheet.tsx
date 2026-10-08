@@ -138,9 +138,9 @@ export function ReportSheet({ target, onClose, onReported }: Props) {
               </View>
             </GestureDetector>
 
-            <GestureDetector gesture={drag.listGesture}>
+            <GestureDetector gesture={drag.listGesture} userSelect="auto">
               <View style={styles.listFrame}>
-                <GestureDetector gesture={drag.scrollGesture}>
+                <GestureDetector gesture={drag.scrollGesture} userSelect="auto">
                   <Animated.ScrollView
                     style={styles.listFrame}
                     onScroll={drag.onScroll}

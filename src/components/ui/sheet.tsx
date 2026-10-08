@@ -70,9 +70,9 @@ export function Sheet({
               {subtitle ? <Text style={[styles.subtitle, { color: colors.textSecondary }]}>{subtitle}</Text> : null}
             </View>
           </GestureDetector>
-          <GestureDetector gesture={drag.listGesture}>
+          <GestureDetector gesture={drag.listGesture} userSelect="auto">
             <View style={styles.scroll}>
-              <GestureDetector gesture={drag.scrollGesture}>
+              <GestureDetector gesture={drag.scrollGesture} userSelect="auto">
                 <Animated.ScrollView
                   style={styles.scroll}
                   bounces={false}

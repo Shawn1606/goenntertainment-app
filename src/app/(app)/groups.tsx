@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useIsFocused, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { RefreshControl, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 
 import { DiscountMeter, GroupBadge } from '@/components/group-ui';
@@ -67,11 +67,14 @@ export default function GroupsScreen() {
     dockScroll(event);
   };
 
-  // `refreshGroups` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  // Bei jedem Zurückkommen neu laden: Tab-Seiten bleiben geladen, und Ungelesenes aus
+  // einem gerade gelesenen Chat oder neue Nachrichten sollen hier sofort stimmen.
   const { refreshGroups } = market;
-  useEffect(() => {
-    void refreshGroups();
-  }, [refreshGroups]);
+  useFocusEffect(
+    useCallback(() => {
+      void refreshGroups();
+    }, [refreshGroups]),
+  );
 
   const plan = planFor(CLUB_RULES, user?.club_plan);
   const groups = market.groups;
@@ -84,7 +87,8 @@ export default function GroupsScreen() {
   };
 
   const submit = async () => {
-    if (!token || !value.trim() || !mode) return;
+    // Auch Enter (onSubmitEditing) läuft hier durch: Läuft schon eine Anfrage, nicht noch eine.
+    if (!token || !value.trim() || !mode || busy) return;
     const name = value.trim();
     const creating = mode === 'create';
     // Die Entscheidungen stehen vor dem `try`: Bedingungen darin kann der React

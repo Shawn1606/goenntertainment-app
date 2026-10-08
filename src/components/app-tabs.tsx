@@ -18,6 +18,7 @@ import { tabDragOffset, tabSwipeTarget } from '@/domain/gestures';
 import type { MascotScene } from '@/domain/mascot-lines';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
 
@@ -254,8 +255,9 @@ function SlidingSlot() {
 
   return (
     <MotionContext.Provider value={motion}>
-      {/* `pan-y`: Im Browser bleibt senkrechtes Scrollen beim Browser, waagerecht gehört der Geste. */}
-      <GestureDetector gesture={pan} touchAction="pan-y">
+      {/* `pan-y`: Im Browser bleibt senkrechtes Scrollen beim Browser, waagerecht gehört der Geste.
+          `userSelect`: Texte (Buchungscodes) bleiben markierbar – RNGH sperrt das im Web sonst. */}
+      <GestureDetector gesture={pan} touchAction="pan-y" userSelect="auto">
         <View style={styles.slot} collapsable={false} onTouchStart={holdPreload} onTouchEnd={schedulePreload} onTouchCancel={schedulePreload}>
           <TabSlot
             style={styles.fill}
@@ -405,7 +407,8 @@ function TabButton({ tab, isFocused, onPress, ...props }: TabTriggerSlotProps & 
   const center = tab.name === 'finder';
 
   const unread = market.groups.reduce((sum, g) => sum + g.unread, 0);
-  const expiring = nextExpiring(market.bookings, new Date());
+  const now = useNow();
+  const expiring = nextExpiring(market.bookings, now);
   const badge = tab.name === 'groups' && unread > 0 ? (unread > 9 ? '9+' : String(unread)) : null;
   /** Punkt statt Zahl: „da läuft bald etwas ab" – die Zahl steht auf dem Ticket. */
   const dot = tab.name === 'bookings' && expiring?.info.tone === 'urgent';

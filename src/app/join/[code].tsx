@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Mascot, MascotError } from '@/components/mascot';
+import { ReportSheet } from '@/components/report-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -11,6 +12,7 @@ import { api, errorMessage, type GroupPreview } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
+import { goBack } from '@/lib/navigation';
 
 /**
  * Ziel eines Einladungslinks (`…/g/<code>` bzw. `goenntertainmentapp://join/<code>`):
@@ -26,6 +28,8 @@ export default function JoinScreen() {
   const [preview, setPreview] = useState<GroupPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  /** Name und Beschreibung einer fremden Gruppe sind Inhalte von Nutzern – meldbar, bevor man beitritt. */
+  const [reporting, setReporting] = useState(false);
 
   useEffect(() => {
     if (!token) return;
@@ -72,10 +76,15 @@ export default function JoinScreen() {
               {preview.members_count} {preview.members_count === 1 ? 'Person ist' : 'Personen sind'} schon dabei. Zusammen bekommt ihr Gruppenrabatt.
             </Text>
             <Button title="Beitreten" icon="users" onPress={join} loading={joining} style={styles.button} />
-            <Button title="Nicht jetzt" variant="ghost" size="small" onPress={() => router.back()} />
+            <Button title="Nicht jetzt" variant="ghost" size="small" onPress={() => goBack('/groups')} />
+            {preview.id ? <Button title="Gruppe melden" variant="ghost" size="small" icon="flag" onPress={() => setReporting(true)} /> : null}
           </Card>
         )}
       </View>
+      <ReportSheet
+        target={reporting && preview?.id ? { type: 'group', id: preview.id, label: preview.name } : null}
+        onClose={() => setReporting(false)}
+      />
     </View>
   );
 }

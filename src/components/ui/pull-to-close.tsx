@@ -128,10 +128,10 @@ export function PullToCloseScroll({ children, onClose, knobTop = 0, style, ...re
   const filledStyle = useAnimatedStyle<ViewStyle>(() => ({ opacity: interpolate(pull.value, [PULL_TO_CLOSE - 2, PULL_TO_CLOSE], [0, 1], 'clamp') }));
 
   return (
-    <GestureDetector gesture={pan}>
+    <GestureDetector gesture={pan} userSelect="auto">
       <View style={[styles.fill, style]} collapsable={false}>
         <Animated.View style={[styles.fill, contentStyle]}>
-          <GestureDetector gesture={native}>
+          <GestureDetector gesture={native} userSelect="auto">
             <Animated.ScrollView {...rest} style={styles.fill} onScroll={onScroll} scrollEventThrottle={16} bounces={false} overScrollMode="never">
               {children}
             </Animated.ScrollView>

@@ -81,7 +81,7 @@ export default function ResetPasswordScreen() {
     } catch (error) {
       showError(error);
     }
-    setLoading(false);
+    setLoading(false);
   }
 
   async function onResend() {
@@ -134,7 +134,7 @@ export default function ResetPasswordScreen() {
                 <Text style={styles.doneText}>
                   Du kannst dich jetzt mit deinem neuen Passwort anmelden.
                 </Text>
-                <BrandButton title="Zum Login" onPress={() => router.replace('/')} />
+                <BrandButton title="Zum Login" onPress={() => router.dismissTo('/')} />
               </View>
             ) : (
               <>
@@ -196,7 +196,7 @@ export default function ResetPasswordScreen() {
             )}
           </View>
 
-          <Pressable onPress={() => router.replace('/')} style={styles.loginRow}>
+          <Pressable onPress={() => router.dismissTo('/')} style={styles.loginRow}>
             <Text style={styles.muted}>Doch wieder eingefallen? </Text>
             <Text style={styles.link}>Zum Login</Text>
           </Pressable>

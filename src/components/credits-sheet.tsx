@@ -47,7 +47,6 @@ import {
   formatEuro,
   packBonus,
   packPriceCents,
-  packTotalCredits,
 } from '@/domain/club';
 import { formatDay } from '@/domain/date-format';
 import { purchaseLine } from '@/domain/mascot-lines';
@@ -114,12 +113,23 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
   const firstBonusFor = (credits: number) => (firstPercent > 0 ? firstPurchaseBonus(CLUB_RULES, credits) : 0);
   const validity = creditValidityLabel(CLUB_RULES, user?.club_plan);
 
+  // Preise und Bonus so, wie der Server sie berechnet (Club-Stand). Die mitgelieferten
+  // Regeln nur, solange er noch nicht geladen ist: Eine alte App-Version zeigte sonst
+  // nach einer Preisänderung einen anderen Betrag, als „Zahlungspflichtig" abgebucht wird.
+  const packCredits = club?.packs.length ? club.packs.map((p) => p.credits) : CLUB_RULES.credits.packs;
+  const packFor = (credits: number) => {
+    const server = club?.packs.find((p) => p.credits === credits);
+    return server
+      ? { bonus: server.bonus, priceCents: server.price_cents }
+      : { bonus: packBonus(CLUB_RULES, credits), priceCents: packPriceCents(CLUB_RULES, credits) };
+  };
+
   const buy = async (credits: number) => {
     if (!token || buying !== null) return;
-    const bonus = packBonus(CLUB_RULES, credits);
+    const { bonus, priceCents } = packFor(credits);
     const first = firstBonusFor(credits);
     const extra = bonus + first;
-    const price = formatEuro(packPriceCents(CLUB_RULES, credits));
+    const price = formatEuro(priceCents);
     const ok = await confirmAction(
       `${formatCredits(credits)}${extra ? ` + ${formatCredits(extra)}` : ''} Credits kaufen`,
       `Für ${price}.${extra ? ` Du bekommst insgesamt ${formatCredits(credits + extra)} Credits${first ? `, davon ${formatCredits(first)} Erstkauf-Bonus` : ''}.` : ''} Credits gelten ${validity} ab Kauf.${testMode ? '\n\nTestmodus: Es wird kein echtes Geld abgebucht.' : ''}`,
@@ -198,11 +208,11 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
       ) : null}
 
       <View style={styles.packs}>
-        {CLUB_RULES.credits.packs.map((credits) => {
-          const bonus = packBonus(CLUB_RULES, credits);
+        {packCredits.map((credits) => {
+          const { bonus, priceCents } = packFor(credits);
           const first = firstBonusFor(credits);
           const flag = FLAGS[credits];
-          const price = formatEuro(packPriceCents(CLUB_RULES, credits));
+          const price = formatEuro(priceCents);
           return (
             <PressableScale
               key={credits}
@@ -235,7 +245,7 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
                   ) : null}
                 </View>
                 <Text style={[styles.packLabel, { color: colors.textSecondary }]} numberOfLines={1}>
-                  {bonus || first ? `= ${formatCredits(packTotalCredits(CLUB_RULES, credits) + first)} Credits` : 'Credits'}
+                  {bonus || first ? `= ${formatCredits(credits + bonus + first)} Credits` : 'Credits'}
                 </Text>
               </View>
               <View style={[styles.price, { backgroundColor: flag ? colors.tint : colors.backgroundSelected }]}>

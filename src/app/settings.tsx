@@ -146,8 +146,8 @@ export default function SettingsScreen() {
           <ListSwitch icon="star" title="Saison-Deko" hint="Kürbisse, Christbaumkugeln & Co. passend zur Jahreszeit" value={settings.seasonalDecor} onValueChange={(v) => update('seasonalDecor', v)} />
           <ListSwitch icon="contrast" title="Wie das Handy (hell/dunkel)" value={followsSystem} onValueChange={(on) => (on ? followSystem() : setDark(isDark))} />
           <ListSwitch icon="moon" title="Dunkles Design" hint={followsSystem ? 'Bestimmt gerade dein Handy' : undefined} value={isDark} onValueChange={setDark} disabled={followsSystem} />
-          {/* Messwerkzeug: nur für Admins und im Entwicklungs-Build (Expo Go). */}
-          {user?.is_admin || __DEV__ ? (
+          {/* Messwerkzeug: für Admins und im Entwicklungs-Build – und für alle, solange es an ist (die Einstellung gilt fürs Gerät, sonst käme nach einem Admin niemand mehr an den Schalter). */}
+          {user?.is_admin || __DEV__ || settings.perfMeter ? (
             <ListSwitch
               icon="chart"
               title="Leistungsanzeige"
@@ -233,7 +233,7 @@ function InterestsSection() {
     } catch (e) {
       setError(e instanceof ApiError ? e.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.');
     }
-    setSaving(false);
+    setSaving(false);
   };
 
   const interests = user?.interests ?? [];

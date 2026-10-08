@@ -115,7 +115,11 @@ export function matchOffer<T extends MatchableOffer>(
   const people = Math.max(1, Math.floor(criteria.people));
   if (people < offer.min_people) return null;
   if (offer.max_people !== null && people > offer.max_people) return null;
-  if (criteria.youngest !== null && offer.min_age !== null && criteria.youngest < offer.min_age) return null;
+  // Ist nur eine Altersgrenze der Gruppe bekannt, steht sie für beide: Mit „Älteste:r 8"
+  // ist auch die oder der Jüngste höchstens 8 – ein Angebot ab 16 passt dann nicht.
+  const lo = criteria.youngest ?? criteria.oldest;
+  const hi = criteria.oldest ?? criteria.youngest;
+  if (lo !== null && offer.min_age !== null && lo < offer.min_age) return null;
   if (criteria.interestIds.length > 0 && (offer.interest_id === null || !criteria.interestIds.includes(offer.interest_id))) {
     return null;
   }
@@ -130,13 +134,15 @@ export function matchOffer<T extends MatchableOffer>(
   let score = 100;
 
   // Alter: Wer eine Altersangabe hat UND zu allen passt, ist der beste Treffer.
+  // „Passt für alle" nur, wenn beide Grenzen der Gruppe bekannt sind.
   const ages = ageRangeText(offer.min_age, offer.max_age);
-  if (criteria.oldest !== null && offer.max_age !== null && criteria.oldest > offer.max_age) {
+  if (hi !== null && offer.max_age !== null && hi > offer.max_age) {
     caveats.push(`Gedacht für ${ages} – die Älteren begleiten eher`);
     score -= 25;
-  } else if (ages && (criteria.youngest !== null || criteria.oldest !== null)) {
-    reasons.push(`${ages[0].toUpperCase()}${ages.slice(1)} – passt für alle`);
-    score += 10;
+  } else if (ages && lo !== null) {
+    const whole = criteria.youngest !== null && criteria.oldest !== null;
+    reasons.push(`${ages[0].toUpperCase()}${ages.slice(1)}${whole ? ' – passt für alle' : ''}`);
+    score += whole ? 10 : 5;
   }
 
   // Preis für genau diese Gruppe.

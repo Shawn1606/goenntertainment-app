@@ -1,5 +1,5 @@
-import { useIsFocused, useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect, useIsFocused, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 
 import { BingoTeaser } from '@/components/bingo-card';
@@ -22,16 +22,19 @@ import { MotionPause } from '@/components/ui/motion-pause';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Rail } from '@/components/ui/rail';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
-import { nextExpiring } from '@/domain/booking-status';
+import { expiryInfo, nextExpiring } from '@/domain/booking-status';
 import { formatPercent, planFor, stampProgress } from '@/domain/club';
 import { homeSections } from '@/domain/home-sections';
 import { homeTips } from '@/domain/mascot-tips';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
+import { confirmAction } from '@/lib/confirm';
 import { useFeatures } from '@/lib/features-context';
 import { useMarket } from '@/lib/market-context';
+import { takeWeakPasswordFlag } from '@/lib/security-nudge';
 
 /**
  * Home – alles Wichtige auf einen Blick.
@@ -81,6 +84,21 @@ export default function HomeScreen() {
   const garland = useGarlandSpace();
   // Stadt-Bingo nur, wenn ein Admin es freigeschaltet hat (src/lib/features-context.tsx).
   const { bingo } = useFeatures();
+
+  // Einmal nach der Anmeldung: War das eingegebene Passwort schwach, sagen wir es – genau
+  // dann, wenn es noch frisch im Kopf ist (src/lib/security-nudge.ts).
+  useFocusEffect(
+    useCallback(() => {
+      if (!takeWeakPasswordFlag()) return;
+      void confirmAction(
+        'Dein Passwort ist schwach',
+        'Es ist leicht zu erraten. Weil an deinem Konto Credits und Buchungen hängen, lohnt sich ein stärkeres – dauert eine Minute.',
+        'Jetzt ändern',
+      ).then((change) => {
+        if (change) router.push('/security/password');
+      });
+    }, [router]),
+  );
   useDockSuppression('home-hero', focused && heroVisible);
   // Ganz schnell nach unten gescrollt? Dann fliegt Goenni hoch (mascot-dock.tsx).
   const dockScroll = useDockScroll();
@@ -90,8 +108,10 @@ export default function HomeScreen() {
   const stamps = market.club?.stamps ?? null;
   const progress = stampProgress(CLUB_RULES, stamps?.total ?? 0);
   const openBookings = market.bookings.filter((b) => b.status === 'confirmed');
-  const now = new Date();
+  const now = useNow();
   const nextBooking = nextExpiring(market.bookings, now)?.booking ?? null;
+  // Kalendertage wie in der Wallet: „morgen" heißt morgen, auch um 23 Uhr.
+  const creditExpiry = expiryInfo(market.club?.next_expiry?.expires_at, now);
 
   // Kein useMemo: Der React Compiler (app.json → reactCompiler) merkt sich das selbst.
   const tips = homeTips({
@@ -108,9 +128,7 @@ export default function HomeScreen() {
     weekday: now.getDay(),
     // Verfall-Erinnerung: der Posten, der als Nächstes verfällt (vom Server).
     expiringCredits: market.club?.next_expiry?.credits,
-    expiringDays: market.club?.next_expiry?.expires_at
-      ? Math.max(0, Math.ceil((new Date(market.club.next_expiry.expires_at).getTime() - now.getTime()) / 86_400_000))
-      : undefined,
+    expiringDays: creditExpiry && creditExpiry.days >= 0 ? creditExpiry.days : undefined,
   });
 
   const interestById = new Map(market.interests.map((i) => [i.id, i]));

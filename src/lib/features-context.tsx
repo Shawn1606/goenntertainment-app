@@ -24,7 +24,8 @@ type FeaturesValue = {
   /** Stand des Stadt-Bingos, `null` solange aus oder nicht geladen. */
   bingo: BingoState | null;
   setBingo: (bingo: BingoState) => void;
-  refreshBingo: () => Promise<void>;
+  /** Bingo neu laden; `false`, wenn es nicht geklappt hat (oder aus ist). */
+  refreshBingo: () => Promise<boolean>;
 };
 
 const FeaturesContext = createContext<FeaturesValue>({
@@ -32,7 +33,7 @@ const FeaturesContext = createContext<FeaturesValue>({
   refresh: async () => {},
   bingo: null,
   setBingo: () => {},
-  refreshBingo: async () => {},
+  refreshBingo: async () => false,
 });
 
 export function useFeatures(): FeaturesValue {
@@ -53,6 +54,15 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
   const [features, setFeatures] = useState<FeatureState>(DEFAULT_FEATURES);
   const [bingo, setBingo] = useState<BingoState | null>(null);
 
+  // Anderes Konto: dessen Schalter (auch Admin-Vorschauen) und Bingo-Stand gelten
+  // nicht weiter, bis die eigenen geladen sind.
+  const [stateToken, setStateToken] = useState(token);
+  if (stateToken !== token) {
+    setStateToken(token);
+    setFeatures(DEFAULT_FEATURES);
+    setBingo(null);
+  }
+
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
@@ -64,11 +74,13 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
   }, [token]);
 
   const refreshBingo = useCallback(async () => {
-    if (!token || !features.bingo) return;
+    if (!token || !features.bingo) return false;
     try {
       setBingo((await api.bingo(token)).data);
+      return true;
     } catch {
       setBingo(null);
+      return false;
     }
   }, [token, features.bingo]);
 

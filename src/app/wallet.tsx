@@ -17,6 +17,7 @@ import { formatCredits } from '@/domain/club';
 import { formatDateTime, formatDay } from '@/domain/date-format';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useSignals, useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import { api, errorMessage, type CreditLot, type CreditTransaction } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useMarket } from '@/lib/market-context';
@@ -102,11 +103,12 @@ export default function WalletScreen() {
 
   const balance = user?.credits_balance ?? 0;
   const [allLots, setAllLots] = useState(false);
-  const now = new Date();
+  const now = useNow();
   const shownLots = allLots ? lots : lots.slice(0, LOTS_SHOWN);
 
   const redeem = async () => {
-    if (!token || !code.trim()) return;
+    // Auch Enter (onSubmitEditing) läuft hier durch: nicht während des Einlösens und nicht mit zu kurzem Code.
+    if (!token || redeeming || code.trim().length < 6) return;
     setRedeeming(true);
     setError(null);
     try {

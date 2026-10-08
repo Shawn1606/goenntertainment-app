@@ -17,8 +17,8 @@
 import { formatDaySeparator } from './date-format.ts';
 
 /**
- * Länge einer Nachricht. Muss zu `MAX_MESSAGE_LENGTH` in
- * `server/src/messaging.js` passen – ein Test hier wacht über die Zahl.
+ * Länge einer Nachricht. Muss zu `ChatController::MAX_LENGTH` der API passen –
+ * ein Test hier wacht über die Zahl.
  *
  * Warum die Grenze auf beiden Seiten steht: Die App muss den Sende-Knopf sperren
  * können, ohne zu fragen; der Server darf sich nicht darauf verlassen, dass sie

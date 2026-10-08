@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { AdminScreen, SectionTitle } from '@/components/admin-ui';
@@ -45,11 +45,15 @@ export default function AdminUsers() {
     [token],
   );
 
+  // Beim Zurückkommen neu laden – mit der Suche, die gerade im Feld steht, aber
+  // nicht bei jedem Tastendruck (vorher lud es nach der Rückkehr ungefiltert).
+  const latestQuery = useRef(query);
+  useEffect(() => {
+    latestQuery.current = query;
+  }, [query]);
   useFocusEffect(
     useCallback(() => {
-      void load(query);
-      // Nur beim Zurückkommen neu laden – nicht bei jedem Tastendruck.
-      // eslint-disable-next-line react-hooks/exhaustive-deps
+      void load(latestQuery.current);
     }, [load]),
   );
 

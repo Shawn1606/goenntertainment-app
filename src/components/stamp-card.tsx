@@ -43,6 +43,7 @@ import Animated, {
   Easing,
   interpolate,
   useAnimatedStyle,
+  useReducedMotion,
   useSharedValue,
   withDelay,
   withSequence,
@@ -53,7 +54,7 @@ import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Path, Stop } fr
 
 import { DecorCorner } from '@/components/seasonal-decor';
 import { Icon } from '@/components/ui/icon';
-import { Shimmer } from '@/components/ui/glow';
+import { Shimmer } from '@/components/ui/shimmer';
 import { useStill } from '@/components/ui/motion-pause';
 import { FontFamily, Night, Radius, Spacing, Stroke } from '@/constants/theme';
 import { seeded, stampForBeat, stampPose, stampSize, starSwing } from '@/domain/stamp-scatter';
@@ -135,7 +136,14 @@ function twinklesFor(seed: number) {
  * Kein eigener Dauertakt: Welcher Stempel gerade funkelt, bestimmt die Karte.
  */
 function Twinkle({ x, y, s, trigger, reduced }: { x: number; y: number; s: number; trigger?: number; reduced: boolean }) {
-  const t = useSharedValue(reduced ? 0.7 : 0);
+  // Nur bei „Bewegung reduzieren" steht ein ruhiger Stern da. `reduced` heißt auch
+  // „Seite ruht" (useStill) – ein Stempel, der so entstand, zeigte sonst noch lange
+  // nach dem Zurückkommen einen eingefrorenen Stern.
+  const reduceMotion = useReducedMotion();
+  const t = useSharedValue(0);
+  useEffect(() => {
+    t.set(reduceMotion ? 0.7 : 0);
+  }, [reduceMotion, t]);
 
   useEffect(() => {
     if (reduced || trigger === undefined) return;

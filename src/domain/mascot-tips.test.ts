@@ -20,6 +20,7 @@ test('bald verfallende Credits kommen ganz nach vorn', () => {
   assert.equal(soon[0].line, '120 Credits verfallen in 5 Tagen – lös sie ein, bevor sie weg sind!');
   assert.equal(soon[0].mood, 'oops');
   assert.match(homeTips({ ...base, expiringCredits: 50, expiringDays: 1 })[0].line, /morgen/);
+  assert.match(homeTips({ ...base, expiringCredits: 50, expiringDays: 0 })[0].line, /heute/);
   // Noch weit weg: kein Hinweis.
   assert.ok(!homeTips({ ...base, expiringCredits: 50, expiringDays: 90 }).some((t) => t.line.includes('verfallen')));
 });

@@ -47,6 +47,21 @@ test('zu jung ist hart, zu alt nur ein Hinweis', () => {
   assert.ok(fits.score > older.score);
 });
 
+test('nur eine Altersgrenze bekannt: sie gilt für beide Seiten', () => {
+  // Älteste:r 8, Jüngste:r offen → niemand ist 16: ein Angebot ab 16 fliegt raus.
+  assert.equal(matchOffer(RULES, offer({ id: 1, min_age: 16 }), { ...DEFAULT_CRITERIA, youngest: null, oldest: 8 }, ctx), null);
+  // Jüngste:r 40, Älteste:r offen → alle sind über 17: Hinweis statt „passt für alle".
+  const grown = matchOffer(RULES, offer({ id: 2, max_age: 17 }), { ...DEFAULT_CRITERIA, youngest: 40, oldest: null }, ctx);
+  assert.ok(grown);
+  assert.equal(grown.caveats.length, 1);
+  assert.ok(!grown.reasons.some((r) => r.includes('passt für alle')));
+  // Eine Grenze, und sie passt: als Grund genannt, aber ohne „für alle".
+  const one = matchOffer(RULES, offer({ id: 3, min_age: 6, max_age: 12 }), { ...DEFAULT_CRITERIA, youngest: 8, oldest: null }, ctx);
+  assert.ok(one);
+  assert.ok(one.reasons.includes('6–12 Jahre'));
+  assert.ok(!one.reasons.some((r) => r.includes('passt für alle')));
+});
+
 test('Prämien (Freigetränk) gehören nicht in den Gruppen-Finder', () => {
   assert.equal(matchOffer(RULES, offer({ id: 1, kind: 'perk' }), DEFAULT_CRITERIA, ctx), null);
 });

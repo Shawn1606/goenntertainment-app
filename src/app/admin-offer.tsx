@@ -109,11 +109,32 @@ export default function AdminOfferScreen() {
 
   useEffect(() => {
     if (!token || !id) return;
-    api.admin.offers(token, partner ? Number(partner) : undefined).then(({ data }) => {
-      const found = data.find((o) => o.id === Number(id));
-      if (found) apply(found);
-    });
+    api.admin
+      .offers(token, partner ? Number(partner) : undefined)
+      .then(({ data }) => {
+        const found = data.find((o) => o.id === Number(id));
+        if (found) apply(found);
+      })
+      .catch((e) => void notifyUser('Angebot nicht geladen', errorMessage(e)));
   }, [token, id, partner]);
+
+  // Der Rabattdeckel des Partners: Gilt, wenn das Feld hier leer bleibt ("wie Partner").
+  // Ohne ihn rechnete die Vorschau mit 20 % und versprach mehr Rabatt, als es gibt.
+  const partnerId = Number(partner ?? offer?.partner_id) || null;
+  const [partnerCap, setPartnerCap] = useState<number | null>(null);
+  useEffect(() => {
+    if (!token || !partnerId) return;
+    let active = true;
+    api.admin
+      .partner(token, partnerId)
+      .then(({ data }) => {
+        if (active) setPartnerCap(data.max_discount_percent);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [token, partnerId]);
 
   const set = (key: keyof Draft) => (value: string) => setDraft((d) => ({ ...d, [key]: value }));
 
@@ -179,9 +200,13 @@ export default function AdminOfferScreen() {
   const remove = async () => {
     if (!token || !offer) return;
     if (!(await confirmAction('Angebot löschen?', 'Buchungen bleiben als Beleg erhalten. Zum Pausieren lieber „Aktiv" ausschalten.', 'Löschen', true))) return;
-    await api.admin.deleteOffer(token, offer.id);
-    void market.refresh();
-    router.back();
+    try {
+      await api.admin.deleteOffer(token, offer.id);
+      void market.refresh();
+      router.back();
+    } catch (e) {
+      await notifyUser('Nicht gelöscht', errorMessage(e));
+    }
   };
 
   const field = (key: keyof Draft, label: string, extra: Partial<React.ComponentProps<typeof TextField>> = {}) => (
@@ -189,7 +214,7 @@ export default function AdminOfferScreen() {
   );
 
   const price = centsOrNull(draft.price);
-  const cap = numberOrNull(draft.max_discount);
+  const cap = numberOrNull(draft.max_discount) ?? partnerCap;
 
   return (
     <AdminScreen title={offer ? offer.title : 'Neues Angebot'}>

@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, Linking, Modal, Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Linking, Modal, Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandGradientText } from '@/components/brand-gradient-text';
@@ -13,6 +13,7 @@ import { SUPPORT_EMAIL, supportMailto } from '@/constants/links';
 import { Brand, MaxContentWidth, Spacing, FontFamily } from '@/constants/theme';
 import { api, ApiError, type BanInfo, type TwoFactorChallenge } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { notifyUser } from '@/lib/confirm';
 import { clearSavedEmail, loadSavedEmail, saveEmail } from '@/lib/credential-store';
 import { passwordStrength } from '@/lib/password-strength';
 import { flagWeakPassword } from '@/lib/security-nudge';
@@ -119,13 +120,14 @@ export function LoginPanel({ active, onBack }: Props) {
    * aktiver 2FA ist man da noch nicht angemeldet.
    */
   async function finishLogin() {
+    // Zuerst und ohne `await`: Der Auth-Gate wechselt schon in die App, und die Startseite
+    // fragt den Hinweis beim ersten Erscheinen ab.
+    flagWeakPassword(passwordStrength(password, [email.trim()]).score <= 1);
     if (remember) {
       await saveEmail(email.trim());
     } else {
       await clearSavedEmail();
     }
-    flagWeakPassword(passwordStrength(password, [email.trim()]).score <= 1);
-    // Der Auth-Gate wechselt jetzt automatisch in die App.
   }
 
   /** Das Passwort stimmte, jetzt fehlt der Code (Zwei-Faktor-Anmeldung). */
@@ -194,7 +196,8 @@ export function LoginPanel({ active, onBack }: Props) {
       setResendIn(60);
       setGeneralError(null);
       setErrors({});
-      Alert.alert('Neuer Code', res.message);
+      // notifyUser statt Alert.alert: Alert tut im Browser nichts.
+      void notifyUser('Neuer Code', res.message);
     } catch (error) {
       showError(error);
     }
@@ -219,7 +222,7 @@ export function LoginPanel({ active, onBack }: Props) {
       '',
     ].filter((line): line is string => line !== null);
     Linking.openURL(supportMailto('Widerspruch gegen Sperre', lines.join('\n'))).catch(() => {
-      Alert.alert('Mail ließ sich nicht öffnen', `Schreib uns an ${SUPPORT_EMAIL}.`);
+      void notifyUser('Mail ließ sich nicht öffnen', `Schreib uns an ${SUPPORT_EMAIL}.`);
     });
   }
 

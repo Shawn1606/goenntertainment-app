@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { MascotEmpty } from '@/components/mascot';
+import { MascotEmpty, MascotError } from '@/components/mascot';
 import { useDockScroll } from '@/components/mascot-dock';
 import { OfferRow } from '@/components/offer-card';
 import { useGarlandSpace } from '@/components/seasonal-decor';
@@ -398,7 +398,10 @@ export default function FinderScreen() {
             </View>
           ) : null}
 
-          {results.length === 0 && !market.loading ? (
+          {/* Konnten die Angebote nicht laden, ist das kein „nichts passt": Fehler mit „Nochmal". */}
+          {market.error && market.offers.length === 0 ? <MascotError detail={market.error} onRetry={() => void market.refresh()} /> : null}
+
+          {results.length === 0 && !market.loading && !(market.error && market.offers.length === 0) ? (
             <Card>
               <MascotEmpty mood="thinking" gesture="look">
                 <Text style={[styles.emptyTitle, { color: colors.text }]}>Dafür hab ich gerade nichts</Text>

@@ -11,31 +11,11 @@
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
-import { memo, useEffect, type ReactNode } from 'react';
-import {
-  Platform,
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-  type PressableProps,
-  type StyleProp,
-  type TextInputProps,
-  type ViewStyle,
-} from 'react-native';
-import Animated, {
-  Easing,
-  useAnimatedStyle,
-  useReducedMotion,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
+import type { ReactNode } from 'react';
+import { Platform, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { Shimmer } from '@/components/ui/glow';
-import { BrandGradient, FontFamily, Radius, Spacing } from '@/constants/theme';
+import { FontFamily, Radius, Spacing } from '@/constants/theme';
 import { useBrandSurface, useGlass } from '@/hooks/use-theme';
-import { Icon } from '@/components/ui/icon';
 
 /** Einmal auswerten – der Wert ändert sich zur Laufzeit nicht. */
 const LIQUID_GLASS = isLiquidGlassAvailable();
@@ -196,87 +176,6 @@ export function GlassChip({ label, selected = false, onPress, icon, accessibilit
   );
 }
 
-export type GlassButtonProps = PressableProps & {
-  title: string;
-  /** `primary` = Verlauf (eine pro Bildschirm), `ghost` = Glas. */
-  variant?: 'primary' | 'ghost';
-  style?: StyleProp<ViewStyle>;
-};
-
-export function GlassButton({ title, variant = 'primary', style, ...rest }: GlassButtonProps) {
-  const surface = useBrandSurface();
-
-  if (variant === 'primary') {
-    return (
-      <Pressable accessibilityRole="button" {...rest} style={({ pressed }) => [pressed && styles.pressed, style]}>
-        <LinearGradient
-          colors={[...BrandGradient]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.button}>
-          <Text style={[styles.buttonText, { color: '#ffffff' }]}>{title}</Text>
-        </LinearGradient>
-      </Pressable>
-    );
-  }
-
-  return (
-    <Pressable accessibilityRole="button" {...rest} style={({ pressed }) => [pressed && styles.pressed, style]}>
-      <GlassSurface tone="panel" radius={Radius.field} style={styles.button}>
-        <Text style={[styles.buttonText, { color: surface.accent }]}>{title}</Text>
-      </GlassSurface>
-    </Pressable>
-  );
-}
-
-export type GlassSearchFieldProps = TextInputProps & {
-  /** Wird rechts eingeblendet, sobald Text drinsteht. */
-  onClear?: () => void;
-  containerStyle?: StyleProp<ViewStyle>;
-};
-
-/**
- * Suchfeld im Glas-Look.
- *
- * `memo`, weil dieses Feld über der Ergebnisliste sitzt: jeder Tastendruck
- * ändert den Filter im Eltern-Screen und rendert damit auch die Liste neu.
- * Ohne `memo` läuft dieser Re-Render durch das Feld hindurch – das ist die
- * Sorte Kette, an deren Ende auf Android der Fokus (und damit die Tastatur)
- * verloren geht.
- *
- * Die eigenen Vorgaben (`returnKeyType`, `autoCorrect`) stehen absichtlich VOR
- * `...rest`, damit ein Aufrufer sie überschreiben kann, und `style` danach,
- * damit die Glas-Optik nicht versehentlich wegfällt.
- */
-export const GlassSearchField = memo(function GlassSearchField({
-  onClear,
-  containerStyle,
-  value,
-  style,
-  ...rest
-}: GlassSearchFieldProps) {
-  const surface = useBrandSurface();
-
-  return (
-    <GlassSurface tone="panel" radius={Radius.field} style={[styles.search, containerStyle]}>
-      <Icon name="search" size={17} color={surface.textMuted} />
-      <TextInput
-        returnKeyType="search"
-        autoCorrect={false}
-        {...rest}
-        value={value}
-        placeholderTextColor={surface.textMuted}
-        style={[styles.searchInput, { color: surface.text }, style]}
-      />
-      {value && onClear ? (
-        <Pressable onPress={onClear} hitSlop={10} accessibilityRole="button" accessibilityLabel="Suche leeren">
-          <Icon name="close" size={16} color={surface.textMuted} />
-        </Pressable>
-      ) : null}
-    </GlassSurface>
-  );
-});
-
 /** Überschrift einer Sektion, optional mit Zusatz rechts. */
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
   const surface = useBrandSurface();
@@ -285,62 +184,6 @@ export function SectionHeader({ title, action }: { title: string; action?: React
     <View style={styles.sectionHeader}>
       <Text style={[styles.sectionTitle, { color: surface.text }]}>{title}</Text>
       {action}
-    </View>
-  );
-}
-
-/**
- * Dünner Fortschrittsbalken im Markenverlauf (Level, Abzeichen).
- *
- * Der Balken WÄCHST auf seinen Wert, statt fertig dazustehen. Das ist der
- * Unterschied zwischen „du bist bei 60 %" und „du hast eben etwas geschafft":
- * Ein Balken, der schon voll ist, wenn man hinschaut, hat nie erzählt, dass er
- * gewachsen ist. Beim ersten Erscheinen läuft er von 0 los, danach nur noch von
- * seinem alten Wert – so wirkt jede Rückkehr auf den Bildschirm nicht wie ein
- * Neustart.
- *
- * Kurz vor dem nächsten Level zieht zusätzlich ein Lichtband darüber. Das ist
- * genau der Moment, in dem sich „noch 20 XP" nach lohnenswert anfühlen soll.
- */
-export function GlassProgressBar({
-  progress,
-  height = 8,
-  /** Ab wann das Lichtband über den Balken zieht („gleich geschafft"). */
-  glowAt = 0.85,
-}: {
-  progress: number;
-  height?: number;
-  glowAt?: number;
-}) {
-  const glass = useGlass();
-  const reduced = useReducedMotion();
-  const clamped = Math.min(1, Math.max(0, Number.isFinite(progress) ? progress : 0));
-
-  const grown = useSharedValue(0);
-
-  useEffect(() => {
-    grown.value = reduced
-      ? clamped
-      : withTiming(clamped, { duration: 900, easing: Easing.out(Easing.cubic) });
-  }, [clamped, reduced, grown]);
-
-  const fill = useAnimatedStyle(() => ({
-    width: `${grown.value * 100}%`,
-  }));
-
-  return (
-    <View style={[styles.progressTrack, { height, borderRadius: height, backgroundColor: glass.fillSubtle }]}>
-      <Animated.View style={[{ height: '100%', borderRadius: height, overflow: 'hidden' }, fill]}>
-        <LinearGradient
-          colors={[...BrandGradient]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={StyleSheet.absoluteFill}
-        />
-      </Animated.View>
-      {clamped >= glowAt && clamped < 1 ? (
-        <Shimmer color="rgba(255,255,255,0.85)" radius={height} durationMs={1800} restMs={2600} />
-      ) : null}
     </View>
   );
 }
@@ -385,40 +228,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     fontFamily: FontFamily.semibold,
   },
-  button: {
-    minHeight: 52,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.four,
-    borderRadius: Radius.field,
-  },
-  buttonText: {
-    fontSize: 16,
-    fontWeight: '700',
-    fontFamily: FontFamily.bold,
-  },
-  search: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    paddingHorizontal: Spacing.three,
-    minHeight: 48,
-  },
-  searchIcon: {
-    fontSize: 15,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    fontFamily: FontFamily.regular,
-    paddingVertical: Spacing.two,
-    // Web: der blaue Fokusrahmen passt nicht zum Glas-Look.
-    ...Platform.select({ web: { outlineStyle: 'none' } as object, default: {} }),
-  },
-  searchClear: {
-    fontSize: 15,
-    paddingHorizontal: Spacing.one,
-  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -430,9 +239,5 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: FontFamily.bold,
     letterSpacing: -0.3,
-  },
-  progressTrack: {
-    width: '100%',
-    overflow: 'hidden',
   },
 });

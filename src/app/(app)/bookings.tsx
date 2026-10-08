@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { BookingTicket } from '@/components/booking-ticket';
@@ -17,6 +17,7 @@ import { expiryInfo } from '@/domain/booking-status';
 import { expiryWords } from '@/domain/mascot-lines';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
 
@@ -37,13 +38,16 @@ export default function BookingsScreen() {
   const garland = useGarlandSpace();
   const dockScroll = useDockScroll();
 
-  // `refreshBookings` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  // Bei jedem Zurückkommen neu laden: Tab-Seiten bleiben geladen, und ein eingelöstes
+  // oder storniertes Ticket soll hier sofort so aussehen.
   const { refreshBookings } = market;
-  useEffect(() => {
-    void refreshBookings();
-  }, [refreshBookings]);
+  useFocusEffect(
+    useCallback(() => {
+      void refreshBookings();
+    }, [refreshBookings]),
+  );
 
-  const now = new Date();
+  const now = useNow();
   const open = market.bookings
     .filter((b) => b.status === 'confirmed')
     .slice()

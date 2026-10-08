@@ -11,6 +11,7 @@ import { BOOKING_STATUS_LABEL, expiryInfo } from '@/domain/booking-status';
 import { formatDateTimeCompact, formatDay, formatDayShort } from '@/domain/date-format';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import { api, errorMessage, type AdminBooking, type AdminStats, type AdminStatsPoint } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -23,6 +24,7 @@ export default function AdminDashboard() {
   const [bookings, setBookings] = useState<AdminBooking[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const now = useNow();
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -118,7 +120,7 @@ export default function AdminDashboard() {
           <Card padded={false}>
             {bookings.map((b, i) => {
               const open = b.status === 'confirmed';
-              const expiry = open ? expiryInfo(b.valid_until, new Date()) : null;
+              const expiry = open ? expiryInfo(b.valid_until, now) : null;
               const urgent = expiry?.tone === 'urgent';
               return (
                 <View key={b.id} style={[styles.booking, i > 0 && { borderTopWidth: 1, borderTopColor: colors.border }]}>

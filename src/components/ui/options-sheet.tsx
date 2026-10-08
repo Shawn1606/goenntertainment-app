@@ -23,7 +23,8 @@ export type SheetOption = {
 const DANGER = '#ed4956';
 
 /**
- * Das Blatt hinter „…" – weitere Optionen zu einem Beitrag.
+ * Das Blatt hinter „…" – weitere Optionen, etwa zu einem Gruppenmitglied
+ * (Melden, Blockieren, Entfernen).
  *
  * Ein Blatt statt eines System-Dialogs: `Alert` mit mehreren Knöpfen hat im Web
  * keine funktionierenden Rückrufe, und auf dem Handy sieht es auf jeder

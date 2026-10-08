@@ -71,6 +71,7 @@ import { BACK_LINE, DUCK_LINE, flightLine, pokeLine, sceneLines, type MascotScen
 import { pokeReaction } from '@/domain/mascot-mood';
 import { tipAt, type Tip } from '@/domain/mascot-tips';
 import { useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import { useAppSettings } from '@/lib/app-settings';
 import { useAuth } from '@/lib/auth-context';
 import * as haptics from '@/lib/haptics';
@@ -83,8 +84,11 @@ const SIZE = 58;
 /** So lange steht ein Satz. */
 const BUBBLE_MS = 5600;
 
-/** Abstand zwischen zwei kleinen Kunststücken von selbst. */
-const IDLE_TRICK_MS = 14_000;
+/**
+ * Nach so langer Ruhe zeigt er von selbst ein kleines Kunststück – EINES, bevor er
+ * in die Ecke abtaucht (`TUCK_AFTER_MS`). Länger als das Abtauchen kam es nie dran.
+ */
+const IDLE_TRICK_MS = 6000;
 
 /** Nach so langer Ruhe verschwindet Goenni von selbst in seiner Ecke. */
 const TUCK_AFTER_MS = 9000;
@@ -258,6 +262,8 @@ export function MascotDock({ bottom }: { bottom: number }) {
   const bubbleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const moodTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const landTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Festhalten: Er taucht erst nach seinem Satz ab – Antippen davor bricht das ab. */
+  const duckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bubbleCount = useRef(0);
   /** Welche Nachricht von außen schon gesagt wurde. */
   const [readMessage, setReadMessage] = useState(0);
@@ -271,7 +277,7 @@ export function MascotDock({ bottom }: { bottom: number }) {
   const side = dock.scene === 'map' ? 'left' : 'right';
 
   // Kein useMemo: Der React Compiler merkt sich das selbst.
-  const now = new Date();
+  const now = useNow();
   const expiring = nextExpiring(market.bookings, now);
   const lines = sceneLines(dock.scene, {
     firstName: user?.name?.split(' ')[0] ?? null,
@@ -320,20 +326,22 @@ export function MascotDock({ bottom }: { bottom: number }) {
       if (bubbleTimer.current) clearTimeout(bubbleTimer.current);
       if (moodTimer.current) clearTimeout(moodTimer.current);
       if (landTimer.current) clearTimeout(landTimer.current);
+      if (duckTimer.current) clearTimeout(duckTimer.current);
     },
     [],
   );
 
-  // Selten ein kleines Kunststück, damit er lebt – ohne zu zappeln.
+  // Selten ein kleines Kunststück, damit er lebt – ohne zu zappeln: eines nach jeder
+  // Ruhephase, bevor er abtaucht. Jede Berührung (`activity`) fängt die Zeit neu an.
+  const idleTricks = useRef(0);
   useEffect(() => {
-    if (hidden || ducked || reduced) return;
-    let n = 0;
-    const timer = setInterval(() => {
-      perform(CALM_TRICKS[n % CALM_TRICKS.length]);
-      n += 1;
+    if (hidden || ducked || reduced || bubble) return;
+    const timer = setTimeout(() => {
+      perform(CALM_TRICKS[idleTricks.current % CALM_TRICKS.length]);
+      idleTricks.current += 1;
     }, IDLE_TRICK_MS);
-    return () => clearInterval(timer);
-  }, [hidden, ducked, reduced, perform]);
+    return () => clearTimeout(timer);
+  }, [hidden, ducked, reduced, bubble, activity, perform]);
 
   // Nach einer Weile Ruhe: still in die Ecke. Nicht, solange er spricht.
   useEffect(() => {
@@ -354,6 +362,9 @@ export function MascotDock({ bottom }: { bottom: number }) {
   const poke = () => {
     haptics.press();
     touch();
+    // Gerade erst festgehalten? Dann bleibt er jetzt vorn.
+    if (duckTimer.current) clearTimeout(duckTimer.current);
+    duckTimer.current = null;
     const wasDucked = ducked;
     if (wasDucked) setDucked(false);
     if (message) {
@@ -402,7 +413,9 @@ export function MascotDock({ bottom }: { bottom: number }) {
     haptics.tap();
     show(DUCK_LINE, 2400);
     perform('wave');
-    setTimeout(() => {
+    if (duckTimer.current) clearTimeout(duckTimer.current);
+    duckTimer.current = setTimeout(() => {
+      duckTimer.current = null;
       setBubble(null);
       setDucked(true);
     }, 1300);
@@ -498,7 +511,12 @@ export function MascotDock({ bottom }: { bottom: number }) {
         </Animated.View>
       ) : null}
 
-      <Animated.View style={figureStyle} pointerEvents={hidden ? 'none' : 'auto'}>
+      {/* Ausgeblendet: auch für Screenreader weg – sonst bliebe ein unsichtbarer Knopf erreichbar. */}
+      <Animated.View
+        style={figureStyle}
+        pointerEvents={hidden ? 'none' : 'auto'}
+        accessibilityElementsHidden={hidden}
+        importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}>
         <PressableScale
           onPress={poke}
           onLongPress={duck}

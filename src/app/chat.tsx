@@ -28,10 +28,12 @@ import { formatCredits, formatEuro } from '@/domain/club';
 import { formatClock } from '@/domain/date-format';
 import { useKeyboardInset } from '@/hooks/use-keyboard-inset';
 import { useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import { ApiError, api, errorMessage, type ChatMessage, type ChatRoom } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
+import { useMarket } from '@/lib/market-context';
 
 /** Abstand zwischen zwei Nachfragen nach neuen Nachrichten. */
 const POLL_MS = 4000;
@@ -44,11 +46,14 @@ export default function ChatScreen() {
   const insets = useSafeAreaInsets();
   const keyboard = useKeyboardInset();
   const { token } = useAuth();
+  const { refreshGroups } = useMarket();
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [room, setRoom] = useState<ChatRoom | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Senden oder Löschen ging schief – steht direkt über der Eingabe, nicht oben im Verlauf. */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [menuFor, setMenuFor] = useState<ChatMessage | null>(null);
@@ -103,19 +108,23 @@ export default function ChatScreen() {
     useCallback(() => {
       loadFirst();
       const timer = setInterval(pollOnce, POLL_MS);
-      return () => clearInterval(timer);
-    }, [loadFirst, pollOnce]),
+      return () => {
+        clearInterval(timer);
+        // Gelesen ist gelesen: Zahl an der Gruppe und in der Leiste gleich mitziehen.
+        void refreshGroups();
+      };
+    }, [loadFirst, pollOnce, refreshGroups]),
   );
 
   async function onSend() {
     if (!token || sending) return;
     const check = validateDraft(draft);
     if (!check.ok) {
-      if (check.error) setError(check.error);
+      if (check.error) setActionError(check.error);
       return;
     }
     setSending(true);
-    setError(null);
+    setActionError(null);
     const text = draft.trim();
     setDraft('');
     try {
@@ -125,7 +134,7 @@ export default function ChatScreen() {
     } catch (err) {
       feedback.failed();
       setDraft(text);
-      setError(errorMessage(err, 'Die Nachricht ging nicht raus.'));
+      setActionError(errorMessage(err, 'Die Nachricht ging nicht raus.'));
     }
     setSending(false);
   }
@@ -147,7 +156,7 @@ export default function ChatScreen() {
             await api.deleteMessage(token, m.id);
             setMessages((prev) => prev.filter((row) => row.id !== m.id));
           } catch (err) {
-            setError(errorMessage(err, 'Löschen hat nicht geklappt.'));
+            setActionError(errorMessage(err, 'Löschen hat nicht geklappt.'));
           }
         },
       });
@@ -174,7 +183,8 @@ export default function ChatScreen() {
     return options;
   }, [menuFor, room?.can_moderate, token]);
 
-  const sections = useMemo(() => groupByDay(messages, new Date()), [messages]);
+  const now = useNow();
+  const sections = useMemo(() => groupByDay(messages, now), [messages, now]);
   const title = room?.title ?? params.title ?? 'Gruppe';
   const canSend = validateDraft(draft).ok;
 
@@ -244,6 +254,12 @@ export default function ChatScreen() {
         )}
 
         <View style={{ paddingBottom: insets.bottom + keyboard + Spacing.two }}>
+          {actionError ? (
+            <View style={styles.actionError} accessibilityLiveRegion="polite">
+              <Icon name="warning" size={16} color="#d97706" />
+              <Text style={[styles.actionErrorText, { color: colors.text }]}>{actionError}</Text>
+            </View>
+          ) : null}
           <View style={[styles.inputBar, { backgroundColor: colors.background, borderColor: colors.border }]}>
             <TextInput
               value={draft}
@@ -367,5 +383,7 @@ const styles = StyleSheet.create({
   inputBar: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.two, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, borderWidth: Stroke, borderRadius: Radius.card },
   input: { flex: 1, fontSize: 15, fontFamily: FontFamily.regular, maxHeight: 96, paddingVertical: Spacing.two },
   sendButton: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  actionError: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, paddingHorizontal: Spacing.two, paddingBottom: Spacing.one },
+  actionErrorText: { flex: 1, fontFamily: FontFamily.medium, fontSize: 13 },
   pressed: { opacity: 0.7 },
 });

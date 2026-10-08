@@ -44,7 +44,8 @@ export default function ChangePasswordScreen() {
   const [sending, setSending] = useState(false);
 
   const personal = [user?.username, user?.email, user?.name];
-  const strength = passwordStrength(next, personal);
+  const account = [user?.username, user?.email];
+  const strength = passwordStrength(next, personal, account);
   const mismatch = repeat.length > 0 && repeat !== next;
   // The mailed code has six digits; anything else is refused here, before it costs a try.
   const proven = firstPassword ? normalizeResetCode(code) !== null : current.length > 0;
@@ -136,7 +137,7 @@ export default function ChangePasswordScreen() {
         leftIcon={<LockIcon />}
         error={errors.password?.[0]}
       />
-      <PasswordMeter password={next} personal={personal} />
+      <PasswordMeter password={next} personal={personal} account={account} />
       <TextField
         label="Neues Passwort wiederholen"
         value={repeat}

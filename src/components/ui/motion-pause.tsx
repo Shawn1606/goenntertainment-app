@@ -39,11 +39,6 @@ export function MotionPause({ paused, children }: { paused: boolean; children: R
   return <PausedContext.Provider value={outer || paused}>{children}</PausedContext.Provider>;
 }
 
-/** Ruht dieser Teil gerade (nicht vorn)? */
-export function useMotionPaused(): boolean {
-  return useContext(PausedContext);
-}
-
 /** Soll Dauerbewegung stehen? „Bewegung reduzieren" oder pausiert. */
 export function useStill(): boolean {
   const reduced = useReducedMotion();

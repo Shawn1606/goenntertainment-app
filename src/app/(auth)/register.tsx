@@ -86,7 +86,7 @@ export default function RegisterScreen() {
       emailOk: isEmailAddress(email.trim()),
       // Dieselbe Regel wie am Server (Länge, Buchstaben + Zahl, keine Liste häufiger
       // Passwörter, kein Benutzername darin) – siehe src/domain/password-strength.ts.
-      passOk: passwordStrength(p, [u, email.trim(), name.trim()]).meetsPolicy,
+      passOk: passwordStrength(p, [u, email.trim(), name.trim()], [u, email.trim()]).meetsPolicy,
     };
   }, [name, username, email, password]);
 
@@ -129,7 +129,7 @@ export default function RegisterScreen() {
         setGeneralError('Unbekannter Fehler.');
       }
     }
-    setLoading(false);
+    setLoading(false);
   }
 
   return (
@@ -167,7 +167,7 @@ export default function RegisterScreen() {
               <TextField label="Passwort" value={password} onChangeText={setPassword} placeholder="Passwort wählen" secureTextEntry autoComplete="new-password" leftIcon={<LockIcon />} error={errors.password?.[0]} />
               {/* Stärke statt Checkliste: Die Liste sagte nur „8 Zeichen, Buchstaben und
                   Zahlen" – und hielt damit „Passwort1" für in Ordnung. */}
-              <PasswordMeter password={password} personal={[username.trim(), email.trim(), name.trim()]} />
+              <PasswordMeter password={password} personal={[username.trim(), email.trim(), name.trim()]} account={[username.trim(), email.trim()]} />
 
             </View>
 
@@ -189,38 +189,49 @@ export default function RegisterScreen() {
                 Entscheidung fällt – und die Links führen in die App und nicht in
                 den Browser, damit man den Text lesen kann, ohne die
                 Registrierung zu verlieren (siehe src/app/legal.tsx). */}
-            <Pressable
-              onPress={() => setAcceptedTerms((prev) => !prev)}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: acceptedTerms }}
-              accessibilityLabel="Nutzungsbedingungen und Datenschutz akzeptieren"
-              style={styles.consentRow}>
-              <View style={[styles.checkbox, acceptedTerms && styles.checkboxOn]}>
-                {acceptedTerms ? <CheckIcon size={14} color="#ffffff" /> : null}
-              </View>
-              <Text style={styles.consentText}>
-                Ich habe die{' '}
-                <Text
-                  style={styles.link}
-                  onPress={() => router.push({ pathname: '/legal', params: { doc: 'terms' } })}>
-                  Nutzungsbedingungen
+            {/* Das Kästchen trägt die ganze Erklärung für Screenreader – samt Alter und
+                Haftung; der Text daneben bleibt für sie lesbar, und seine Links sind
+                einzeln erreichbar (vorher verschluckte das Kästchen beides). Wer sieht,
+                kann wie gewohnt auch auf den Text tippen. */}
+            <View style={styles.consentRow}>
+              <Pressable
+                onPress={() => setAcceptedTerms((prev) => !prev)}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: acceptedTerms }}
+                accessibilityLabel={`Ich habe die Nutzungsbedingungen und den Datenschutz gelesen. Die Aktivitäten führen Partner durch, die Teilnahme erfolgt auf eigene Verantwortung. Ich bin mindestens ${MIN_AGE} Jahre alt.`}
+                hitSlop={10}>
+                <View style={[styles.checkbox, acceptedTerms && styles.checkboxOn]}>
+                  {acceptedTerms ? <CheckIcon size={14} color="#ffffff" /> : null}
+                </View>
+              </Pressable>
+              <Pressable onPress={() => setAcceptedTerms((prev) => !prev)} accessible={false} style={styles.consentTextBox}>
+                <Text style={styles.consentText}>
+                  Ich habe die{' '}
+                  <Text
+                    style={styles.link}
+                    accessibilityRole="link"
+                    onPress={() => router.push({ pathname: '/legal', params: { doc: 'terms' } })}>
+                    Nutzungsbedingungen
+                  </Text>
+                  {' '}und den{' '}
+                  <Text
+                    style={styles.link}
+                    accessibilityRole="link"
+                    onPress={() => router.push({ pathname: '/legal', params: { doc: 'privacy' } })}>
+                    Datenschutz
+                  </Text>
+                  {' '}gelesen. Mir ist klar, dass die Aktivitäten von unseren Partnern durchgeführt werden und
+                  die Teilnahme auf eigene Verantwortung erfolgt (
+                  <Text
+                    style={styles.link}
+                    accessibilityRole="link"
+                    onPress={() => router.push({ pathname: '/legal', params: { doc: 'liability' } })}>
+                    Haftung
+                  </Text>
+                  ). Ich bin mindestens {MIN_AGE} Jahre alt.
                 </Text>
-                {' '}und den{' '}
-                <Text
-                  style={styles.link}
-                  onPress={() => router.push({ pathname: '/legal', params: { doc: 'privacy' } })}>
-                  Datenschutz
-                </Text>
-                {' '}gelesen. Mir ist klar, dass die Aktivitäten von unseren Partnern durchgeführt werden und
-                die Teilnahme auf eigene Verantwortung erfolgt (
-                <Text
-                  style={styles.link}
-                  onPress={() => router.push({ pathname: '/legal', params: { doc: 'liability' } })}>
-                  Haftung
-                </Text>
-                ). Ich bin mindestens {MIN_AGE} Jahre alt.
-              </Text>
-            </Pressable>
+              </Pressable>
+            </View>
             {/* The server's answer about this consent (an outdated app sends an old terms
                 version): without this line a field error here would show nowhere, because the
                 general notice above only fills when there are no field errors (onSubmit). */}
@@ -231,7 +242,7 @@ export default function RegisterScreen() {
             <BrandButton title="Konto erstellen" onPress={onSubmit} loading={loading} disabled={!formValid} />
           </View>
 
-          <Pressable onPress={() => router.replace('/')} style={styles.loginRow}>
+          <Pressable onPress={() => router.dismissTo('/')} style={styles.loginRow}>
             <Text style={styles.muted}>Schon ein Konto? </Text>
             <Text style={styles.link}>Zum Login</Text>
           </Pressable>
@@ -355,8 +366,8 @@ const styles = StyleSheet.create({
     backgroundColor: Brand.purple,
     borderColor: Brand.purple,
   },
+  consentTextBox: { flex: 1 },
   consentText: {
-    flex: 1,
     color: Brand.textMuted,
     fontSize: 13,
     lineHeight: 19,

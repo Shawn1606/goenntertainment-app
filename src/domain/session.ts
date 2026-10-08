@@ -25,10 +25,10 @@ export type LocalSignOutSteps = {
   /** Removes what the device stores for the session (the token). */
   clearStorage: () => Promise<void>;
   /**
-   * Removes the signed-out account's search history from the device (F-44,
-   * src/domain/search-history.ts forgetSearchHistory).
+   * Removes what the signed-out account left on the device: the offline copy of its bookings and
+   * its pass (F-44, src/lib/offline-cache.ts).
    */
-  clearHistory: () => Promise<unknown>;
+  clearDeviceData: () => Promise<unknown>;
   /** Tells the person why they were signed out (after a 401 only). */
   notice: () => Promise<void>;
 };
@@ -45,10 +45,10 @@ export type LocalSignOutSteps = {
  * - after a deliberate sign-out it is passed on, so the caller does not report success while a
  *   token that may still work is left on the device.
  *
- * The search history (F-44) goes on every path, also when removing the token failed. Its own
+ * The offline copy (F-44) goes on every path, also when removing the token failed. Its own
  * failure never stops or fails the sign-out: the session is over either way, and an error there
- * would only show the person an unrelated message (after deleting the account, say). On the web
- * the next sign-out removes a history left behind (forgetSearchHistory lists the keys).
+ * would only show the person an unrelated message (after deleting the account, say). A copy left
+ * behind is read for its own account only (the account id beside the token, offline-cache.ts).
  */
 export async function signOutLocally(steps: LocalSignOutSteps, rejected: boolean): Promise<void> {
   steps.forget();
@@ -59,7 +59,7 @@ export async function signOutLocally(steps: LocalSignOutSteps, rejected: boolean
     failure = { error };
   }
   try {
-    await steps.clearHistory();
+    await steps.clearDeviceData();
   } catch {
     // Never passed on (see above).
   }
@@ -73,9 +73,9 @@ export async function signOutLocally(steps: LocalSignOutSteps, rejected: boolean
 /*
  * The signed-in account's id, stored on the device beside the token (src/lib/token-store.ts).
  * A session can end while the app is closed: the account deleted (or deleted on another device)
- * before the sign-out ran, or the token revoked. The next app start then gets a 401, and without
- * the id it could not tell whose search history to remove on phones, whose storage cannot list
- * its keys (F-44, src/domain/search-history.ts forgetSearchHistory).
+ * before the sign-out ran, or the token revoked. The offline copy of bookings and pass carries the
+ * id of the account it belongs to and is read for that account only (F-44,
+ * src/lib/offline-cache.ts), so the next person on the device never sees it.
  */
 
 /** The stored form of an account id, or null for anything that is not one (then nothing is stored). */

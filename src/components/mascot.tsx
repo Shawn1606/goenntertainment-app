@@ -407,7 +407,10 @@ export function Mascot({
   useBeat(
     () => {
       gazeStep.current = (gazeStep.current % 4) + 1;
-      gaze.set(withTiming(gazeStep.current, { duration: 400, easing: Easing.inOut(Easing.quad) }));
+      const move = withTiming(gazeStep.current, { duration: 400, easing: Easing.inOut(Easing.quad) });
+      // Station 4 und 0 sind derselbe Blick: Von 4 zu 1 erst unsichtbar auf 0 springen,
+      // sonst wanderten die Augen rückwärts über 3 und 2.
+      gaze.set(gazeStep.current === 1 ? withSequence(withTiming(0, { duration: 0 }), move) : move);
     },
     hold + 400,
     looking,
