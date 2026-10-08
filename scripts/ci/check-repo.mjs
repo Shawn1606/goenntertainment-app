@@ -148,6 +148,11 @@ export const MUST_IGNORE = [
   '.claude/settings.local.json',
   '.claude/worktrees/some-worktree/file',
   'CLAUDE.local.md',
+  // Uploads in development (api/config/filesystems.php roots): user images, never sources.
+  'server/storage/avatars/0123456789abcdef0123456789abcdef01234567.jpg',
+  'server/storage/partners/0123456789abcdef0123456789abcdef01234567.jpg',
+  'server/storage/offers/0123456789abcdef0123456789abcdef01234567.jpg',
+  'server/storage-private/evidence/0123456789abcdef0123456789abcdef01234567.jpg',
 ];
 
 /** Sources and templates that no ignore rule may hide. */

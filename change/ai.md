@@ -247,7 +247,7 @@ symptom: "einloggen dauert ewig" am echten Handy (Expo Go). Backend selbst ~4ms.
 diagnose:
   - Expo-Manifest hostUri = 127.0.0.1:8081 -> guessDevHost() => http://127.0.0.1:8000
     (aus Handy-Sicht = das Handy selbst).
-  - PC hat 2 externe IPv4: Hamachi 25.36.112.94 (ZUERST) vor WLAN 192.168.178.25.
+  - PC hat 2 externe IPv4: Hamachi 25.x.x.x (ZUERST) vor WLAN 192.168.178.25.
     LAN-Guess wuerde die VPN-IP nehmen -> vom Handy nicht/langsam erreichbar -> TCP-Timeout.
   - Server bindet '::' + 0.0.0.0, auf 192.168.178.25:8000 lokal 200/4ms erreichbar (keine Regression).
 fix:
