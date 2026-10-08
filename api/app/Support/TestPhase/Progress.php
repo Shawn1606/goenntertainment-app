@@ -3,6 +3,7 @@
 namespace App\Support\TestPhase;
 
 use App\Models\User;
+use App\Support\BusinessDay;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Facades\DB;
@@ -21,6 +22,15 @@ use Illuminate\Support\Facades\DB;
  *
  * Stempel ohne Partner (von Hand gutgeschrieben, Erstbesuch-Bonus) zaehlen
  * nicht als Besuch - sie sind kein Besuch.
+ *
+ * Buchungen zaehlen erst eingeloest, im Zeitraum ihrer Einloesung - auch bei
+ * `bookings` und `group_bookings`. Eine offene Buchung liesse sich nach dem
+ * Abholen der Belohnung stornieren: Belohnung behalten, Credits voll zurueck
+ * (bei Gruppen sogar fuer alle Mitglieder). Damit zaehlt `bookings` dasselbe
+ * wie `redeemed`; beide bleiben, weil bestehende Challenges sie nennen.
+ *
+ * Die Grenzen `[von, bis]` kommen in Ortszeit (Board::window) und werden fuer
+ * die Abfragen in `app.timezone` umgerechnet (BusinessDay::stored).
  */
 final class Progress
 {
@@ -31,6 +41,8 @@ final class Progress
      */
     public static function count(User $user, string $metric, CarbonInterface $from, CarbonInterface $to, array $filter = []): int
     {
+        [$from, $to] = [BusinessDay::stored($from), BusinessDay::stored($to)];
+
         return match ($metric) {
             'visits' => self::visits($user, $from, $to, $filter)->count(),
             'distinct_partners' => self::visits($user, $from, $to, $filter)->distinct()->count('stamps.partner_id'),
@@ -38,21 +50,16 @@ final class Progress
                 ->whereNotNull('partners.interest_id')
                 ->distinct()
                 ->count('partners.interest_id'),
-            'bookings' => self::bookings($filter)
-                ->where('bookings.user_id', $user->getKey())
-                ->where('bookings.status', '!=', 'cancelled')
-                ->whereBetween('bookings.created_at', [$from, $to])
-                ->count(),
-            'redeemed' => self::bookings($filter)
+            'bookings', 'redeemed' => self::bookings($filter)
                 ->where('bookings.user_id', $user->getKey())
                 ->where('bookings.status', 'redeemed')
                 ->whereBetween('bookings.redeemed_at', [$from, $to])
                 ->count(),
-            // Jede Buchung einer Gruppe, in der man Mitglied ist - egal, wer gebucht hat.
+            // Jede eingeloeste Buchung einer Gruppe, in der man Mitglied ist - egal, wer gebucht hat.
             'group_bookings' => self::bookings($filter)
                 ->whereIn('bookings.group_id', self::groupIds($user))
-                ->where('bookings.status', '!=', 'cancelled')
-                ->whereBetween('bookings.created_at', [$from, $to])
+                ->where('bookings.status', 'redeemed')
+                ->whereBetween('bookings.redeemed_at', [$from, $to])
                 ->count(),
             default => 0,
         };
@@ -70,7 +77,7 @@ final class Progress
         $query = DB::table('stamps')
             ->join('partners', 'partners.id', '=', 'stamps.partner_id')
             ->where('stamps.user_id', $user->getKey())
-            ->whereBetween('stamps.created_at', [$from, $to]);
+            ->whereBetween('stamps.created_at', [BusinessDay::stored($from), BusinessDay::stored($to)]);
 
         if (! empty($filter['partner_id'])) {
             $query->where('stamps.partner_id', $filter['partner_id']);

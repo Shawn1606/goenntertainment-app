@@ -24,9 +24,9 @@ final class Examples
             ['type' => 'monthly', 'title' => 'Entdecker', 'description' => 'Besuche drei verschiedene Partner.', 'metric' => 'distinct_partners', 'target' => 3, 'reward_credits' => 120, 'period' => 'month', 'plans' => ['gold', 'platinum']],
             ['type' => 'monthly', 'title' => 'Neues ausprobieren', 'description' => 'Besuche Partner aus zwei verschiedenen Kategorien.', 'metric' => 'distinct_categories', 'target' => 2, 'reward_credits' => 150, 'period' => 'month', 'plans' => ['platinum']],
             ['type' => 'weekly', 'title' => 'Einmal raus', 'description' => 'Ein Check-in bei einem Partner – irgendwann diese Woche.', 'metric' => 'visits', 'target' => 1, 'reward_credits' => 20, 'period' => 'week'],
-            ['type' => 'weekly', 'title' => 'Was vorhaben', 'description' => 'Buche diese Woche ein Angebot.', 'metric' => 'bookings', 'target' => 1, 'reward_credits' => 25, 'period' => 'week'],
+            ['type' => 'weekly', 'title' => 'Was vorhaben', 'description' => 'Buche ein Angebot und löse es diese Woche ein.', 'metric' => 'bookings', 'target' => 1, 'reward_credits' => 25, 'period' => 'week'],
             ['type' => 'season', 'title' => $seasonName.'-Challenge', 'description' => 'Fünf Besuche bis zum Ende der Saison.', 'metric' => 'visits', 'target' => 5, 'reward_credits' => 200, 'period' => 'range', 'starts_at' => $seasonFrom, 'ends_at' => $seasonTo],
-            ['type' => 'group', 'title' => 'Zusammen unterwegs', 'description' => 'Eure Gruppe bucht diesen Monat dreimal zusammen – jede:r in der Gruppe kann die Belohnung abholen.', 'metric' => 'group_bookings', 'target' => 3, 'reward_credits' => 150, 'period' => 'month'],
+            ['type' => 'group', 'title' => 'Zusammen unterwegs', 'description' => 'Eure Gruppe löst diesen Monat drei gemeinsame Buchungen ein – jede:r in der Gruppe kann die Belohnung abholen.', 'metric' => 'group_bookings', 'target' => 3, 'reward_credits' => 150, 'period' => 'month'],
         ];
 
         // Geheime Challenges (11): erst sichtbar, wenn geschafft.
@@ -37,9 +37,9 @@ final class Examples
         foreach ([
             ['Zweimal raus', 'Zwei Besuche bei Partnern.', 'visits', 2, 40],
             ['Neuer Partner', 'Zwei verschiedene Partner besuchen.', 'distinct_partners', 2, 50],
-            ['Was buchen', 'Ein Angebot buchen.', 'bookings', 1, 40],
+            ['Was buchen', 'Ein Angebot buchen und einlösen.', 'bookings', 1, 40],
             ['Einlösen', 'Ein gebuchtes Angebot beim Partner einlösen.', 'redeemed', 1, 50],
-            ['Mit der Gruppe', 'Eine Buchung in einer deiner Gruppen.', 'group_bookings', 1, 60],
+            ['Mit der Gruppe', 'Eine Buchung in einer deiner Gruppen, eingelöst.', 'group_bookings', 1, 60],
         ] as [$title, $description, $metric, $target, $reward]) {
             $examples[] = ['type' => 'monthly', 'title' => 'Wahl: '.$title, 'description' => $description, 'metric' => $metric, 'target' => $target, 'reward_credits' => $reward, 'period' => 'month', 'is_choice' => true];
         }

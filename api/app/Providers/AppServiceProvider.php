@@ -180,5 +180,15 @@ class AppServiceProvider extends ServiceProvider
                 'ip' => RateLimitKeys::ip($request),
             ]));
         }
+
+        // Lesen (config/ratelimits.php): angemeldet je Konto, die zwei Routen ohne Token je Adresse.
+        foreach (['read', 'read-admin', 'admin-export'] as $class) {
+            RateLimiter::for($class, static fn (Request $request) => $limits($class, [
+                'user' => RateLimitKeys::user($request),
+            ]));
+        }
+        RateLimiter::for('read-public', static fn (Request $request) => $limits('read-public', [
+            'ip' => RateLimitKeys::ip($request),
+        ]));
     }
 }

@@ -802,6 +802,10 @@ CREATE TABLE IF NOT EXISTS content_reports (
   handled_by  BIGINT UNSIGNED NULL,
   handled_at  DATETIME        NULL,
   created_at  TIMESTAMP       NULL,
+  -- Was gemeldet wurde, im Moment der Meldung (Text, Verfasser:in, Gruppe; keine E-Mail-Adressen):
+  -- Der Inhalt kann gleich danach geloescht oder umbenannt sein (Laravel-Migration
+  -- 2026_10_08_000100_add_snapshot_to_content_reports, App\Http\Controllers\SafetyController).
+  snapshot    JSON            NULL,
   PRIMARY KEY (id),
   -- Dieselbe Person meldet dasselbe nur einmal – sonst waere die Liste im
   -- Admin-Panel mit einem Dauerdruck auf den Knopf zu fluten.

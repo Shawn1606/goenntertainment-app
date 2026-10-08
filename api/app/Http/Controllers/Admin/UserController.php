@@ -22,16 +22,19 @@ use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Nutzer verwalten: umbenennen, sperren (dauerhaft oder auf Zeit, mit
- * Beweisfoto), entsperren, loeschen - und Credits sowie Stempel ansehen und
- * korrigieren (Kulanz, Gewinnspiel, Fehlbuchung).
+ * Nutzer verwalten: umbenennen, Profilname und -bild zuruecksetzen, sperren
+ * (dauerhaft oder auf Zeit, mit Beweisfoto), entsperren, loeschen - und Credits
+ * sowie Stempel ansehen und korrigieren (Kulanz, Gewinnspiel, Fehlbuchung).
  *
- * Sperren, Umbenennen und Loeschen gehen nicht auf das EIGENE Konto - sonst
+ * Sperren, Umbenennen, Zuruecksetzen und Loeschen gehen nicht auf das EIGENE Konto - sonst
  * sperrt oder loescht sich ein Admin aus Versehen selbst aus. Credits und
  * Stempel dagegen schon: Das ist eine Korrektur, kein Rauswurf.
  */
 class UserController extends Controller
 {
+    /** Was ein zurueckgesetzter Profilname wird, wenn das Konto keinen Benutzernamen hat. */
+    public const NEUTRAL_NAME = 'Mitglied';
+
     /** GET /api/admin/users?q= */
     public function index(Request $request): JsonResponse
     {
@@ -75,6 +78,43 @@ class UserController extends Controller
         $user->forceFill(['username' => $data['username']])->save();
 
         return response()->json(['message' => 'Benutzername geändert.', 'username' => $user->username]);
+    }
+
+    /**
+     * POST /api/admin/users/{id}/clear-profile {name?: bool, avatar?: bool} - einen anstoessigen
+     * Profilnamen und/oder ein Profilbild zuruecksetzen. Der Name wird der Benutzername (den
+     * aendert PATCH /admin/users/{id}), ohne Benutzernamen NEUTRAL_NAME - leer darf die Spalte
+     * nicht sein. Das Profilbild wird entfernt und seine Datei geloescht.
+     */
+    public function clearProfile(Request $request, int $id): JsonResponse
+    {
+        $user = $this->target($request, $id);
+        $data = $request->validate([
+            'name' => ['sometimes', 'boolean'],
+            'avatar' => ['sometimes', 'boolean'],
+        ], ['name.*' => 'name: true oder false.', 'avatar.*' => 'avatar: true oder false.']);
+
+        $clearName = (bool) ($data['name'] ?? false);
+        $clearAvatar = (bool) ($data['avatar'] ?? false);
+        if (! $clearName && ! $clearAvatar) {
+            throw ValidationException::withMessages(['name' => ['Was soll zurückgesetzt werden? Name, Profilbild oder beides.']]);
+        }
+
+        $previousAvatar = $user->avatar;
+        if ($clearName) {
+            $user->forceFill(['name' => $user->username ?: self::NEUTRAL_NAME]);
+        }
+        if ($clearAvatar) {
+            $user->forceFill(['avatar' => null]);
+        }
+        $user->save();
+
+        // Die Datei erst nach dem Speichern: Scheitert das, zeigt das Konto nicht auf ein Loch.
+        if ($clearAvatar) {
+            Uploads::delete($previousAvatar);
+        }
+
+        return response()->json(['message' => 'Profil zurückgesetzt.', 'data' => $this->detail($request, $user->fresh())]);
     }
 
     /** POST /api/admin/users/{id}/ban {reason, evidence?} */

@@ -500,6 +500,7 @@ export async function ensureSchema() {
       handled_by  BIGINT UNSIGNED NULL,
       handled_at  DATETIME        NULL,
       created_at  TIMESTAMP       NULL,
+      snapshot    JSON            NULL,
       PRIMARY KEY (id),
       UNIQUE KEY content_reports_once_uq (reporter_id, target_type, target_id),
       KEY content_reports_status_idx (status, created_at),

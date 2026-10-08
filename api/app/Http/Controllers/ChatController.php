@@ -22,6 +22,8 @@ use Illuminate\Validation\ValidationException;
  * - Der Raum entsteht erst mit der ersten Nachricht (`ensureRoom`).
  * - Wer Mitglied ist, darf lesen und schreiben; alle anderen bekommen 404.
  * - Wer die Gruppe angelegt hat - und jeder Admin - darf jede Nachricht loeschen.
+ *   Ein Admin ausserhalb der Gruppe tut das im Admin-Bereich
+ *   (DELETE /api/admin/messages/{id}, Admin\ModerationController).
  * - Kein WebSocket: Die App holt mit `?after=<hoechste ID>` nach.
  * - Nachrichten blockierter Konten sieht nur, wer NICHT blockiert hat.
  *
@@ -80,21 +82,29 @@ class ChatController extends Controller
         $group = $this->groupFor($request, $id);
         $user = $request->user();
 
-        $body = self::clean((string) $request->input('body', ''));
-        $offerId = $request->input('offer_id');
+        // Erst die Form: Text bis MAX_LENGTH Zeichen, ein Angebot als Zahl. Eine Liste statt
+        // eines Textes war sonst ein 500. Gesaeubert wird danach - das kuerzt nur.
+        $data = $request->validate([
+            'body' => ['bail', 'nullable', 'string', 'max:'.self::MAX_LENGTH],
+            'offer_id' => ['bail', 'nullable', 'integer', 'min:1'],
+        ], [
+            'body.string' => 'Schreib etwas, bevor du sendest.',
+            'body.max' => 'Eine Nachricht fasst höchstens '.self::MAX_LENGTH.' Zeichen.',
+            'offer_id.*' => 'Dieses Angebot gibt es nicht mehr.',
+        ]);
+
+        $body = self::clean((string) ($data['body'] ?? ''));
         $offer = null;
 
-        if ($offerId !== null && $offerId !== '') {
-            $offer = Offer::bookable()->find((int) $offerId);
+        if (isset($data['offer_id'])) {
+            // Es gibt es nur, solange es buchbar ist (aktiv, beim aktiven Partner).
+            $offer = Offer::bookable()->find((int) $data['offer_id']);
             if ($offer === null) {
                 throw ValidationException::withMessages(['offer_id' => ['Dieses Angebot gibt es nicht mehr.']]);
             }
         }
         if ($body === '' && $offer === null) {
             throw ValidationException::withMessages(['body' => ['Schreib etwas, bevor du sendest.']]);
-        }
-        if (mb_strlen($body) > self::MAX_LENGTH) {
-            throw ValidationException::withMessages(['body' => ['Eine Nachricht fasst höchstens '.self::MAX_LENGTH.' Zeichen.']]);
         }
         // Gesperrte Begriffe: klar ablehnen statt maskieren.
         if ($body !== '' && BlockedTerms::default()->find($body, 'text') !== null) {

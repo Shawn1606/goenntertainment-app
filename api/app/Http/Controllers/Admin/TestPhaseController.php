@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Models\Offer;
 use App\Models\TestphaseChallenge;
+use App\Support\BusinessDay;
 use App\Support\Club;
 use App\Support\TestPhase\Board;
 use App\Support\TestPhase\Community;
@@ -162,7 +163,7 @@ class TestPhaseController extends Controller
             'title' => ['nullable', 'string', 'max:120'],
             'options' => ['required', 'array', 'min:2', 'max:3'],
             'options.*.offer_id' => ['required', 'integer'],
-            'options.*.day' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:today'],
+            'options.*.day' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:'.BusinessDay::today()],
         ], [
             'options.*' => 'Wähle 2 oder 3 Angebote.',
             'options.*.day.*' => 'Der Tag liegt in der Vergangenheit.',

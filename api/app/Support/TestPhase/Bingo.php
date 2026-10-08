@@ -4,6 +4,7 @@ namespace App\Support\TestPhase;
 
 use App\Models\Partner;
 use App\Models\User;
+use App\Support\BusinessDay;
 use App\Support\Media;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
@@ -34,12 +35,17 @@ final class Bingo
     /** Reihen, Spalten, Diagonalen - Indizes im 3x3-Feld. */
     public const LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
 
-    /** Aufgaben fuer die Felder ohne Partner: Titel, Beschreibung, Symbol. */
+    /**
+     * Aufgaben fuer die Felder ohne Partner: Titel, Beschreibung, Symbol.
+     *
+     * Buchungen zaehlen erst eingeloest: Eine offene liesse sich nach dem Abholen der
+     * Belohnung stornieren - Belohnung behalten, Credits voll zurueck.
+     */
     public const TASKS = [
         'morning' => ['Früher Vogel', 'Check-in vor 12 Uhr', 'clock'],
         'weekend' => ["Wochen\u{00AD}ende", 'Check-in am Samstag oder Sonntag', 'calendar'],
-        'group_booking' => ['Gruppe', 'Eine Gruppenbuchung', 'users'],
-        'credits_booking' => ['Mit Credits', 'Eine Buchung mit Credits bezahlt', 'coin'],
+        'group_booking' => ['Gruppe', 'Eine Gruppenbuchung eingelöst', 'users'],
+        'credits_booking' => ['Mit Credits', 'Eine mit Credits bezahlte Buchung eingelöst', 'coin'],
         'redeemed_perk' => ['Gratis-Angebot', 'Ein Gratis-Angebot eingelöst', 'gift'],
         'two_partners_day' => ['Doppelpack', 'Zwei Partner an einem Tag', 'stamp'],
         'new_partner' => ['Neuland', 'Erstbesuch bei einem Partner', 'sparkles'],
@@ -47,14 +53,16 @@ final class Bingo
     ];
 
     /**
-     * Das Feld dieses Monats mit Stand.
+     * Das Feld dieses Monats mit Stand. Monat, „vor 12 Uhr" und Wochenende gelten in Ortszeit
+     * (BusinessDay) - `$now` wird dorthin umgerechnet, die Grenzen fuer die Abfragen zurueck.
      *
      * @return array{period: string, cells: list<array<string, mixed>>, done_lines: list<int>, full: bool}
      */
     public static function board(User $user, CarbonInterface $now): array
     {
-        $from = $now->copy()->startOfMonth();
-        $to = $now->copy()->endOfMonth();
+        $now = BusinessDay::local($now);
+        $from = BusinessDay::stored($now->copy()->startOfMonth());
+        $to = BusinessDay::stored($now->copy()->endOfMonth());
         $period = $now->format('Y-m');
         $seed = $user->getKey().'-'.$period;
 
@@ -146,11 +154,13 @@ final class Bingo
     {
         $uid = $user->getKey();
         $stamps = fn () => DB::table('stamps')->where('user_id', $uid)->whereNotNull('partner_id')->whereBetween('created_at', [$from, $to]);
-        $bookings = fn () => DB::table('bookings')->where('user_id', $uid)->where('status', '!=', 'cancelled')->whereBetween('created_at', [$from, $to]);
+        // Nur eingeloeste (siehe TASKS), gezaehlt im Monat der Einloesung.
+        $bookings = fn () => DB::table('bookings')->where('user_id', $uid)->where('status', 'redeemed')->whereBetween('redeemed_at', [$from, $to]);
 
         return match ($task) {
-            'morning' => $stamps()->pluck('created_at')->contains(fn ($at) => \Illuminate\Support\Carbon::parse($at)->hour < 12),
-            'weekend' => $stamps()->pluck('created_at')->contains(fn ($at) => \Illuminate\Support\Carbon::parse($at)->isWeekend()),
+            // Uhrzeit und Wochentag in Ortszeit: 12:30 Uhr in Goettingen ist nicht „vor 12".
+            'morning' => $stamps()->pluck('created_at')->contains(fn ($at) => BusinessDay::local($at)->hour < 12),
+            'weekend' => $stamps()->pluck('created_at')->contains(fn ($at) => BusinessDay::local($at)->isWeekend()),
             'group_booking' => $bookings()->whereNotNull('group_id')->exists(),
             'credits_booking' => $bookings()->where('pay_method', 'credits')->exists(),
             'redeemed_perk' => DB::table('bookings')

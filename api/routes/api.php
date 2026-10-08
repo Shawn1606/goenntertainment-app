@@ -26,10 +26,11 @@ use Illuminate\Support\Facades\Route;
  * Seit dem Marktplatz-Umbau bedient Laravel ALLES - das Node-Backend (server/)
  * und die Rueckfall-Route dorthin gibt es nicht mehr. A path that is not listed here answers 404.
  *
- * Every write route has a named limiter (config/ratelimits.php): the sign-in, sign-up, password
- * and two-factor routes a per-account cap across client addresses, every other write its write
- * class. The route table and its limits are pinned in tests/Feature/RouteThrottleCoverageTest.php,
- * so a new route fails that test until it is listed there. `throttle` is
+ * Every route but the health probe and the sign-out has a named limiter (config/ratelimits.php):
+ * the sign-in, sign-up, password and two-factor routes a per-account cap across client addresses,
+ * every other write its write class, every read its read class. The route table and its limits
+ * are pinned in tests/Feature/RouteThrottleCoverageTest.php (which also says why those two have
+ * none), so a new route fails that test until it is listed there. `throttle` is
  * App\Http\Middleware\ThrottleRequestsExactly (bootstrap/app.php): it checks and counts each
  * counter under a lock, so a cap also holds for requests that arrive at the same time.
  */
@@ -62,14 +63,14 @@ Route::post('/register', [AuthController::class, 'register'])->middleware('throt
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 Route::post('/forgot-password', [PasswordController::class, 'forgot'])->middleware('throttle:password-forgot');
 Route::post('/reset-password', [PasswordController::class, 'reset'])->middleware('throttle:password-reset');
-Route::get('/interests', [InterestController::class, 'index']);
+Route::get('/interests', [InterestController::class, 'index'])->middleware('throttle:read-public');
 
 /*
 | Kalender-Datei einer Buchung - ohne Token, weil der Kalender des Handys den
 | Link selbst oeffnet. Geschuetzt durch eine Signatur im Link
 | (App\Support\BookingCalendar), die nur die App von der API bekommt.
 */
-Route::get('/bookings/{id}/calendar.ics', [BookingController::class, 'calendar'])->whereNumber('id');
+Route::get('/bookings/{id}/calendar.ics', [BookingController::class, 'calendar'])->whereNumber('id')->middleware('throttle:read-public');
 
 /*
 | Zwei-Faktor-Anmeldung, zweiter Schritt. OHNE `auth:sanctum` - genau hier gibt
@@ -90,9 +91,10 @@ Route::post('/login/two-factor/resend', [TwoFactorController::class, 'resendLogi
 */
 
 Route::middleware(['auth:sanctum', 'banned'])->group(function () {
-    // Konto
+    // Konto. Every read below takes the `read` class (per account); the sign-out has none on
+    // purpose: it only deletes the token it is sent with, and a refused sign-out would keep it.
     Route::post('/logout', [AuthController::class, 'logout']);
-    Route::get('/user', [AuthController::class, 'show']);
+    Route::get('/user', [AuthController::class, 'show'])->middleware('throttle:read');
     Route::patch('/user', [AuthController::class, 'update'])->middleware('throttle:profile');
     // The image goes through App\Support\Uploads: decoded and encoded again, without metadata.
     Route::post('/user/avatar', [AvatarController::class, 'store'])->middleware('throttle:avatar');
@@ -122,68 +124,68 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
         Route::delete('/user/two-factor', [TwoFactorController::class, 'disable']);
     });
 
-    // Marktplatz: Partner und Angebote. The quote computes a price and writes nothing.
-    Route::get('/offers', [MarketController::class, 'offers']);
-    Route::get('/offers/{offer}', [MarketController::class, 'offer']);
-    Route::post('/offers/{offer}/quote', [MarketController::class, 'quote']);
-    Route::get('/offers/{offer}/availability', [BookingController::class, 'availability']);
-    Route::get('/partners', [MarketController::class, 'partners']);
-    Route::get('/partners/{partner}', [MarketController::class, 'partner']);
+    // Marktplatz: Partner und Angebote. The quote computes a price and writes nothing: a read.
+    Route::get('/offers', [MarketController::class, 'offers'])->middleware('throttle:read');
+    Route::get('/offers/{offer}', [MarketController::class, 'offer'])->middleware('throttle:read');
+    Route::post('/offers/{offer}/quote', [MarketController::class, 'quote'])->middleware('throttle:read');
+    Route::get('/offers/{offer}/availability', [BookingController::class, 'availability'])->middleware('throttle:read');
+    Route::get('/partners', [MarketController::class, 'partners'])->middleware('throttle:read');
+    Route::get('/partners/{partner}', [MarketController::class, 'partner'])->middleware('throttle:read');
 
     // Buchungen. Whatever moves money or credits shares the `payments` limiter; redeeming at the
     // sticker shares `checkin` with the check-ins (both send a sticker's token).
-    Route::get('/bookings', [BookingController::class, 'index']);
+    Route::get('/bookings', [BookingController::class, 'index'])->middleware('throttle:read');
     Route::post('/bookings', [BookingController::class, 'store'])->middleware('throttle:payments');
-    Route::get('/bookings/{id}', [BookingController::class, 'show'])->whereNumber('id');
+    Route::get('/bookings/{id}', [BookingController::class, 'show'])->whereNumber('id')->middleware('throttle:read');
     Route::post('/bookings/{id}/cancel', [BookingController::class, 'cancel'])->whereNumber('id')->middleware('throttle:payments');
     Route::post('/bookings/{id}/redeem', [BookingController::class, 'redeem'])->whereNumber('id')->middleware('throttle:checkin');
     Route::post('/bookings/{id}/feedback', [BookingController::class, 'feedback'])->whereNumber('id')->middleware('throttle:payments');
 
     // Abzeichen
-    Route::get('/badges', [ClubController::class, 'badges']);
+    Route::get('/badges', [ClubController::class, 'badges'])->middleware('throttle:read');
 
     // Club, Credits, Gutscheine
-    Route::get('/club', [ClubController::class, 'show']);
+    Route::get('/club', [ClubController::class, 'show'])->middleware('throttle:read');
     Route::post('/club/subscribe', [ClubController::class, 'subscribe'])->middleware('throttle:payments');
     Route::post('/club/cancel', [ClubController::class, 'cancel'])->middleware('throttle:payments');
-    Route::get('/wallet', [ClubController::class, 'wallet']);
+    Route::get('/wallet', [ClubController::class, 'wallet'])->middleware('throttle:read');
     Route::post('/wallet/purchase', [ClubController::class, 'purchase'])->middleware('throttle:payments');
     Route::post('/wallet/redeem', [ClubController::class, 'redeem'])->middleware('throttle:voucher-redeem');
 
     // Funktions-Schalter (App\Support\Features) und das Stadt-Bingo, sobald es freigeschaltet ist.
-    Route::get('/features', [FeatureController::class, 'show']);
-    Route::get('/bingo', [FeatureController::class, 'bingo']);
+    Route::get('/features', [FeatureController::class, 'show'])->middleware('throttle:read');
+    Route::get('/bingo', [FeatureController::class, 'bingo'])->middleware('throttle:read');
     Route::post('/bingo/claim', [FeatureController::class, 'claimBingo'])->middleware('throttle:payments');
 
     // Stempelkarte und Check-in
-    Route::get('/stamps', [CheckinController::class, 'stamps']);
-    Route::get('/pass', [CheckinController::class, 'pass']);
+    Route::get('/stamps', [CheckinController::class, 'stamps'])->middleware('throttle:read');
+    Route::get('/pass', [CheckinController::class, 'pass'])->middleware('throttle:read');
     Route::post('/checkins', [CheckinController::class, 'store'])->middleware('throttle:checkin');
 
     // Partner-Modus (Mitarbeitende eines Partners)
-    Route::get('/partner/me', [PartnerStaffController::class, 'me']);
+    Route::get('/partner/me', [PartnerStaffController::class, 'me'])->middleware('throttle:read');
     Route::post('/partner/checkins', [PartnerStaffController::class, 'checkin'])->middleware('throttle:checkin');
-    Route::get('/partner/bookings', [PartnerStaffController::class, 'bookings']);
+    Route::get('/partner/bookings', [PartnerStaffController::class, 'bookings'])->middleware('throttle:read');
     Route::post('/partner/bookings/{id}/redeem', [PartnerStaffController::class, 'redeem'])->whereNumber('id')->middleware('throttle:checkin');
 
     // Gruppen und Gruppen-Chat
-    Route::get('/groups', [GroupController::class, 'index']);
+    Route::get('/groups', [GroupController::class, 'index'])->middleware('throttle:read');
     Route::post('/groups', [GroupController::class, 'store'])->middleware('throttle:write-content');
     Route::post('/groups/join', [GroupController::class, 'join'])->middleware('throttle:voucher-redeem');
     Route::get('/groups/invite/{code}', [GroupController::class, 'preview'])->middleware('throttle:voucher-redeem');
-    Route::get('/groups/{id}', [GroupController::class, 'show'])->whereNumber('id');
+    Route::get('/groups/{id}', [GroupController::class, 'show'])->whereNumber('id')->middleware('throttle:read');
     Route::patch('/groups/{id}', [GroupController::class, 'update'])->whereNumber('id')->middleware('throttle:write-content');
     Route::delete('/groups/{id}', [GroupController::class, 'destroy'])->whereNumber('id')->middleware('throttle:write-content');
     Route::post('/groups/{id}/invite-code', [GroupController::class, 'rotateCode'])->whereNumber('id')->middleware('throttle:write-content');
     Route::delete('/groups/{id}/members/{userId}', [GroupController::class, 'removeMember'])->whereNumber(['id', 'userId'])->middleware('throttle:write-content');
-    Route::get('/groups/{id}/messages', [ChatController::class, 'index'])->whereNumber('id');
+    Route::get('/groups/{id}/messages', [ChatController::class, 'index'])->whereNumber('id')->middleware('throttle:read');
     Route::post('/groups/{id}/messages', [ChatController::class, 'store'])->whereNumber('id')->middleware('throttle:chat-send');
     Route::post('/groups/{id}/read', [ChatController::class, 'read'])->whereNumber('id')->middleware('throttle:write-state');
     Route::delete('/messages/{id}', [ChatController::class, 'destroy'])->whereNumber('id')->middleware('throttle:write-content');
 
     // Melden und Blockieren
     Route::post('/reports', [SafetyController::class, 'report'])->middleware('throttle:write-report');
-    Route::get('/blocks', [SafetyController::class, 'blocks']);
+    Route::get('/blocks', [SafetyController::class, 'blocks'])->middleware('throttle:read');
     Route::post('/blocks', [SafetyController::class, 'block'])->middleware('throttle:write-block');
     Route::delete('/blocks/{userId}', [SafetyController::class, 'unblock'])->whereNumber('userId')->middleware('throttle:write-block');
 
@@ -193,29 +195,39 @@ Route::middleware(['auth:sanctum', 'banned'])->group(function () {
     |-----------------------------------------------------------------------
     |
     | Every admin write shares the `write-admin` limiter: it caps what a stolen admin token can do
-    | in a hurry.
+    | in a hurry. The admin reads share `read-admin`; the voucher codes have their own, tighter
+    | `admin-export` (every code there is worth credits).
     */
     Route::middleware('admin')->prefix('admin')->group(function () {
-        Route::get('/stats', [Admin\DashboardController::class, 'stats']);
-        Route::get('/bookings', [Admin\DashboardController::class, 'bookings']);
-        Route::get('/reports', [Admin\DashboardController::class, 'reports']);
-        Route::get('/users', [Admin\UserController::class, 'index']);
-        Route::get('/users/{id}', [Admin\UserController::class, 'show'])->whereNumber('id');
-        Route::get('/evidence', [Admin\UserController::class, 'evidence']);
-        // Evidence images live outside every public folder (App\Support\Uploads::PRIVATE_DISK);
-        // only this admin route reads them.
-        Route::get('/evidence-files/{file}', [Admin\UserController::class, 'evidenceFile'])
-            ->where('file', '[0-9a-f]{40}\.(jpg|png|webp)');
-        Route::get('/partners', [Admin\PartnerController::class, 'index']);
-        Route::get('/partners/{partner}', [Admin\PartnerController::class, 'show']);
-        Route::get('/offers', [Admin\OfferController::class, 'index']);
-        Route::get('/voucher-batches', [Admin\VoucherController::class, 'index']);
-        Route::get('/voucher-batches/{batch}/codes.csv', [Admin\VoucherController::class, 'csv']);
-        Route::get('/features', [Admin\FeatureController::class, 'show']);
-        Route::get('/testphase', [Admin\TestPhaseController::class, 'show']);
+        Route::middleware('throttle:read-admin')->group(function () {
+            Route::get('/stats', [Admin\DashboardController::class, 'stats']);
+            Route::get('/bookings', [Admin\DashboardController::class, 'bookings']);
+            Route::get('/reports', [Admin\DashboardController::class, 'reports']);
+            Route::get('/users', [Admin\UserController::class, 'index']);
+            Route::get('/users/{id}', [Admin\UserController::class, 'show'])->whereNumber('id');
+            Route::get('/evidence', [Admin\UserController::class, 'evidence']);
+            // Evidence images live outside every public folder (App\Support\Uploads::PRIVATE_DISK);
+            // only this admin route reads them.
+            Route::get('/evidence-files/{file}', [Admin\UserController::class, 'evidenceFile'])
+                ->where('file', '[0-9a-f]{40}\.(jpg|png|webp)');
+            Route::get('/partners', [Admin\PartnerController::class, 'index']);
+            Route::get('/partners/{partner}', [Admin\PartnerController::class, 'show']);
+            Route::get('/offers', [Admin\OfferController::class, 'index']);
+            Route::get('/voucher-batches', [Admin\VoucherController::class, 'index']);
+            Route::get('/features', [Admin\FeatureController::class, 'show']);
+            Route::get('/testphase', [Admin\TestPhaseController::class, 'show']);
+        });
+        Route::get('/voucher-batches/{batch}/codes.csv', [Admin\VoucherController::class, 'csv'])->middleware('throttle:admin-export');
 
         Route::middleware('throttle:write-admin')->group(function () {
             Route::patch('/reports/{id}', [Admin\DashboardController::class, 'updateReport'])->whereNumber('id');
+
+            // Moderation: any chat message, any group, a user's profile name and picture
+            // (Admin\ModerationController, Admin\UserController::clearProfile).
+            Route::delete('/messages/{id}', [Admin\ModerationController::class, 'destroyMessage'])->whereNumber('id');
+            Route::patch('/groups/{id}', [Admin\ModerationController::class, 'updateGroup'])->whereNumber('id');
+            Route::delete('/groups/{id}', [Admin\ModerationController::class, 'destroyGroup'])->whereNumber('id');
+            Route::post('/users/{id}/clear-profile', [Admin\UserController::class, 'clearProfile'])->whereNumber('id');
 
             Route::patch('/users/{id}', [Admin\UserController::class, 'rename'])->whereNumber('id');
             Route::post('/users/{id}/ban', [Admin\UserController::class, 'ban'])->whereNumber('id');

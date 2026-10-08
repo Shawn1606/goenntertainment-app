@@ -67,7 +67,20 @@ class BookingResource extends JsonResource
             // Kalender-Export: Pfad unter /api mit Signatur (App\Support\BookingCalendar).
             'calendar_path' => BookingCalendar::path($this->resource),
             // Testphase: Rueckmeldung an den Partner schon abgegeben?
-            'feedback_given' => $this->status === 'redeemed' && DB::table('booking_feedback')->where('booking_id', $this->id)->exists(),
+            'feedback_given' => $this->status === 'redeemed' && $this->feedbackGiven(),
         ];
+    }
+
+    /**
+     * Listen laden das mit (Booking::withFeedbackGiven) - nur eine einzelne
+     * Buchung fragt hier selbst nach.
+     */
+    private function feedbackGiven(): bool
+    {
+        $attributes = $this->resource->getAttributes();
+
+        return array_key_exists('feedback_given', $attributes)
+            ? (bool) $attributes['feedback_given']
+            : DB::table('booking_feedback')->where('booking_id', $this->id)->exists();
     }
 }

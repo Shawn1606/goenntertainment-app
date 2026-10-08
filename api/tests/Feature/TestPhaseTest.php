@@ -143,8 +143,9 @@ class TestPhaseTest extends MarketplaceTestCase
         $challenge = $this->challenge(['type' => 'group', 'metric' => 'group_bookings', 'target' => 2]);
         $offer = $this->offer($this->partner());
 
+        $bookings = [];
         foreach ([$friend, $friend] as $booker) {
-            Booking::create([
+            $bookings[] = Booking::create([
                 'code' => strtoupper(substr(md5((string) microtime(true).random_int(0, 9999)), 0, 8)),
                 'user_id' => $booker->id, 'offer_id' => $offer->id, 'partner_id' => $offer->partner_id, 'group_id' => $groupId,
                 'offer_title' => $offer->title, 'partner_name' => 'P', 'people' => 2, 'plan_key' => 'free', 'pay_method' => 'money',
@@ -152,9 +153,69 @@ class TestPhaseTest extends MarketplaceTestCase
             ]);
         }
 
+        // Gebucht allein zaehlt nicht - offene Buchungen lassen sich noch stornieren.
+        $c = collect($this->getJson('/api/admin/testphase')->json('data.challenges'))->firstWhere('id', $challenge->id);
+        $this->assertSame(0, $c['progress']);
+
+        foreach ($bookings as $booking) {
+            Bookings::redeem($booking);
+        }
         $c = collect($this->getJson('/api/admin/testphase')->json('data.challenges'))->firstWhere('id', $challenge->id);
         $this->assertSame(2, $c['progress']);
         $this->assertTrue($c['claim']['claimable']);
+    }
+
+    /**
+     * Buchen, Belohnung abholen, stornieren - Belohnung behalten, Credits voll zurueck: Das geht
+     * nicht mehr, weil Buchungen erst eingeloest zaehlen (Challenges wie Stadt-Bingo).
+     */
+    public function test_buchungen_zaehlen_erst_eingeloest_kein_buchen_abholen_stornieren(): void
+    {
+        $admin = $this->admin();
+        $offer = $this->offer($this->partner());
+        $challenge = $this->challenge(['metric' => 'bookings', 'target' => 1, 'reward_credits' => 40]);
+        Wallet::credit($admin, 1000, 'admin', 'Test');
+        $book = fn () => $this->postJson('/api/bookings', ['offer_id' => $offer->id, 'people' => 1, 'pay_method' => 'credits'])
+            ->assertCreated()
+            ->json('data.id');
+
+        // Gebucht, aber offen: keine Belohnung - die Buchung liesse sich danach noch stornieren.
+        $id = $book();
+        $this->postJson('/api/admin/testphase/claim', ['key' => 'challenge:'.$challenge->id])->assertStatus(422);
+        $this->postJson("/api/bookings/{$id}/cancel")->assertOk();
+        $this->assertSame(1000, $admin->fresh()->credits_balance);
+
+        // Erst eingeloest zaehlt sie - und dann laesst sie sich nicht mehr stornieren.
+        $id = $book();
+        Bookings::redeem(Booking::findOrFail($id));
+        $this->postJson('/api/admin/testphase/claim', ['key' => 'challenge:'.$challenge->id])->assertOk()->assertJsonPath('credits', 40);
+        $this->postJson("/api/bookings/{$id}/cancel")->assertStatus(422);
+        $this->assertSame(1000 - 450 + 40, $admin->fresh()->credits_balance);
+    }
+
+    /** Dasselbe im Stadt-Bingo: Gruppen- und Credits-Buchung zaehlen erst eingeloest. */
+    public function test_bingo_zaehlt_nur_eingeloeste_buchungen(): void
+    {
+        $admin = $this->admin();
+        // Ein pausierter Partner bekommt kein Feld: So liegen alle acht Aufgaben aus.
+        $offer = $this->offer($this->partner(['is_active' => false]));
+        $groupId = DB::table('friend_groups')->insertGetId(['owner_id' => $admin->id, 'name' => 'Crew', 'invite_code' => 'CREW5678', 'created_at' => now(), 'updated_at' => now()]);
+        $book = fn (string $status) => Booking::create([
+            'code' => strtoupper(substr(md5((string) microtime(true).random_int(0, 9999)), 0, 8)),
+            'user_id' => $admin->id, 'offer_id' => $offer->id, 'partner_id' => $offer->partner_id, 'group_id' => $groupId,
+            'offer_title' => $offer->title, 'partner_name' => 'P', 'people' => 2, 'plan_key' => 'free', 'pay_method' => 'credits',
+            'total_credits' => 900, 'status' => $status, 'redeemed_at' => $status === 'redeemed' ? now() : null, 'valid_until' => now()->addDays(30),
+        ]);
+        $done = fn (string $task) => collect($this->getJson('/api/admin/testphase')->json('data.bingo.cells'))->firstWhere('task', $task)['done'];
+
+        $book('confirmed');
+        $book('cancelled');
+        $this->assertFalse($done('credits_booking'));
+        $this->assertFalse($done('group_booking'));
+
+        $book('redeemed');
+        $this->assertTrue($done('credits_booking'));
+        $this->assertTrue($done('group_booking'));
     }
 
     public function test_wochenmission_gilt_nur_diese_woche(): void

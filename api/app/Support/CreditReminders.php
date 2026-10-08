@@ -59,7 +59,8 @@ final class CreditReminders
                     $sent++;
                 } catch (Throwable $e) {
                     // Mail kaputt? Dann beim naechsten Lauf erneut - nicht markieren.
-                    Log::warning('Verfall-Erinnerung nicht verschickt', ['user' => $userId, 'error' => $e->getMessage()]);
+                    // Nur die Klasse (F-38): Die Meldung eines Mail-Transports nennt den Empfaenger.
+                    Log::warning('Verfall-Erinnerung nicht verschickt', ['user_id' => $userId, 'exception' => $e::class]);
 
                     continue;
                 }

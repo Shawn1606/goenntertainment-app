@@ -137,7 +137,8 @@ final class Bookings
                 'total_credits' => $quote['total_credits'] ?? 0,
                 'status' => 'confirmed',
                 'preferred_date' => $preferredDate,
-                'valid_until' => now()->addDays(max(1, (int) $offer->valid_days))->endOfDay(),
+                // Bis Ende des Tages in Ortszeit - die App zeigt das deutsche Datum (BusinessDay).
+                'valid_until' => BusinessDay::endOfDayIn(max(1, (int) $offer->valid_days)),
                 'payment_id' => $payment?->getKey(),
             ]);
 
@@ -156,21 +157,47 @@ final class Bookings
     }
 
     /**
-     * Stornieren, solange nicht eingeloest. Credits kommen zurueck aufs Konto,
-     * Euro werden erstattet (im Testmodus nur vermerkt).
+     * Stornieren, solange nicht eingeloest und nicht abgelaufen. Credits kommen
+     * zurueck aufs Konto, Euro werden erstattet (im Testmodus nur vermerkt).
+     *
+     * ## Genau eine Erstattung
+     *
+     * Der Zustand wird unter der Sperre der Zeile NEU gelesen - nicht der, den
+     * der Controller vorher geladen hat. Sonst sahen ein Storno und ein Einloesen
+     * (oder zwei Stornos) gleichzeitig beide `confirmed`: Die eingeloeste Buchung
+     * kam erstattet zurueck, oder dieselbe Buchung zweimal. Erstattet wird nur
+     * beim Wechsel confirmed -> cancelled, und den gibt es je Buchung einmal.
+     *
+     * Abgelaufene Buchungen lassen sich nicht mehr stornieren: Die Erstattung
+     * oeffnete fuer laengst verfallene Credits eine neue Frist (Wallet::refund) -
+     * wer kurz vor dem Verfall bucht und spaeter storniert, behielte seine
+     * Credits sonst fuer immer.
      */
     public static function cancel(Booking $booking): Booking
     {
-        if ($booking->status !== 'confirmed') {
-            throw ValidationException::withMessages([
-                'booking' => [$booking->status === 'redeemed'
-                    ? 'Diese Buchung ist schon eingelöst.'
-                    : 'Diese Buchung ist schon storniert.'],
-            ]);
-        }
-
         return DB::transaction(function () use ($booking) {
-            $booking->update(['status' => 'cancelled', 'cancelled_at' => now()]);
+            self::lockAndReload($booking);
+
+            if ($booking->status !== 'confirmed') {
+                throw ValidationException::withMessages([
+                    'booking' => [$booking->status === 'redeemed'
+                        ? 'Diese Buchung ist schon eingelöst.'
+                        : 'Diese Buchung ist schon storniert.'],
+                ]);
+            }
+            if (! $booking->isOpen()) {
+                throw ValidationException::withMessages([
+                    'booking' => ['Diese Buchung ist abgelaufen und lässt sich nicht mehr stornieren.'],
+                ]);
+            }
+
+            // Nur der Wechsel aus `confirmed` erstattet - die Bedingung steht im UPDATE selbst.
+            $changed = Booking::whereKey($booking->getKey())
+                ->where('status', 'confirmed')
+                ->update(['status' => 'cancelled', 'cancelled_at' => now()]);
+            if ($changed !== 1) {
+                throw ValidationException::withMessages(['booking' => ['Diese Buchung ist schon storniert.']]);
+            }
 
             if ($booking->pay_method === 'credits' && $booking->total_credits > 0 && $booking->user) {
                 // Zurueck auf die Posten, aus denen bezahlt wurde - mit ihrer alten
@@ -199,22 +226,43 @@ final class Bookings
         });
     }
 
-    /** Einloesen - vom Kunden am Aufkleber oder vom Partner nach dem Pass-Scan. */
+    /**
+     * Einloesen - vom Kunden am Aufkleber oder vom Partner nach dem Pass-Scan.
+     * Wie beim Storno zaehlt der Zustand unter der Sperre der Zeile, nicht der
+     * vorher geladene: Eine Buchung, die gerade storniert wird, wird nicht
+     * zugleich eingeloest.
+     */
     public static function redeem(Booking $booking, ?User $by = null): Booking
     {
-        if (! $booking->isOpen()) {
-            throw ValidationException::withMessages([
-                'booking' => [match ($booking->displayStatus()) {
-                    'redeemed' => 'Diese Buchung ist schon eingelöst.',
-                    'cancelled' => 'Diese Buchung ist storniert.',
-                    default => 'Diese Buchung ist abgelaufen.',
-                }],
-            ]);
-        }
+        return DB::transaction(function () use ($booking, $by) {
+            self::lockAndReload($booking);
 
-        $booking->update(['status' => 'redeemed', 'redeemed_at' => now(), 'redeemed_by' => $by?->getKey()]);
+            if (! $booking->isOpen()) {
+                throw ValidationException::withMessages([
+                    'booking' => [match ($booking->displayStatus()) {
+                        'redeemed' => 'Diese Buchung ist schon eingelöst.',
+                        'cancelled' => 'Diese Buchung ist storniert.',
+                        default => 'Diese Buchung ist abgelaufen.',
+                    }],
+                ]);
+            }
 
-        return $booking;
+            $booking->update(['status' => 'redeemed', 'redeemed_at' => now(), 'redeemed_by' => $by?->getKey()]);
+
+            return $booking;
+        });
+    }
+
+    /**
+     * Im laufenden DB-Vorgang: Die Zeile der Buchung sperren und ihren Stand in
+     * `$booking` uebernehmen. Geladene Beziehungen (Partner, Angebot) bleiben.
+     */
+    private static function lockAndReload(Booking $booking): void
+    {
+        $locked = Booking::whereKey($booking->getKey())->lockForUpdate()->first();
+        abort_if($locked === null, 404, 'Diese Buchung gibt es nicht.');
+
+        $booking->setRawAttributes($locked->getAttributes(), true);
     }
 
     /**

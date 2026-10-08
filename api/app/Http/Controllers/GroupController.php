@@ -10,6 +10,7 @@ use App\Rules\NoBlockedTerms;
 use App\Support\Codes;
 use App\Support\Format;
 use App\Support\Media;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -122,8 +123,19 @@ class GroupController extends Controller
         $group = $this->byCode($data['code']);
         $user = $request->user();
 
-        if (! $group->hasMember($user->getKey())) {
-            if ($group->members()->count() >= Group::MAX_MEMBERS) {
+        DB::transaction(function () use ($group, $user) {
+            // Die Gruppe sperren und die Mitglieder unter der Sperre lesen: Zwei Beitritte
+            // gleichzeitig zaehlten sonst dieselben Mitglieder und kaemen zusammen ueber
+            // MAX_MEMBERS, und ein Doppeltipp liefe in den doppelten Schluessel (500).
+            Group::whereKey($group->getKey())->lockForUpdate()->value('id');
+            $members = DB::table('group_members')->where('group_id', $group->getKey())->lockForUpdate()->pluck('user_id')
+                ->map(fn ($id) => (int) $id);
+
+            // Schon Mitglied (auch: der zweite Tipp eines Doppeltipps) - nichts zu tun.
+            if ($members->contains($user->getKey())) {
+                return;
+            }
+            if ($members->count() >= Group::MAX_MEMBERS) {
                 throw ValidationException::withMessages(['code' => ['Diese Gruppe ist voll ('.Group::MAX_MEMBERS.' Leute).']]);
             }
             $blocked = DB::table('user_blocks')
@@ -133,8 +145,15 @@ class GroupController extends Controller
             if ($blocked) {
                 throw ValidationException::withMessages(['code' => ['Dieser Gruppe kannst du nicht beitreten.']]);
             }
-            $group->members()->attach($user->getKey(), ['created_at' => now()]);
-        }
+
+            try {
+                // Eigener Sicherungspunkt: Scheitert nur dieser INSERT am Schluessel, ist die
+                // Person eben schon drin - kein Fehler.
+                DB::transaction(fn () => $group->members()->attach($user->getKey(), ['created_at' => now()]));
+            } catch (UniqueConstraintViolationException) {
+                // Schon Mitglied.
+            }
+        });
 
         return response()->json(['data' => $this->present($request, $group->load('members'))]);
     }
@@ -268,6 +287,7 @@ class GroupController extends Controller
 
         if ($withBookings) {
             $data['bookings'] = Booking::with(['partner', 'offer', 'group', 'user'])
+                ->withFeedbackGiven()
                 ->where('group_id', $group->id)
                 ->orderByDesc('id')
                 ->limit(20)
