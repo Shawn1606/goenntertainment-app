@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useRouter } from 'expo-router';
 import { useEffect } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { Mascot } from '@/components/mascot';
 import { PlanBadge } from '@/components/plan-badge';
@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { ListRow, ListSection } from '@/components/ui/list-row';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { FontFamily, MaxContentWidth, Night, PlanLook, Radius, Spacing, Stroke } from '@/constants/theme';
 import { formatCredits, planFor } from '@/domain/club';
 import { initialsOf } from '@/domain/initials';
@@ -35,10 +36,11 @@ export default function AccountScreen() {
   const { user, logout } = useAuth();
   const market = useMarket();
 
+  // `refreshClub` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  const { refreshClub } = market;
   useEffect(() => {
-    void market.refreshClub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void refreshClub();
+  }, [refreshClub]);
 
   if (!user) return null;
 
@@ -54,7 +56,7 @@ export default function AccountScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: 'Konto' }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <PullToCloseScroll contentContainerStyle={styles.content}>
         <LinearGradient colors={[...Night.gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
           <PressableScale onPress={() => router.push('/profile')} accessibilityRole="button" accessibilityLabel="Profil bearbeiten" scaleTo={0.96}>
             <View style={[styles.avatarRing, { borderColor: look.ring }]}>
@@ -117,7 +119,7 @@ export default function AccountScreen() {
           <Icon name="logout" size={18} color="#e11d48" />
           <Text style={styles.logoutText}>Abmelden</Text>
         </PressableScale>
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }

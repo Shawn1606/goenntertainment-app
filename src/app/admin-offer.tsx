@@ -144,19 +144,24 @@ export default function AdminOfferScreen() {
       daily_capacity: numberOrNull(draft.daily_capacity),
       platinum_reserved: numberOrNull(draft.platinum_reserved) ?? 0,
     };
+    // Entscheidungen vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const save = () => (offer ? api.admin.updateOffer(token, offer.id, input) : api.admin.createOffer(token, input));
     try {
-      const { data } = offer ? await api.admin.updateOffer(token, offer.id, input) : await api.admin.createOffer(token, input);
+      const { data } = await save();
       apply(data);
       void market.refresh();
       if (!offer) router.setParams({ id: String(data.id) });
       await notifyUser('Gespeichert', 'Das Angebot ist aktualisiert.');
     } catch (e) {
-      const err = e as { errors?: Record<string, string[]> };
-      setErrors(err.errors ?? {});
-      await notifyUser('Nicht gespeichert', errorMessage(e));
-    } finally {
-      setSaving(false);
+      await showSaveError(e);
     }
+    setSaving(false);
+  };
+
+  const showSaveError = async (e: unknown) => {
+    const err = e as { errors?: Record<string, string[]> };
+    setErrors(err.errors ?? {});
+    await notifyUser('Nicht gespeichert', errorMessage(e));
   };
 
   const upload = async () => {

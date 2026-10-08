@@ -3,12 +3,13 @@ import { Image } from 'expo-image';
 import { Stack, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
-import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, Text, View } from 'react-native';
 
 import { InterestPicker, type InterestPickerPalette } from '@/components/interest-picker';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { ListNote, ListRow, ListSection, ListSwitch } from '@/components/ui/list-row';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { Links, supportMailto } from '@/constants/links';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
 import { initialsOf } from '@/domain/initials';
@@ -76,7 +77,7 @@ export default function SettingsScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: 'Einstellungen' }} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <PullToCloseScroll contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <ListSection title="Profil">
           <ListRow
             first
@@ -145,6 +146,16 @@ export default function SettingsScreen() {
           <ListSwitch icon="star" title="Saison-Deko" hint="Kürbisse, Christbaumkugeln & Co. passend zur Jahreszeit" value={settings.seasonalDecor} onValueChange={(v) => update('seasonalDecor', v)} />
           <ListSwitch icon="contrast" title="Wie das Handy (hell/dunkel)" value={followsSystem} onValueChange={(on) => (on ? followSystem() : setDark(isDark))} />
           <ListSwitch icon="moon" title="Dunkles Design" hint={followsSystem ? 'Bestimmt gerade dein Handy' : undefined} value={isDark} onValueChange={setDark} disabled={followsSystem} />
+          {/* Messwerkzeug: nur für Admins und im Entwicklungs-Build (Expo Go). */}
+          {user?.is_admin || __DEV__ ? (
+            <ListSwitch
+              icon="chart"
+              title="Leistungsanzeige"
+              hint="Bilder pro Sekunde oben links – UI- und JS-Takt"
+              value={settings.perfMeter}
+              onValueChange={(v) => update('perfMeter', v)}
+            />
+          ) : null}
         </ListSection>
 
         <ListSection title="Privatsphäre">
@@ -174,7 +185,7 @@ export default function SettingsScreen() {
           <ListRow first icon="logout" title="Abmelden" onPress={onLogout} danger />
           <ListRow icon="trash" title="Konto löschen" hint="Konto, Credits und Stempel endgültig entfernen" onPress={() => router.push('/security/delete-account')} danger />
         </ListSection>
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }
@@ -221,9 +232,8 @@ function InterestsSection() {
       setEditing(false);
     } catch (e) {
       setError(e instanceof ApiError ? e.firstError() : 'Speichern fehlgeschlagen. Bitte erneut versuchen.');
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   const interests = user?.interests ?? [];

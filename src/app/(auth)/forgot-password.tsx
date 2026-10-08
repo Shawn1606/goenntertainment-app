@@ -48,9 +48,8 @@ export default function ForgotPasswordScreen() {
           ? err.firstError()
           : 'Etwas ist schiefgelaufen. Bitte versuch es später erneut.',
       );
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   return (

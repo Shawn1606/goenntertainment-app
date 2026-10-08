@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { useCelebrate } from '@/components/celebration';
 import { Mascot } from '@/components/mascot';
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { QrCode } from '@/components/ui/qr-code';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
 import { formatCredits } from '@/domain/club';
@@ -46,7 +47,7 @@ export default function CheckinScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: mode === 'pass' ? 'Mein Pass' : 'Einchecken' }} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <PullToCloseScroll contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={[styles.segment, { borderColor: colors.border, backgroundColor: colors.background }]}>
           {(['scan', 'pass'] as const).map((m) => {
             const active = mode === m;
@@ -69,7 +70,7 @@ export default function CheckinScreen() {
         ) : (
           <PassPanel />
         )}
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }
@@ -142,9 +143,8 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
         setError(errorMessage(e, 'Das hat nicht geklappt.'));
         handled.current = false;
         setDone(false);
-      } finally {
-        setBusy(false);
       }
+      setBusy(false);
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [token, bookingId],

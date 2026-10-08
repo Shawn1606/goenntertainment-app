@@ -79,9 +79,8 @@ export default function ChatScreen() {
       if (res.data.length > 0) api.markRead(token, groupId, cursor.current).catch(() => {});
     } catch (err) {
       setError(err instanceof ApiError && err.status === 404 ? 'Diesen Chat gibt es nicht mehr.' : 'Der Chat ließ sich nicht laden.');
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, [token, groupId]);
 
   const pollOnce = useCallback(async () => {
@@ -96,9 +95,8 @@ export default function ChatScreen() {
       setRoom(res.room);
     } catch {
       // Ein fehlgeschlagener Tick bleibt still.
-    } finally {
-      polling.current = false;
     }
+    polling.current = false;
   }, [token, groupId, remember]);
 
   useFocusEffect(
@@ -128,9 +126,8 @@ export default function ChatScreen() {
       feedback.failed();
       setDraft(text);
       setError(errorMessage(err, 'Die Nachricht ging nicht raus.'));
-    } finally {
-      setSending(false);
     }
+    setSending(false);
   }
 
   const menuOptions = useMemo<SheetOption[]>(() => {

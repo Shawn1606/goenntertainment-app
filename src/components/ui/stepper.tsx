@@ -10,6 +10,9 @@ import { useTheme } from '@/hooks/use-theme';
  *
  * Kein Textfeld: Eine Zahl zwischen 1 und 50 tippt niemand gern, und ohne
  * Tastatur bleibt der Preis darunter die ganze Zeit sichtbar.
+ *
+ * Mit `unset` gibt es oben rechts ein ×, das sofort zurück auf „egal" springt –
+ * sonst müsste man von 30 aus dreißigmal Minus tippen.
  */
 export function Stepper({
   value,
@@ -50,7 +53,22 @@ export function Stepper({
 
   return (
     <View style={[styles.box, compact && styles.boxCompact, { borderColor: colors.border, backgroundColor: colors.background }]}>
-      <Text style={[styles.label, { color: colors.textSecondary }]}>{label}</Text>
+      <View style={styles.head}>
+        <Text style={[styles.label, { color: colors.textSecondary }]} numberOfLines={1}>
+          {label}
+        </Text>
+        {unset !== undefined && value !== null ? (
+          <PressableScale
+            onPress={() => onChange(null)}
+            haptic="select"
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={`${label} auf ${unset} stellen`}
+            style={[styles.clear, { backgroundColor: colors.backgroundSelected }]}>
+            <Icon name="close" size={12} color={colors.text} />
+          </PressableScale>
+        ) : null}
+      </View>
       <View style={styles.row}>
         <Round icon="minus" onPress={down} disabled={!canDown} label={`${label} verringern`} compact={compact} />
         <Text numberOfLines={1} style={[styles.value, compact && styles.valueCompact, { color: value === null ? colors.textSecondary : colors.text }]} accessibilityLiveRegion="polite">
@@ -84,7 +102,10 @@ const styles = StyleSheet.create({
   box: { borderWidth: Stroke, borderRadius: Radius.card, padding: Spacing.three, gap: Spacing.two },
   /** Zwei nebeneinander teilen sich die Breite. */
   boxCompact: { flex: 1, minWidth: 0, padding: 12 },
-  label: { fontFamily: FontFamily.semibold, fontSize: 13 },
+  /** Feste Höhe: Das × darf beim Erscheinen nichts verschieben. */
+  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 6, minHeight: 22 },
+  label: { fontFamily: FontFamily.semibold, fontSize: 13, flexShrink: 1 },
+  clear: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   value: { fontFamily: FontFamily.bold, fontSize: 24, minWidth: 64, textAlign: 'center' },
   valueCompact: { fontSize: 20, minWidth: 0, flexShrink: 1 },

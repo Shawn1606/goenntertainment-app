@@ -14,8 +14,10 @@ import { ShareOfferSheet } from '@/components/share-offer-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CategoryIcon } from '@/components/ui/category-icon';
+import { ChoiceChip } from '@/components/ui/choice-chip';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { Stepper } from '@/components/ui/stepper';
 import { BrandGradient, FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
 import { applyHappyHour, formatCredits, formatEuro, formatPercent, happyHourPercent, planFor, quoteCredits, quoteMoney } from '@/domain/club';
@@ -222,9 +224,8 @@ export default function OfferScreen() {
     } catch (e) {
       feedback.failed();
       await notifyUser('Buchung hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBooking(false);
     }
+    setBooking(false);
   };
 
   return (
@@ -236,7 +237,7 @@ export default function OfferScreen() {
           title: offer.title,
         }}
       />
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}>
+      <PullToCloseScroll knobTop={insets.top + 60} contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}>
         <View style={styles.hero}>
           {offer.image_url ? (
             <Image source={{ uri: offer.image_url }} style={StyleSheet.absoluteFill} contentFit="cover" />
@@ -361,9 +362,9 @@ export default function OfferScreen() {
               <View style={styles.block}>
                 <Text style={[styles.label, { color: colors.textSecondary }]}>Für eine Gruppe?</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-                  <Pick label="Nur ich" active={groupId === null} onPress={() => setGroupId(null)} />
+                  <ChoiceChip label="Nur ich" active={groupId === null} onPress={() => setGroupId(null)} />
                   {market.groups.map((g) => (
-                    <Pick
+                    <ChoiceChip
                       key={g.id}
                       label={g.name}
                       active={groupId === g.id}
@@ -381,7 +382,7 @@ export default function OfferScreen() {
               <Text style={[styles.label, { color: colors.textSecondary }]}>Wann ungefähr?</Text>
               <View style={styles.chipsWrap}>
                 {choices.map((c) => (
-                  <Pick key={c.key} label={c.label} active={date === c.value} onPress={() => setDate(c.value)} />
+                  <ChoiceChip key={c.key} label={c.label} active={date === c.value} onPress={() => setDate(c.value)} />
                 ))}
               </View>
               {seatsHint ? <Text style={[styles.hintLine, { color: colors.textSecondary }]}>{seatsHint}</Text> : null}
@@ -450,7 +451,7 @@ export default function OfferScreen() {
           <Button title="In Gruppe teilen" variant="secondary" icon="share" onPress={() => setSharing(true)} />
           <Button title="Angebot melden" variant="ghost" size="small" icon="flag" onPress={() => setReporting(true)} />
         </View>
-      </ScrollView>
+      </PullToCloseScroll>
 
       {/* Fester Buchen-Knopf unten */}
       <View
@@ -488,25 +489,6 @@ export default function OfferScreen() {
   );
 }
 
-function Pick({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  const colors = useTheme();
-  return (
-    <PressableScale
-      onPress={onPress}
-      haptic="select"
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      style={[
-        styles.pick,
-        {
-          borderColor: active ? colors.tint : colors.border,
-          backgroundColor: active ? colors.tint : colors.background,
-        },
-      ]}>
-      <Text style={[styles.pickText, { color: active ? '#ffffff' : colors.text }]}>{label}</Text>
-    </PressableScale>
-  );
-}
 
 function Line({ label, value, good, muted }: { label: string; value: string; good?: boolean; muted?: boolean }) {
   const colors = useTheme();
@@ -617,13 +599,6 @@ const styles = StyleSheet.create({
   label: { fontFamily: FontFamily.semibold, fontSize: 13 },
   chips: { gap: Spacing.two },
   chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  pick: {
-    borderWidth: Stroke,
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 7,
-  },
-  pickText: { fontFamily: FontFamily.semibold, fontSize: 13.5 },
   breakdown: {
     borderWidth: Stroke,
     borderStyle: 'dashed',

@@ -637,6 +637,15 @@ export function errorMessage(error: unknown, fallback = 'Bitte versuch es gleich
   return error instanceof ApiError ? error.firstError() : fallback;
 }
 
+/**
+ * Fehler je Eingabefeld, wie ein Formular sie zeigt. Ohne Feldangaben landet die
+ * Meldung bei `field` – so steht nie ein Fehler ohne Platz da.
+ */
+export function fieldErrors(error: unknown, field: string): Record<string, string[]> {
+  if (!(error instanceof ApiError)) return { [field]: ['Unbekannter Fehler.'] };
+  return Object.keys(error.errors).length > 0 ? error.errors : { [field]: [error.firstError()] };
+}
+
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;

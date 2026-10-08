@@ -48,9 +48,8 @@ export default function JoinScreen() {
       router.replace({ pathname: '/group/[id]', params: { id: String(data.id), created: '1' } });
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setJoining(false);
     }
+    setJoining(false);
   };
 
   return (

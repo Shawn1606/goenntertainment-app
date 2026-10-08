@@ -13,6 +13,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { DEFAULT_FEATURES, isSeasonKey, type BingoState, type FeatureState } from '@/domain/features';
+import { keepIfSame } from '@/domain/same-data';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -38,6 +39,15 @@ export function useFeatures(): FeaturesValue {
   return useContext(FeaturesContext);
 }
 
+/**
+ * Die Schalter aus der Server-Antwort; ein unbekanntes Saison-Thema zählt als keins.
+ * Außerhalb der Komponente: Eine Bedingung in einem `try` kann der React Compiler
+ * nicht übersetzen, und dann bliebe der ganze Provider unübersetzt.
+ */
+function featuresFrom(data: { bingo?: unknown; season?: unknown }): FeatureState {
+  return { bingo: data.bingo === true, season: isSeasonKey(data.season) ? data.season : null };
+}
+
 export function FeaturesProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth();
   const [features, setFeatures] = useState<FeatureState>(DEFAULT_FEATURES);
@@ -47,7 +57,7 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
     if (!token) return;
     try {
       const { data } = await api.features(token);
-      setFeatures({ bingo: data.bingo === true, season: isSeasonKey(data.season) ? data.season : null });
+      setFeatures((prev) => keepIfSame(prev, featuresFrom(data)));
     } catch {
       // Ohne Antwort bleibt der letzte Stand – Schalter sind nie lebenswichtig.
     }
@@ -69,7 +79,7 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
     api
       .features(token)
       .then(({ data }) => {
-        if (active) setFeatures({ bingo: data.bingo === true, season: isSeasonKey(data.season) ? data.season : null });
+        if (active) setFeatures((prev) => keepIfSame(prev, featuresFrom(data)));
       })
       .catch(() => {});
     return () => {

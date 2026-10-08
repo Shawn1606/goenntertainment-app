@@ -128,23 +128,43 @@ export function LoginPanel({ active, onBack }: Props) {
     // Der Auth-Gate wechselt jetzt automatisch in die App.
   }
 
+  /** Das Passwort stimmte, jetzt fehlt der Code (Zwei-Faktor-Anmeldung). */
+  function askForCode(pending: TwoFactorChallenge) {
+    setChallenge(pending);
+    setCode('');
+    setResendIn(pending.method === 'email' ? 60 : 0);
+  }
+
+  // Die try-Blöcke unten bleiben bewusst ohne `finally` und ohne Bedingungen
+  // (`?:`, `&&`): Beides kann der React Compiler nicht übersetzen, und dann bliebe
+  // die ganze Karte unoptimiert – jeder Tastendruck zeichnete sie komplett neu.
   async function onSubmit() {
     setLoading(true);
     setErrors({});
     setGeneralError(null);
     try {
       const pending = await login(email.trim(), password);
-      if (pending) {
-        setChallenge(pending);
-        setCode('');
-        setResendIn(pending.method === 'email' ? 60 : 0);
-        return;
-      }
-      await finishLogin();
+      if (pending) askForCode(pending);
+      else await finishLogin();
     } catch (error) {
       showError(error);
-    } finally {
-      setLoading(false);
+    }
+    setLoading(false);
+  }
+
+  /**
+   * Abgelaufen oder zu viele Versuche: Der Beleg ist verbraucht, es geht nur mit
+   * einer neuen Anmeldung weiter. Dann zurück zum Passwort, statt ein Code-Feld
+   * stehen zu lassen, das nie mehr funktionieren kann.
+   */
+  function showCodeError(error: unknown) {
+    if (error instanceof ApiError && error.errors.challenge) {
+      setChallenge(null);
+      setGeneralError(error.firstError());
+    } else if (error instanceof ApiError && Object.keys(error.errors).length === 0) {
+      setErrors({ code: [error.firstError()] });
+    } else {
+      showError(error);
     }
   }
 
@@ -162,22 +182,9 @@ export function LoginPanel({ active, onBack }: Props) {
       await completeTwoFactor(challenge.challenge, value);
       await finishLogin();
     } catch (error) {
-      // Abgelaufen oder zu viele Versuche: Der Beleg ist verbraucht, es geht nur
-      // mit einer neuen Anmeldung weiter. Dann zurück zum Passwort, statt ein
-      // Code-Feld stehen zu lassen, das nie mehr funktionieren kann.
-      if (error instanceof ApiError && error.errors.challenge) {
-        setChallenge(null);
-        setGeneralError(error.firstError());
-        return;
-      }
-      if (error instanceof ApiError && Object.keys(error.errors).length === 0) {
-        setErrors({ code: [error.firstError()] });
-        return;
-      }
-      showError(error);
-    } finally {
-      setLoading(false);
+      showCodeError(error);
     }
+    setLoading(false);
   }
 
   async function onResend() {

@@ -58,14 +58,15 @@ export default function TwoFactorScreen() {
   async function run<T>(work: () => Promise<T>): Promise<T | null> {
     setBusy(true);
     setError(null);
+    // Ohne `finally`: Damit kann der React Compiler die Seite nicht übersetzen.
+    let result: T | null = null;
     try {
-      return await work();
+      result = await work();
     } catch (e) {
       setError(e instanceof ApiError ? e.firstError() : 'Etwas ist schiefgelaufen. Bitte versuch es noch mal.');
-      return null;
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
+    return result;
   }
 
   async function startEmail() {

@@ -182,9 +182,8 @@ function CreditsPanel({ user, token, onChanged }: { user: AdminUserDetail; token
       setNote('');
     } catch (e) {
       await notifyUser('Nicht gebucht', errorMessage(e));
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
 
   return (
@@ -254,9 +253,8 @@ function StampsPanel({ user, token, onChanged }: { user: AdminUserDetail; token:
       }
     } catch (e) {
       await notifyUser('Nicht geändert', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   return (

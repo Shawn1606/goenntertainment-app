@@ -80,9 +80,8 @@ export default function ResetPasswordScreen() {
       setDone(true);
     } catch (error) {
       showError(error);
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   async function onResend() {

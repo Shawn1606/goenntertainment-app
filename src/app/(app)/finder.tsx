@@ -3,19 +3,21 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { MascotEmpty } from '@/components/mascot';
+import { useDockScroll } from '@/components/mascot-dock';
 import { OfferRow } from '@/components/offer-card';
 import { useGarlandSpace } from '@/components/seasonal-decor';
 import { TopBar } from '@/components/top-bar';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CategoryIcon } from '@/components/ui/category-icon';
+import { ChoiceChip } from '@/components/ui/choice-chip';
 import { Entrance } from '@/components/ui/entrance';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Stepper } from '@/components/ui/stepper';
 import { FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
 import { discountFor, formatEuro, formatPercent, planFor } from '@/domain/club';
-import { DEFAULT_CRITERIA, NO_ACCESS_NEEDS, normalizeAges, rankOffers, type AccessNeeds, type FinderCriteria, type Setting } from '@/domain/offer-match';
+import { DEFAULT_CRITERIA, NO_ACCESS_NEEDS, formatAgeRange, normalizeAges, rankOffers, type AccessNeeds, type FinderCriteria, type Setting } from '@/domain/offer-match';
 import { matchesQuery, sortMatches, type FinderSort } from '@/domain/offer-search';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
@@ -77,6 +79,7 @@ export default function FinderScreen() {
   const market = useMarket();
   const params = useLocalSearchParams<{ group?: string }>();
   const garland = useGarlandSpace();
+  const dockScroll = useDockScroll();
 
   const [criteria, setCriteria] = useState<FinderCriteria>(DEFAULT_CRITERIA);
   const [groupId, setGroupId] = useState<number | null>(null);
@@ -129,6 +132,8 @@ export default function FinderScreen() {
 
   const access = criteria.access ?? NO_ACCESS_NEEDS;
   const toggleAccess = (key: keyof AccessNeeds) => set('access', { ...access, [key]: !access[key] });
+  const ages = formatAgeRange(criteria.youngest, criteria.oldest);
+  const clearAges = () => setCriteria((p) => ({ ...p, youngest: null, oldest: null }));
   const moreCount =
     (criteria.budgetPerPersonCents !== null ? 1 : 0) +
     (criteria.setting !== 'any' ? 1 : 0) +
@@ -143,9 +148,7 @@ export default function FinderScreen() {
       label: interestById.get(id)?.name ?? 'Kategorie',
       clear: () => set('interestIds', criteria.interestIds.filter((x) => x !== id)),
     })),
-    ...(criteria.youngest !== null || criteria.oldest !== null
-      ? [{ key: 'age', label: `Alter ${criteria.youngest ?? '?'}–${criteria.oldest ?? '?'}`, clear: () => setCriteria((p) => ({ ...p, youngest: null, oldest: null })) }]
-      : []),
+    ...(ages ? [{ key: 'age', label: `Alter ${ages}`, clear: clearAges }] : []),
     ...(criteria.budgetPerPersonCents !== null
       ? [{ key: 'b', label: `bis ${formatEuro(criteria.budgetPerPersonCents)} p. P.`, clear: () => set('budgetPerPersonCents', null) }]
       : []),
@@ -174,7 +177,13 @@ export default function FinderScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <TopBar />
-      <ScrollView style={styles.flex} contentContainerStyle={[styles.content, { paddingTop: Spacing.three + garland }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={[styles.content, { paddingTop: Spacing.three + garland }]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        onScroll={dockScroll}
+        scrollEventThrottle={32}>
         <View style={styles.column}>
           <View style={styles.head}>
             <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">
@@ -253,9 +262,9 @@ export default function FinderScreen() {
           <Card style={styles.panel}>
             {market.groups.length > 0 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll} contentContainerStyle={styles.chips}>
-                <Choice label="Ohne Gruppe" active={groupId === null} onPress={() => chooseGroup(null)} />
+                <ChoiceChip label="Ohne Gruppe" active={groupId === null} onPress={() => chooseGroup(null)} />
                 {market.groups.map((g) => (
-                  <Choice key={g.id} label={`${g.name} · ${g.members_count}`} icon="users" active={groupId === g.id} onPress={() => chooseGroup(g.id)} />
+                  <ChoiceChip key={g.id} label={`${g.name} · ${g.members_count}`} icon="users" active={groupId === g.id} onPress={() => chooseGroup(g.id)} />
                 ))}
               </ScrollView>
             ) : null}
@@ -272,13 +281,35 @@ export default function FinderScreen() {
               </Text>
             </View>
 
-            <Toggle open={showAges} onPress={() => setShowAges((v) => !v)} icon="age" label="Alter angeben" hint="Damit nur kommt, was für alle passt" />
+            <Toggle
+              open={showAges}
+              onPress={() => setShowAges((v) => !v)}
+              icon="age"
+              label="Alter angeben"
+              hint={ages ? `Eingestellt: ${ages}` : 'Damit nur kommt, was für alle passt'}
+            />
             {showAges ? (
-              <Entrance>
+              <Entrance style={styles.ages}>
                 <View style={styles.pair}>
                   <Stepper label="Jüngste:r" value={criteria.youngest} onChange={(v) => set('youngest', v)} min={0} max={99} start={18} suffix="J." unset="egal" compact />
                   <Stepper label="Älteste:r" value={criteria.oldest} onChange={(v) => set('oldest', v)} min={0} max={99} start={criteria.youngest ?? 18} suffix="J." unset="egal" compact />
                 </View>
+                {/* Beide auf einmal aus – das × im Kasten nimmt nur eins raus. */}
+                {ages ? (
+                  <PressableScale
+                    onPress={() => {
+                      feedback.selected();
+                      clearAges();
+                    }}
+                    haptic="none"
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Alter auf egal stellen"
+                    style={styles.agesClear}>
+                    <Icon name="close" size={13} color={colors.tint} />
+                    <Text style={[styles.reset, styles.agesClearText, { color: colors.tint }]}>Alter egal</Text>
+                  </PressableScale>
+                ) : null}
               </Entrance>
             ) : null}
           </Card>
@@ -296,23 +327,23 @@ export default function FinderScreen() {
               <Entrance style={styles.more}>
                 <FilterRow label="Budget pro Person">
                   {BUDGETS.map((b) => (
-                    <Choice key={b.label} label={b.label} active={criteria.budgetPerPersonCents === b.cents} onPress={() => set('budgetPerPersonCents', b.cents)} />
+                    <ChoiceChip key={b.label} label={b.label} active={criteria.budgetPerPersonCents === b.cents} onPress={() => set('budgetPerPersonCents', b.cents)} />
                   ))}
                 </FilterRow>
                 <FilterRow label="Drinnen oder draußen?">
                   {SETTINGS.map((s) => (
-                    <Choice key={s.key} label={s.label} icon={s.icon} active={criteria.setting === s.key} onPress={() => set('setting', s.key)} />
+                    <ChoiceChip key={s.key} label={s.label} icon={s.icon} active={criteria.setting === s.key} onPress={() => set('setting', s.key)} />
                   ))}
                 </FilterRow>
                 <FilterRow label="Barrierefrei">
                   {ACCESS.map((a) => (
-                    <Choice key={a.key} label={a.label} icon={a.icon} active={access[a.key]} onPress={() => toggleAccess(a.key)} />
+                    <ChoiceChip key={a.key} label={a.label} icon={a.icon} active={access[a.key]} onPress={() => toggleAccess(a.key)} multi />
                   ))}
                 </FilterRow>
                 {market.coords ? (
                   <FilterRow label="Wie weit?">
                     {DISTANCES.map((d) => (
-                      <Choice key={d.label} label={d.label} active={criteria.maxDistanceKm === d.km} onPress={() => set('maxDistanceKm', d.km)} />
+                      <ChoiceChip key={d.label} label={d.label} active={criteria.maxDistanceKm === d.km} onPress={() => set('maxDistanceKm', d.km)} />
                     ))}
                   </FilterRow>
                 ) : null}
@@ -361,9 +392,9 @@ export default function FinderScreen() {
 
           {results.length > 1 ? (
             <View style={styles.sortRow}>
-              <Choice label="Passt am besten" active={sort === 'best'} onPress={() => setSort('best')} small />
-              <Choice label="Günstigste" active={sort === 'price'} onPress={() => setSort('price')} small />
-              {market.coords ? <Choice label="In der Nähe" active={sort === 'distance'} onPress={() => setSort('distance')} small /> : null}
+              <ChoiceChip label="Passt am besten" active={sort === 'best'} onPress={() => setSort('best')} size="small" />
+              <ChoiceChip label="Günstigste" active={sort === 'price'} onPress={() => setSort('price')} size="small" />
+              {market.coords ? <ChoiceChip label="In der Nähe" active={sort === 'distance'} onPress={() => setSort('distance')} size="small" /> : null}
             </View>
           ) : null}
 
@@ -386,6 +417,7 @@ export default function FinderScreen() {
                 interest={interestById.get(m.offer.interest_id ?? -1)}
                 distanceKm={market.distanceById.get(m.offer.id)}
                 reasons={[...m.reasons, ...m.caveats.map((c) => `Hinweis: ${c}`)]}
+                discountPercent={m.percent}
                 priceLine={
                   m.perPersonCents !== null && m.totalCents !== null
                     ? people > 1
@@ -452,26 +484,6 @@ function FilterRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-function Choice({ label, active, onPress, icon, small = false }: { label: string; active: boolean; onPress: () => void; icon?: UiIconName; small?: boolean }) {
-  const colors = useTheme();
-  const ink = active ? '#ffffff' : colors.text;
-  return (
-    <PressableScale
-      onPress={() => {
-        feedback.selected();
-        onPress();
-      }}
-      haptic="none"
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      style={[styles.choice, small && styles.choiceSmall, { borderColor: active ? colors.tint : colors.border, backgroundColor: active ? colors.tint : colors.background }]}>
-      {icon ? <Icon name={icon} size={14} color={ink} /> : null}
-      <Text style={[styles.choiceText, small && styles.choiceTextSmall, { color: ink }]} numberOfLines={1}>
-        {label}
-      </Text>
-    </PressableScale>
-  );
-}
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
@@ -499,6 +511,9 @@ const styles = StyleSheet.create({
   /** Waagerechte Liste nicht in die Höhe wachsen lassen. */
   chipScroll: { flexGrow: 0 },
   pair: { flexDirection: 'row', gap: Spacing.two },
+  ages: { gap: Spacing.two },
+  agesClear: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-end' },
+  agesClearText: { marginTop: 0 },
   saving: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, borderRadius: Radius.field, padding: Spacing.three },
   savingText: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 13.5, lineHeight: 19 },
   toggle: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
@@ -509,10 +524,6 @@ const styles = StyleSheet.create({
   filterRow: { gap: Spacing.two },
   filterLabel: { fontFamily: FontFamily.semibold, fontSize: 13 },
   wrapRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  choice: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: Stroke, borderRadius: 999, paddingHorizontal: 13, paddingVertical: 7 },
-  choiceSmall: { paddingHorizontal: 11, paddingVertical: 5 },
-  choiceText: { fontFamily: FontFamily.semibold, fontSize: 13.5 },
-  choiceTextSmall: { fontSize: 12.5 },
   resultsHead: { flexDirection: 'row', alignItems: 'flex-start', gap: Spacing.two, marginTop: Spacing.two },
   resultsTitle: { fontFamily: FontFamily.bold, fontSize: 19 },
   resultsHint: { fontFamily: FontFamily.medium, fontSize: 12.5 },

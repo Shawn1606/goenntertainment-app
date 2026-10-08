@@ -6,7 +6,7 @@ import { RefreshControl, StyleSheet, Text, View, type NativeScrollEvent, type Na
 import { DiscountMeter, GroupBadge } from '@/components/group-ui';
 import { MascotBuddy } from '@/components/mascot-buddy';
 import { useGarlandSpace } from '@/components/seasonal-decor';
-import { useDockSuppression } from '@/components/mascot-dock';
+import { useDockScroll, useDockSuppression } from '@/components/mascot-dock';
 import { TopBar } from '@/components/top-bar';
 import { AvatarStack } from '@/components/ui/avatar-stack';
 import { Button } from '@/components/ui/button';
@@ -14,6 +14,7 @@ import { Card } from '@/components/ui/card';
 import { Entrance } from '@/components/ui/entrance';
 import { Icon } from '@/components/ui/icon';
 import { KeyboardForm } from '@/components/ui/keyboard-form';
+import { MotionPause } from '@/components/ui/motion-pause';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { TextField } from '@/components/ui/text-field';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
@@ -56,17 +57,21 @@ export default function GroupsScreen() {
   const [heroVisible, setHeroVisible] = useState(true);
   const focused = useIsFocused();
   useDockSuppression('groups-hero', focused && heroVisible);
+  // Ganz schnell nach unten gescrollt? Dann fliegt Goenni hoch (mascot-dock.tsx).
+  const dockScroll = useDockScroll();
   // Zwei Grenzen (Hysterese): Sonst taucht Goenni beim Scrollen um die Grenze herum ständig auf und ab.
   const onScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const y = event.nativeEvent.contentOffset.y;
     if (heroVisible && y > 280) setHeroVisible(false);
     else if (!heroVisible && y < 140) setHeroVisible(true);
+    dockScroll(event);
   };
 
+  // `refreshGroups` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  const { refreshGroups } = market;
   useEffect(() => {
-    void market.refreshGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void refreshGroups();
+  }, [refreshGroups]);
 
   const plan = planFor(CLUB_RULES, user?.club_plan);
   const groups = market.groups;
@@ -80,20 +85,25 @@ export default function GroupsScreen() {
 
   const submit = async () => {
     if (!token || !value.trim() || !mode) return;
+    const name = value.trim();
+    const creating = mode === 'create';
+    // Die Entscheidungen stehen vor dem `try`: Bedingungen darin kann der React
+    // Compiler nicht übersetzen – dann bliebe die ganze Seite unoptimiert.
+    const send = () => (creating ? api.createGroup(token, name) : api.joinGroup(token, name));
+    const open = (id: number) => router.push({ pathname: '/group/[id]', params: { id: String(id), ...(creating ? { created: '1' } : {}) } });
     setBusy(true);
     setError(null);
     try {
-      const { data } = mode === 'create' ? await api.createGroup(token, value.trim()) : await api.joinGroup(token, value.trim());
+      const { data } = await send();
       feedback.joined();
       setValue('');
       setMode(null);
       await market.refreshGroups();
-      router.push({ pathname: '/group/[id]', params: { id: String(data.id), ...(mode === 'create' ? { created: '1' } : {}) } });
+      open(data.id);
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
 
   const refresh = async () => {
@@ -122,7 +132,10 @@ export default function GroupsScreen() {
         <LinearGradient colors={[...Night.gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
           <Text style={styles.heroKicker}>GRUPPEN</Text>
           <Text style={styles.heroTitle}>Zusammen wird&apos;s günstiger</Text>
-          <MascotBuddy tips={tips} tone="night" size={64} />
+          {/* Aus dem Bild gescrollt, ruht Goenni (motion-pause.tsx). */}
+          <MotionPause paused={!heroVisible}>
+            <MascotBuddy tips={tips} tone="night" size={64} />
+          </MotionPause>
           <View style={styles.heroActions}>
             <HeroAction icon="plus" label="Neue Gruppe" primary active={mode === 'create'} onPress={() => openMode('create')} />
             <HeroAction icon="link" label="Beitreten" active={mode === 'join'} onPress={() => openMode('join')} />

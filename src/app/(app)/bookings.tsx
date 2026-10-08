@@ -4,6 +4,7 @@ import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native
 
 import { BookingTicket } from '@/components/booking-ticket';
 import { MascotEmpty } from '@/components/mascot';
+import { useDockScroll } from '@/components/mascot-dock';
 import { useGarlandSpace } from '@/components/seasonal-decor';
 import { TopBar } from '@/components/top-bar';
 import { Button } from '@/components/ui/button';
@@ -34,11 +35,13 @@ export default function BookingsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'open' | 'past'>('open');
   const garland = useGarlandSpace();
+  const dockScroll = useDockScroll();
 
+  // `refreshBookings` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  const { refreshBookings } = market;
   useEffect(() => {
-    void market.refreshBookings();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void refreshBookings();
+  }, [refreshBookings]);
 
   const now = new Date();
   const open = market.bookings
@@ -58,22 +61,27 @@ export default function BookingsScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <TopBar />
-      <ScrollView contentContainerStyle={[styles.content, { paddingTop: Spacing.three + garland }]} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.tint} />}>
+      <ScrollView
+        contentContainerStyle={[styles.content, { paddingTop: Spacing.three + garland }]}
+        onScroll={dockScroll}
+        scrollEventThrottle={32}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={colors.tint} />}>
         <View style={styles.head}>
           <Text style={[styles.title, { color: colors.text }]} accessibilityRole="header">
             Deine Tickets
           </Text>
           <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
-            Alles, was du gebucht hast. Beim Partner zeigst du den Code – oder hältst dein Handy an den GÖ4Fun-Aufkleber.
+            Zeig beim Partner den Code – oder halt dein Handy an den GÖ4Fun-Aufkleber.
           </Text>
         </View>
 
+        {/* Kurze Wörter: Alle drei Schritte passen auch auf schmalen Handys in eine Zeile. */}
         <View style={styles.how}>
           <HowChip icon="ticket" text="Buchen" />
           <Icon name="chevron-right" size={14} color={colors.textSecondary} />
-          <HowChip icon="nfc" text="Vor Ort zeigen" />
+          <HowChip icon="nfc" text="Vorzeigen" />
           <Icon name="chevron-right" size={14} color={colors.textSecondary} />
-          <HowChip icon="stamp" text="Stempel kassieren" />
+          <HowChip icon="stamp" text="Stempel holen" />
         </View>
 
         {urgent.length > 0 ? (

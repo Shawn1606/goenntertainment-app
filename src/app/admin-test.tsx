@@ -75,9 +75,8 @@ export default function AdminTestScreen() {
       celebrate({ title: 'Abgeholt!', subtitle: c.label, credits: res.credits, kind: 'coins' });
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   const examples = async () => {
@@ -89,9 +88,8 @@ export default function AdminTestScreen() {
       if (res.created === 0) await notifyUser('Schon da', 'Alle Beispiel-Challenges gibt es bereits.');
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   const remove = async (c: TestphaseChallenge) => {

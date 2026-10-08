@@ -39,9 +39,8 @@ export default function AdminUsers() {
         setUsers((await api.admin.users(token, q)).data);
       } catch (e) {
         await notifyUser('Laden fehlgeschlagen', errorMessage(e));
-      } finally {
-        setLoading(false);
       }
+      setLoading(false);
     },
     [token],
   );

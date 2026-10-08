@@ -6,7 +6,7 @@ import { BingoTeaser } from '@/components/bingo-card';
 import { BookingTicket } from '@/components/booking-ticket';
 import { MascotEmpty, MascotError } from '@/components/mascot';
 import { MascotBuddy } from '@/components/mascot-buddy';
-import { useDockSuppression } from '@/components/mascot-dock';
+import { useDockScroll, useDockSuppression } from '@/components/mascot-dock';
 import { OfferCard } from '@/components/offer-card';
 import { PartnerTile } from '@/components/partner-tile';
 import { PlanBadge } from '@/components/plan-badge';
@@ -16,7 +16,9 @@ import { TopBar } from '@/components/top-bar';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CategoryIcon } from '@/components/ui/category-icon';
+import { ChoiceChip } from '@/components/ui/choice-chip';
 import { Icon } from '@/components/ui/icon';
+import { MotionPause } from '@/components/ui/motion-pause';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Rail } from '@/components/ui/rail';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
@@ -28,7 +30,6 @@ import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
-import * as feedback from '@/lib/feedback';
 import { useFeatures } from '@/lib/features-context';
 import { useMarket } from '@/lib/market-context';
 
@@ -81,6 +82,8 @@ export default function HomeScreen() {
   // Stadt-Bingo nur, wenn ein Admin es freigeschaltet hat (src/lib/features-context.tsx).
   const { bingo } = useFeatures();
   useDockSuppression('home-hero', focused && heroVisible);
+  // Ganz schnell nach unten gescrollt? Dann fliegt Goenni hoch (mascot-dock.tsx).
+  const dockScroll = useDockScroll();
 
   const firstName = user?.name?.split(' ')[0] ?? null;
   const plan = planFor(CLUB_RULES, user?.club_plan);
@@ -139,6 +142,7 @@ export default function HomeScreen() {
     const y = event.nativeEvent.contentOffset.y;
     if (heroVisible && y > HERO_GONE_AT) setHeroVisible(false);
     else if (!heroVisible && y < HERO_BACK_AT) setHeroVisible(true);
+    dockScroll(event);
   };
 
   const quick: { key: string; label: string; icon: UiIconName; badge?: number; onPress: () => void }[] = [
@@ -156,18 +160,20 @@ export default function HomeScreen() {
         contentContainerStyle={[styles.content, { paddingTop: Spacing.two + garland }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.tint} />}
         onScroll={onScroll}
-        scrollEventThrottle={64}
+        scrollEventThrottle={32}
         showsVerticalScrollIndicator={false}>
         <View style={styles.column}>
-          {/* Kopf: Begrüßung, Goenni, Stufe. */}
+          {/* Kopf: Begrüßung, Goenni, Stufe. Aus dem Bild gescrollt, ruht er (motion-pause.tsx). */}
           <Card tone="night" style={styles.hero}>
-            <View style={styles.heroHead}>
-              <Text style={styles.heroKicker} numberOfLines={1}>
-                {greeting(now.getHours(), firstName).toUpperCase()}
-              </Text>
-              <DecorCorner corner="inline" size={22} count={3} />
-            </View>
-            <MascotBuddy tips={tips} tone="night" size={92} />
+            <MotionPause paused={!heroVisible}>
+              <View style={styles.heroHead}>
+                <Text style={styles.heroKicker} numberOfLines={1}>
+                  {greeting(now.getHours(), firstName).toUpperCase()}
+                </Text>
+                <DecorCorner corner="inline" size={22} count={3} />
+              </View>
+              <MascotBuddy tips={tips} tone="night" size={92} />
+            </MotionPause>
             <View style={[styles.heroFoot, { borderTopColor: Night.line }]}>
               <View style={{ flex: 1, gap: 4 }}>
                 <PlanBadge plan={plan.key} tone="night" />
@@ -244,18 +250,20 @@ export default function HomeScreen() {
           </View>
         ) : null}
 
-        {/* Angebote für dich: Kategorien direkt unter der Überschrift, die sie filtern. */}
+        {/* Angebote für dich: Kategorien direkt unter der Überschrift, die sie filtern.
+            Der Knopf heißt „Entdecken" statt „Alle" – direkt darunter steht schon der Chip „Alle". */}
         {featured.length > 0 || categories.length > 0 ? (
-          <Section title="Angebote für dich" action="Alle" onAction={() => router.navigate('/finder')}>
+          <Section title="Angebote für dich" action="Entdecken" onAction={() => router.navigate('/finder')}>
             {categories.length > 0 ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll} contentContainerStyle={styles.chips}>
-                <Chip label="Alle" active={category === null} onPress={() => setCategory(null)} />
+                <ChoiceChip size="large" label="Alle" active={category === null} onPress={() => setCategory(null)} />
                 {categories.map((c) => (
-                  <Chip
+                  <ChoiceChip
+                    size="large"
                     key={c.id}
                     label={c.name}
                     active={category === c.id}
-                    icon={<CategoryIcon interest={c} size={15} color={category === c.id ? '#ffffff' : colors.text} />}
+                    leading={<CategoryIcon interest={c} size={15} color={category === c.id ? '#ffffff' : colors.text} />}
                     onPress={() => setCategory((prev) => (prev === c.id ? null : c.id))}
                   />
                 ))}
@@ -364,23 +372,6 @@ function Section({ title, action, onAction, children }: { title: string; action?
   );
 }
 
-function Chip({ label, active, icon, onPress }: { label: string; active: boolean; icon?: React.ReactNode; onPress: () => void }) {
-  const colors = useTheme();
-  return (
-    <PressableScale
-      onPress={() => {
-        feedback.selected();
-        onPress();
-      }}
-      haptic="none"
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      style={[styles.chip, { borderColor: active ? colors.tint : colors.border, backgroundColor: active ? colors.tint : colors.background }]}>
-      {icon}
-      <Text style={[styles.chipText, { color: active ? '#ffffff' : colors.text }]}>{label}</Text>
-    </PressableScale>
-  );
-}
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
@@ -401,8 +392,6 @@ const styles = StyleSheet.create({
   badgeText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 10.5 },
   chipScroll: { flexGrow: 0 },
   chips: { paddingHorizontal: Spacing.three, gap: Spacing.two },
-  chip: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: Stroke, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 8 },
-  chipText: { fontFamily: FontFamily.semibold, fontSize: 14 },
   section: { gap: Spacing.three },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: { fontFamily: FontFamily.bold, fontSize: 20, letterSpacing: -0.3 },

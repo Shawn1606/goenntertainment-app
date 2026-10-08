@@ -77,19 +77,22 @@ export default function WalletScreen() {
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<number | null>(null);
 
+  // `setCredits` bleibt stabil: Neu geladen wird nur beim Zurückkommen und mit neuem Token.
+  const { setCredits } = market;
   const load = useCallback(async () => {
     if (!token) return;
-    try {
-      const { data } = await api.wallet(token);
-      setTransactions(data.transactions);
-      setLots(data.lots ?? []);
-      setValidity(data.validity_label ?? null);
-      market.setCredits(data.balance);
-    } catch {
-      // Der Stand oben kommt dann aus dem Konto.
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+    // Ohne Antwort kommt der Stand oben aus dem Konto. (Kein try: Bedingungen darin
+    // kann der React Compiler nicht übersetzen.)
+    const data = await api
+      .wallet(token)
+      .then((res) => res.data)
+      .catch(() => null);
+    if (!data) return;
+    setTransactions(data.transactions);
+    setLots(data.lots ?? []);
+    setValidity(data.validity_label ?? null);
+    setCredits(data.balance);
+  }, [token, setCredits]);
 
   useFocusEffect(
     useCallback(() => {
@@ -115,9 +118,8 @@ export default function WalletScreen() {
       void load();
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setRedeeming(false);
     }
+    setRedeeming(false);
   };
 
   return (

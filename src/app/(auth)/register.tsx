@@ -128,9 +128,8 @@ export default function RegisterScreen() {
       } else {
         setGeneralError('Unbekannter Fehler.');
       }
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   return (

@@ -1,6 +1,6 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { MascotBuddy } from '@/components/mascot-buddy';
 import { PartnerLogo } from '@/components/partner-logo';
@@ -8,6 +8,7 @@ import { StampCard } from '@/components/stamp-card';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
 import { formatDay } from '@/domain/date-format';
 import type { UiIconName } from '@/domain/ui-icon';
@@ -28,10 +29,11 @@ export default function StampsScreen() {
   const market = useMarket();
   const card = market.club?.stamps ?? null;
 
+  // `refreshClub` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  const { refreshClub } = market;
   useEffect(() => {
-    void market.refreshClub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void refreshClub();
+  }, [refreshClub]);
 
   const steps: { icon: UiIconName; text: string }[] = [
     { icon: 'map-pin', text: 'Geh zu irgendeinem GÖ4Fun-Partner – die Karte gilt bei allen.' },
@@ -43,7 +45,7 @@ export default function StampsScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: 'Stempelkarte' }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <PullToCloseScroll contentContainerStyle={styles.content}>
         {card ? (
           <>
             <MascotBuddy
@@ -83,9 +85,13 @@ export default function StampsScreen() {
                         <Icon name="gift" size={18} color={colors.tint} />
                       </View>
                     )}
-                    <Text style={[styles.rowTitle, { color: colors.text }]} numberOfLines={1}>
-                      {s.partner?.name ?? 'Geschenkt vom GÖ4Fun-Team'}
-                    </Text>
+                    <View style={styles.rowText}>
+                      <Text style={[styles.rowTitle, { color: colors.text }]} numberOfLines={2}>
+                        {s.partner?.name ?? 'Geschenk vom GÖ4Fun-Team'}
+                      </Text>
+                      {/* Neuester zuerst – die Nummer sagt, welches Feld der Karte es war. */}
+                      <Text style={[styles.rowSub, { color: colors.textSecondary }]}>Stempel {card.stamps.length - i}</Text>
+                    </View>
                     <Text style={[styles.rowMeta, { color: colors.textSecondary }]}>{formatDay(s.day)}</Text>
                   </View>
                 ))}
@@ -105,7 +111,7 @@ export default function StampsScreen() {
             </View>
           ))}
         </Card>
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }
@@ -117,7 +123,9 @@ const styles = StyleSheet.create({
   button: { flex: 1 },
   section: { fontFamily: FontFamily.bold, fontSize: 17, marginTop: Spacing.two },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, padding: Spacing.three },
-  rowTitle: { flex: 1, fontFamily: FontFamily.semibold, fontSize: 14.5 },
+  rowText: { flex: 1, gap: 1 },
+  rowTitle: { fontFamily: FontFamily.semibold, fontSize: 14.5 },
+  rowSub: { fontFamily: FontFamily.medium, fontSize: 12 },
   giftIcon: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   rowMeta: { fontFamily: FontFamily.medium, fontSize: 13 },
   steps: { gap: Spacing.three },

@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { BookingTicket } from '@/components/booking-ticket';
 import { DiscountMeter, GroupBadge } from '@/components/group-ui';
@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { IconButton } from '@/components/ui/icon-button';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { QrCode } from '@/components/ui/qr-code';
 import { API_URL } from '@/constants/config';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
@@ -128,7 +129,7 @@ export default function GroupScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: group.name }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <PullToCloseScroll contentContainerStyle={styles.content}>
         <LinearGradient colors={[...Night.gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
           {/* Abzeichen und Goenni oben, der Name darunter in voller Breite – lange Namen brechen sonst mitten im Wort. */}
           <View style={styles.heroTop}>
@@ -229,7 +230,7 @@ export default function GroupScreen() {
         ) : null}
 
         <Button title={group.is_owner ? 'Gruppe löschen' : 'Gruppe verlassen'} icon={group.is_owner ? 'trash' : 'logout'} variant="danger" onPress={leaveOrDelete} />
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }

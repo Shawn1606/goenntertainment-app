@@ -339,7 +339,7 @@ export function GlassProgressBar({
         />
       </Animated.View>
       {clamped >= glowAt && clamped < 1 ? (
-        <Shimmer color="rgba(255,255,255,0.85)" radius={height} durationMs={1800} />
+        <Shimmer color="rgba(255,255,255,0.85)" radius={height} durationMs={1800} restMs={2600} />
       ) : null}
     </View>
   );

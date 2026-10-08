@@ -47,9 +47,8 @@ export default function BingoScreen() {
       celebrate({ title: 'Bingo!', subtitle: c.label, credits: res.credits, kind: 'coins' });
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   return (

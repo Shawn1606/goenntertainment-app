@@ -62,9 +62,8 @@ export default function BlockedScreen() {
       setPeople(res.data);
     } catch {
       setError('Die Liste ließ sich nicht laden. Läuft das Backend?');
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, [token]);
 
   useFocusEffect(

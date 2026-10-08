@@ -59,9 +59,8 @@ export default function ProfileScreen() {
     } catch (e) {
       feedback.failed();
       await notifyUser('Bild nicht gespeichert', errorMessage(e));
-    } finally {
-      setUploading(false);
     }
+    setUploading(false);
   };
 
   const removePhoto = async () => {
@@ -73,9 +72,8 @@ export default function ProfileScreen() {
       patchUser({ avatar: res.user.avatar });
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setUploading(false);
     }
+    setUploading(false);
   };
 
   const save = async () => {
@@ -103,9 +101,8 @@ export default function ProfileScreen() {
       } else {
         await notifyUser('Nicht gespeichert', errorMessage(e));
       }
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   return (

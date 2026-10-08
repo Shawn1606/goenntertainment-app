@@ -59,9 +59,8 @@ export default function ChangePasswordScreen() {
       await notifyUser('Code unterwegs', `Wir haben dir einen Code an ${res.destination} geschickt.`);
     } catch (e) {
       setErrors({ code: [e instanceof ApiError ? e.firstError() : 'Unbekannter Fehler.'] });
-    } finally {
-      setSending(false);
     }
+    setSending(false);
   }
 
   async function onSave() {
@@ -83,9 +82,8 @@ export default function ChangePasswordScreen() {
       } else {
         setErrors({ password: ['Unbekannter Fehler.'] });
       }
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   }
 
   function switchWay() {

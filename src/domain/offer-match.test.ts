@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { ClubRules } from './club.ts';
-import { DEFAULT_CRITERIA, matchOffer, normalizeAges, rankOffers, type MatchableOffer } from './offer-match.ts';
+import { DEFAULT_CRITERIA, formatAgeRange, matchOffer, normalizeAges, rankOffers, type MatchableOffer } from './offer-match.ts';
 
 const RULES = JSON.parse(
   readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'club.json'), 'utf8'),
@@ -119,4 +119,13 @@ test('Alter: vertauschte Eingaben werden getauscht', () => {
   assert.deepEqual(normalizeAges(40, 8), { youngest: 8, oldest: 40 });
   assert.deepEqual(normalizeAges(-2, 140), { youngest: 0, oldest: 99 });
   assert.deepEqual(normalizeAges(null, 12), { youngest: null, oldest: 12 });
+});
+
+test('Alter: Chip-Text zeigt nur, was eingestellt ist', () => {
+  assert.equal(formatAgeRange(18, 30), '18–30 J.');
+  assert.equal(formatAgeRange(25, 25), '25 J.');
+  assert.equal(formatAgeRange(18, null), 'ab 18 J.');
+  assert.equal(formatAgeRange(null, 30), 'bis 30 J.');
+  assert.equal(formatAgeRange(0, null), 'ab 0 J.');
+  assert.equal(formatAgeRange(null, null), null);
 });

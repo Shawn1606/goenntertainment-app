@@ -171,7 +171,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(updated);
       },
       applyUser: (updated) => setUser(updated),
-      patchUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
+      // Nur ein neues Objekt, wenn sich wirklich etwas ändert: Fast alles hängt an
+      // `user`, und jede Club-Antwort ruft das hier – meist mit denselben Werten.
+      patchUser: (patch) =>
+        setUser((prev) => {
+          if (!prev) return prev;
+          const changed = (Object.keys(patch) as (keyof User)[]).some((key) => !Object.is(prev[key], patch[key]));
+          return changed ? { ...prev, ...patch } : prev;
+        }),
       refreshUser: async () => {
         if (!token) return;
         try {

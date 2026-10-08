@@ -41,29 +41,31 @@ export default function AdminVouchers() {
   const create = async () => {
     if (!token) return;
     setSaving(true);
+    // Vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const input = {
+      label: label.trim(),
+      retailer: retailer.trim() || null,
+      credits: numberOrNull(credits) ?? 0,
+      quantity: numberOrNull(quantity) ?? 0,
+      expires_at: expires.trim() || null,
+    };
     try {
-      await api.admin.createVoucherBatch(token, {
-        label: label.trim(),
-        retailer: retailer.trim() || null,
-        credits: numberOrNull(credits) ?? 0,
-        quantity: numberOrNull(quantity) ?? 0,
-        expires_at: expires.trim() || null,
-      });
+      await api.admin.createVoucherBatch(token, input);
       setLabel('');
       load();
       await notifyUser('Auflage erstellt', 'Die Codes kannst du jetzt als CSV holen.');
     } catch (e) {
       await notifyUser('Nicht erstellt', errorMessage(e));
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   const exportCsv = async (batch: VoucherBatch) => {
     if (!token) return;
+    const inBrowser = Platform.OS === 'web' && typeof document !== 'undefined';
     try {
       const csv = await fetchText(token, api.admin.voucherCsvPath(batch.id));
-      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      if (inBrowser) {
         const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
         const a = document.createElement('a');
         a.href = url;

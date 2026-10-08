@@ -78,9 +78,8 @@ export default function PartnerModeScreen() {
     } catch (e) {
       feedback.failed();
       await notifyUser('Pass nicht erkannt', errorMessage(e));
-    } finally {
-      busy.current = false;
     }
+    busy.current = false;
   };
 
   const redeem = async (booking: Booking) => {

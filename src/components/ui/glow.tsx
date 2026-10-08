@@ -14,9 +14,10 @@
  * (React Native 0.76+, neue Architektur); wo der fehlt, bleibt der farbige Ring
  * stehen und die Stelle ist immer noch markiert.
  *
- * `useReducedMotion()` wird überall beachtet: Wer im System „Bewegung
- * reduzieren" gesetzt hat, bekommt den Zustand als ruhiges Bild statt als
- * Animation – sichtbar bleibt er trotzdem.
+ * „Bewegung reduzieren" wird überall beachtet (`useStill()`): Wer es im System
+ * gesetzt hat, bekommt den Zustand als ruhiges Bild statt als Animation –
+ * sichtbar bleibt er trotzdem. Dasselbe gilt für Seiten, die gerade nicht vorn
+ * sind (src/components/ui/motion-pause.tsx).
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -26,12 +27,13 @@ import Animated, {
   cancelAnimation,
   interpolate,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
   withRepeat,
+  withSequence,
   withTiming,
 } from 'react-native-reanimated';
 
+import { useBeat, useStill } from '@/components/ui/motion-pause';
 import { Radius } from '@/constants/theme';
 
 /** Wie kräftig geleuchtet wird. `strong` nur für „jetzt oder nie"-Momente. */
@@ -72,7 +74,8 @@ export function Glow({
   durationMs = 2400,
   style,
 }: GlowProps) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const cfg = INTENSITY[intensity];
   const pulse = useSharedValue(0);
 
@@ -161,7 +164,8 @@ export function Pulse({
   durationMs = 1600,
   style,
 }: PulseProps) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const beat = useSharedValue(0);
 
   useEffect(() => {
@@ -203,7 +207,8 @@ export type PulseDotProps = {
  * Das hier ist nicht bloß ein Datum, das passiert JETZT.
  */
 export function PulseDot({ color, size = 7, active = true }: PulseDotProps) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const wave = useSharedValue(0);
 
   useEffect(() => {
@@ -244,6 +249,8 @@ export type ShimmerProps = {
   color: string;
   radius?: number;
   durationMs?: number;
+  /** Ruhe nach jedem Durchzug (ms). 0 = durchgehend. */
+  restMs?: number;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -253,21 +260,31 @@ export type ShimmerProps = {
  * Zwei Aufgaben: Ladeflächen als „lädt noch" kennzeichnen und volle
  * Fortschrittsbalken als „hier ist gerade was passiert" markieren.
  */
-export function Shimmer({ color, radius = 0, durationMs = 1500, style }: ShimmerProps) {
-  const reduced = useReducedMotion();
+export function Shimmer({ color, radius = 0, durationMs = 1500, restMs = 0, style }: ShimmerProps) {
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const [width, setWidth] = useState(0);
   const x = useSharedValue(0);
+  const running = width > 0 && !reduced;
 
+  // Ohne Pause (`restMs` 0, etwa „lädt noch"): durchgehend.
   useEffect(() => {
     cancelAnimation(x);
-    if (!width || reduced) {
-      x.value = 0;
-      return;
-    }
     x.value = 0;
+    if (!running || restMs > 0) return;
     x.value = withRepeat(withTiming(1, { duration: durationMs, easing: Easing.linear }), -1, false);
     return () => cancelAnimation(x);
-  }, [width, reduced, durationMs, x]);
+  }, [running, durationMs, restMs, x]);
+  // Mit Pause im Takt (motion-pause.tsx): einmal durchziehen, dann ruht das Band
+  // draußen und unsichtbar – und bis zum nächsten Mal läuft gar nichts.
+  useBeat(
+    () => {
+      x.set(withSequence(withTiming(0, { duration: 0 }), withTiming(1, { duration: durationMs, easing: Easing.linear })));
+    },
+    durationMs + restMs,
+    running && restMs > 0,
+    0,
+  );
 
   const sweep = useAnimatedStyle(() => ({
     transform: [{ translateX: interpolate(x.value, [0, 1], [-width, width]) }],

@@ -171,19 +171,25 @@ export default function AdminPartnerScreen() {
       kid_friendly: kids,
       quiet_times: draft.quiet_times.trim() || null,
     };
+    // Entscheidungen vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const save = () => (partner ? api.admin.updatePartner(token, partner.id, input) : api.admin.createPartner(token, input));
+    const saved = partner ? 'Der Partner ist aktualisiert.' : 'Der Partner ist angelegt. Jetzt Bilder, Aufkleber und Angebote ergänzen.';
     try {
-      const { data } = partner ? await api.admin.updatePartner(token, partner.id, input) : await api.admin.createPartner(token, input);
+      const { data } = await save();
       apply(data);
       void market.refresh();
       if (!partner) router.setParams({ id: String(data.id) });
-      await notifyUser('Gespeichert', partner ? 'Der Partner ist aktualisiert.' : 'Der Partner ist angelegt. Jetzt Bilder, Aufkleber und Angebote ergänzen.');
+      await notifyUser('Gespeichert', saved);
     } catch (e) {
-      const err = e as { errors?: Record<string, string[]> };
-      setErrors(err.errors ?? {});
-      await notifyUser('Nicht gespeichert', errorMessage(e));
-    } finally {
-      setSaving(false);
+      await showSaveError(e);
     }
+    setSaving(false);
+  };
+
+  const showSaveError = async (e: unknown) => {
+    const err = e as { errors?: Record<string, string[]> };
+    setErrors(err.errors ?? {});
+    await notifyUser('Nicht gespeichert', errorMessage(e));
   };
 
   const upload = async (kind: 'logo' | 'cover') => {

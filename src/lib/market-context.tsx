@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { distanceKm } from '@/domain/distance';
+import { keepIfSame } from '@/domain/same-data';
 import {
   api,
   errorMessage,
@@ -57,9 +58,11 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Neue Antworten mit denselben Daten behalten das alte Objekt (`keepIfSame`):
+  // Sonst zeichnete jedes Aktualisieren alle Tab-Seiten neu, auch ohne Änderung.
   const applyClub = useCallback(
     (next: ClubState) => {
-      setClub(next);
+      setClub((prev) => keepIfSame(prev, next));
       patchUser({
         credits_balance: next.credits,
         club_plan: next.plan,
@@ -91,7 +94,8 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const refreshGroups = useCallback(async () => {
     if (!token) return;
     try {
-      setGroups((await api.groups(token)).data);
+      const { data } = await api.groups(token);
+      setGroups((prev) => keepIfSame(prev, data));
     } catch {
       // wie oben
     }
@@ -101,7 +105,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     if (!token) return;
     try {
       const { data } = await api.bookings(token);
-      setBookings(data);
+      setBookings((prev) => keepIfSame(prev, data));
       // Offline-Pass: offene Buchungen mit Code fürs Vorzeigen ohne Netz.
       void saveOfflineBookings(data).catch(() => undefined);
     } catch {
@@ -116,14 +120,13 @@ export function MarketProvider({ children }: { children: ReactNode }) {
     try {
       const [offerList, cats] = await Promise.all([api.offers(token), api.interests().catch(() => null)]);
       setError(null);
-      setOffers(offerList.data);
-      if (cats) setInterests(cats.data);
+      setOffers((prev) => keepIfSame(prev, offerList.data));
+      if (cats) setInterests((prev) => keepIfSame(prev, cats.data));
       await Promise.all([refreshClub(), refreshGroups(), refreshBookings()]);
     } catch (e) {
       setError(errorMessage(e, 'Die Angebote konnten nicht geladen werden.'));
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, [token, refreshClub, refreshGroups, refreshBookings]);
 
   // Laden, sobald jemand angemeldet ist. Gesetzt wird erst nach der Antwort

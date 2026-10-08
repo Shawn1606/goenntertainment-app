@@ -225,3 +225,11 @@ export function normalizeAges(youngest: number | null, oldest: number | null): {
   if (y !== null && o !== null && y > o) return { youngest: o, oldest: y };
   return { youngest: y, oldest: o };
 }
+
+/** Altersangabe für den Filter-Chip: „18–30 J.", „ab 18 J.", „bis 30 J." – oder null, wenn beides egal ist. */
+export function formatAgeRange(youngest: number | null, oldest: number | null): string | null {
+  if (youngest !== null && oldest !== null) return youngest === oldest ? `${youngest} J.` : `${youngest}–${oldest} J.`;
+  if (youngest !== null) return `ab ${youngest} J.`;
+  if (oldest !== null) return `bis ${oldest} J.`;
+  return null;
+}
