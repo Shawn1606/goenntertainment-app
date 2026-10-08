@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BACK_LINE, DUCK_LINE, SEASON_LINES, SMALL_TALK, expiryWords, pokeLine, purchaseLine, sceneLines, weekdayLine, type SceneContext } from './mascot-lines.ts';
+import { BACK_LINE, DUCK_LINE, FLIGHT_LINES, SEASON_LINES, SMALL_TALK, expiryWords, flightLine, pokeLine, purchaseLine, sceneLines, weekdayLine, type SceneContext } from './mascot-lines.ts';
 import { homeTips } from './mascot-tips.ts';
 
 const base: SceneContext = {
@@ -91,6 +91,7 @@ test('keine Emojis und keine überlangen Sätze', () => {
     ...SMALL_TALK,
     DUCK_LINE,
     BACK_LINE,
+    ...FLIGHT_LINES,
     ...Array.from({ length: 12 }, (_, i) => pokeLine(i + 1)),
     ...(['home', 'groups', 'finder', 'bookings', 'map'] as const).flatMap((s) =>
       sceneLines(s, { ...base, unread: 2, groups: 1, openBookings: 1, credits: 40, stampsRemaining: 1, nextExpiry: { title: 'Kart', days: 1 } }),
@@ -100,4 +101,12 @@ test('keine Emojis und keine überlangen Sätze', () => {
     assert.ok(!EMOJI.test(t.line), `Emoji in „${t.line}"`);
     assert.ok(t.line.length <= 110, `zu lang: „${t.line}"`);
   }
+});
+
+test('nach dem Flug: reihum ein anderer Satz, auch bei unsinniger Zählung', () => {
+  assert.equal(flightLine(1), FLIGHT_LINES[0]);
+  assert.equal(flightLine(2), FLIGHT_LINES[1]);
+  assert.equal(flightLine(FLIGHT_LINES.length + 1), FLIGHT_LINES[0]);
+  assert.equal(flightLine(Number.NaN), FLIGHT_LINES[0]);
+  assert.equal(flightLine(-3), FLIGHT_LINES[0]);
 });

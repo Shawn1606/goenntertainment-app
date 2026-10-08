@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Providers\AppServiceProvider;
 use App\Support\BlockedTerms;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Testing\TestResponse;
@@ -112,5 +113,28 @@ class UserProfileTest extends AppFeatureTestCase
         // not even the interests could be changed any more.
         User::whereKey($user->id)->update(['name' => 'Schlampe']);
         $this->patchUser($token, ['name' => 'Schlampe', 'interests' => []])->assertOk();
+    }
+
+    /**
+     * GET /api/interests is public (the sign-up asks before there is an account), sorted by name,
+     * with exactly id, name, slug and icon - and limited per client address (read-public).
+     */
+    public function test_the_category_list_is_public_and_shows_four_fields(): void
+    {
+        $slug = 'test-'.strtolower(self::freeUsername('kat'));
+        DB::table('interests')->insert(['name' => 'Zzz Testkategorie', 'slug' => $slug, 'icon' => 'star', 'created_at' => now(), 'updated_at' => now()]);
+
+        $response = $this->getJson('/api/interests')->assertOk();
+        $data = $response->json('data');
+        $mine = collect($data)->firstWhere('slug', $slug);
+
+        $this->assertSame(['id', 'name', 'slug', 'icon'], array_keys($mine));
+        $this->assertSame('Zzz Testkategorie', $mine['name']);
+        $this->assertSame($mine, end($data), 'sorted by name, so the "Zzz" category comes last');
+
+        // Limited per client address: with a limit of two, the third read is refused.
+        config(['ratelimits.read-public' => ['ip' => '2/60']]);
+        $this->getJson('/api/interests')->assertOk();
+        $this->getJson('/api/interests')->assertStatus(429)->assertJsonPath('message', AppServiceProvider::MSG_TOO_MANY);
     }
 }

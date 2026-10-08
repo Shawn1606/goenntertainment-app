@@ -3,6 +3,7 @@
 namespace App\Support\TestPhase;
 
 use App\Models\User;
+use App\Support\BusinessDay;
 use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 
@@ -29,7 +30,7 @@ final class Loyalty
         $visits = DB::table('stamps')
             ->where('user_id', $user->getKey())
             ->whereNotNull('partner_id')
-            ->where('created_at', '>', $now->copy()->subDays(365))
+            ->where('created_at', '>', BusinessDay::stored($now->copy()->subDays(365)))
             ->count();
 
         $level = null;

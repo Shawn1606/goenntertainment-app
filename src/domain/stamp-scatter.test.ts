@@ -1,7 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { MAX_SHIFT, MAX_STAR_SWING, MAX_TILT, MIN_STAR_SWING, seeded, stampPause, stampPose, starSwing } from './stamp-scatter.ts';
+import {
+  MAX_SHIFT,
+  MAX_STAR_SWING,
+  MAX_TILT,
+  MIN_STAR_SWING,
+  STAMP_SCALE,
+  seeded,
+  stampForBeat,
+  stampPose,
+  stampReach,
+  stampSize,
+  starSwing,
+} from './stamp-scatter.ts';
+
+/** Polsterung der Stempelkarte (Spacing.three in constants/theme.ts). */
+const CARD_PADDING = 16;
+/** Feldgrößen der Karte: groß (Stempel-Seite) und kompakt (Startseite). */
+const SLOTS = [54, 27];
+
+test('ein Stempel ist größer als sein Feld – aufgedrückt, nicht eingepasst', () => {
+  assert.ok(STAMP_SCALE > 1);
+  for (const slot of SLOTS) assert.ok(stampSize(slot) > slot, `Feld ${slot}`);
+  assert.equal(stampSize(54), 65);
+});
+
+test('auch ganz verschoben ragt kein Stempel über die Polsterung der Karte', () => {
+  for (const slot of SLOTS) {
+    assert.ok(stampReach(slot) > 0);
+    assert.ok(stampReach(slot) < CARD_PADDING, `Feld ${slot}: ${stampReach(slot)} pt`);
+  }
+});
 
 test('jeder Stempel bleibt innerhalb von 15 % Verschiebung', () => {
   for (let id = 1; id <= 500; id++) {
@@ -49,8 +79,15 @@ test('der Stern schlägt in beide Richtungen aus, höchstens 65°', () => {
   assert.ok(Math.abs(starSwing(Number.NaN, Number.NaN)) <= MAX_STAR_SWING);
 });
 
-test('Pausen zwischen 2,5 und 7 Sekunden', () => {
-  assert.equal(stampPause(0), 2500);
-  assert.equal(stampPause(1), 7000);
-  assert.equal(stampPause(Number.NaN), 4750);
+test('Takt der Karte: immer ein gültiger Stempel, fest je Schlag, alle kommen dran', () => {
+  const seen = new Set<number>();
+  for (let beat = 1; beat <= 200; beat++) {
+    const i = stampForBeat(beat, 7);
+    assert.ok(i >= 0 && i < 7, `Schlag ${beat}: ${i}`);
+    seen.add(i);
+  }
+  assert.equal(seen.size, 7, 'über viele Schläge ist jeder Stempel einmal dran');
+  assert.equal(stampForBeat(42, 7), stampForBeat(42, 7));
+  assert.equal(stampForBeat(5, 0), -1);
+  assert.equal(stampForBeat(Number.NaN, 5), -1);
 });

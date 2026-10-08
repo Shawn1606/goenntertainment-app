@@ -2,16 +2,19 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { BookingTicket } from '@/components/booking-ticket';
 import { DiscountMeter, GroupBadge } from '@/components/group-ui';
 import { Mascot, MascotError } from '@/components/mascot';
+import { ReportSheet } from '@/components/report-sheet';
 import { AvatarStack } from '@/components/ui/avatar-stack';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { IconButton } from '@/components/ui/icon-button';
+import { OptionsSheet, type SheetOption } from '@/components/ui/options-sheet';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { QrCode } from '@/components/ui/qr-code';
 import { API_URL } from '@/constants/config';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
@@ -19,7 +22,7 @@ import { planFor } from '@/domain/club';
 import { initialsOf } from '@/domain/initials';
 import { inviteLink, inviteText } from '@/domain/invite-link';
 import { useTheme } from '@/hooks/use-theme';
-import { api, errorMessage, type Group } from '@/lib/api';
+import { api, errorMessage, type Group, type GroupMember } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
 import { confirmAction, notifyUser } from '@/lib/confirm';
@@ -44,6 +47,10 @@ export default function GroupScreen() {
   const market = useMarket();
   const [group, setGroup] = useState<Group | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Das Menü an einem Mitglied (entfernen, melden, blockieren). */
+  const [menuFor, setMenuFor] = useState<GroupMember | null>(null);
+  /** Melden: ein Mitglied (Name, Profilbild) oder die Gruppe selbst (Name, Beschreibung). */
+  const [reporting, setReporting] = useState<{ type: 'user' | 'group'; id: number; label: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -115,11 +122,41 @@ export default function GroupScreen() {
       if (owner) await api.deleteGroup(token, group.id);
       else await api.removeGroupMember(token, group.id, user.id);
       await market.refreshGroups();
-      router.back();
+      // Zurück zur Liste – nicht in den Chat einer Gruppe, die es für einen nicht mehr gibt.
+      router.dismissTo('/groups');
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
     }
   };
+
+  const block = async (member: GroupMember) => {
+    if (!token) return;
+    const ok = await confirmAction(
+      `${member.name} blockieren?`,
+      'Du siehst die Nachrichten dieser Person nicht mehr. Aufheben kannst du das in den Einstellungen.',
+      'Blockieren',
+      true,
+    );
+    if (!ok) return;
+    try {
+      await api.blockUser(token, member.id);
+      await notifyUser('Blockiert', `${member.name} ist blockiert.`);
+    } catch (e) {
+      await notifyUser('Hat nicht geklappt', errorMessage(e));
+    }
+  };
+
+  // Jedes Mitglied lässt sich melden und blockieren (Name und Profilbild sind Inhalte
+  // von Nutzern, AGENTS.md); entfernen darf nur, wer die Gruppe gegründet hat.
+  const memberOptions: SheetOption[] = [];
+  if (menuFor) {
+    const m = menuFor;
+    if (group.is_owner && !m.is_owner) {
+      memberOptions.push({ key: 'remove', label: `${m.name} entfernen`, icon: 'close', destructive: true, onPress: () => void remove(m.id, m.name) });
+    }
+    memberOptions.push({ key: 'report', label: 'Melden', icon: 'flag', destructive: true, onPress: () => setReporting({ type: 'user', id: m.id, label: m.name }) });
+    memberOptions.push({ key: 'block', label: `${m.name} blockieren`, icon: 'ban', destructive: true, onPress: () => void block(m) });
+  }
 
   const openChat = () =>
     router.push({ pathname: '/chat', params: { group: String(group.id), title: group.name, people: String(group.members_count) } });
@@ -128,7 +165,7 @@ export default function GroupScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: group.name }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <PullToCloseScroll contentContainerStyle={styles.content}>
         <LinearGradient colors={[...Night.gradient]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.hero}>
           {/* Abzeichen und Goenni oben, der Name darunter in voller Breite – lange Namen brechen sonst mitten im Wort. */}
           <View style={styles.heroTop}>
@@ -210,9 +247,7 @@ export default function GroupScreen() {
                   </View>
                 ) : null}
               </View>
-              {group.is_owner && !m.is_owner ? (
-                <IconButton icon="close" label={`${m.name} entfernen`} onPress={() => remove(m.id, m.name)} size={34} />
-              ) : null}
+              {m.id !== user?.id ? <IconButton icon="more" label={`Mehr zu ${m.name}`} onPress={() => setMenuFor(m)} size={34} /> : null}
             </View>
           ))}
         </Card>
@@ -229,7 +264,13 @@ export default function GroupScreen() {
         ) : null}
 
         <Button title={group.is_owner ? 'Gruppe löschen' : 'Gruppe verlassen'} icon={group.is_owner ? 'trash' : 'logout'} variant="danger" onPress={leaveOrDelete} />
-      </ScrollView>
+        {group.is_owner ? null : (
+          <Button title="Gruppe melden" variant="ghost" size="small" icon="flag" onPress={() => setReporting({ type: 'group', id: group.id, label: group.name })} />
+        )}
+      </PullToCloseScroll>
+
+      <OptionsSheet visible={menuFor !== null} title={menuFor?.name} options={memberOptions} onClose={() => setMenuFor(null)} />
+      <ReportSheet target={reporting} onClose={() => setReporting(null)} />
     </View>
   );
 }

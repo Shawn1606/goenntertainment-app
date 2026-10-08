@@ -35,8 +35,25 @@ test('eine starke Passphrase ohne Zahl sagt, was der Server noch will', () => {
 });
 
 test('der eigene Name oder die E-Mail im Passwort zieht es nach unten', () => {
-  assert.ok(score('Maximilian2026!x', ['maximilian@web.de']) <= 1);
-  assert.equal(passwordStrength('Maximilian2026!x', { common: COMMON, personal: ['maximilian@web.de'] }).meetsPolicy, false);
+  assert.ok(score('Maximilian2026!x', ['maximilian@example.invalid']) <= 1);
+  assert.equal(passwordStrength('Maximilian2026!x', { common: COMMON, personal: ['maximilian@example.invalid'] }).meetsPolicy, false);
+});
+
+test('die Mindestregel ist genau die des Servers (PasswordPolicy.php)', () => {
+  // Umlaute zählen dort nicht als Buchstabe: ohne a–z wird abgelehnt – mit eigenem Tipp.
+  const umlauts = passwordStrength('ääää1234', { common: COMMON });
+  assert.equal(umlauts.meetsPolicy, false);
+  assert.match(umlauts.hints[0], /a bis z/);
+  // Länge in Zeichen: zwei Emoji sind zwei Zeichen, nicht vier.
+  const face = '\u{1F600}';
+  assert.equal(passwordStrength(`abc1${face}${face}`, { common: COMMON }).meetsPolicy, false);
+  assert.equal(passwordStrength(`abcd1${face}${face}x`, { common: COMMON }).meetsPolicy, true);
+  // Der Name zählt beim Server nicht – nur Benutzername und E-Mail (account).
+  const named = { common: COMMON, personal: ['tester_42', 'post@example.invalid', 'Maximilian'], account: ['tester_42', 'post@example.invalid'] };
+  assert.equal(passwordStrength('Maximilian2026', named).meetsPolicy, true);
+  assert.ok(passwordStrength('Maximilian2026', named).score <= 1, 'die Bewertung warnt trotzdem');
+  assert.equal(passwordStrength('xtester_42x9', named).meetsPolicy, false);
+  assert.equal(passwordStrength('meinepost7x', named).meetsPolicy, false);
 });
 
 test('Tastatur- und Zahlenfolgen werden erkannt', () => {

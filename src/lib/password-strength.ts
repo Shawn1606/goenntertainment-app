@@ -11,8 +11,10 @@ import { passwordStrength as rate, type PasswordStrength } from '@/domain/passwo
 export function passwordStrength(
   password: string,
   personal: (string | null | undefined)[] = [],
+  /** Nur Benutzername und E-Mail – das prüft der Server (siehe PasswordContext.account). */
+  account?: (string | null | undefined)[],
 ): PasswordStrength {
-  return rate(password, { common: commonPasswords as string[], personal });
+  return rate(password, { common: commonPasswords as string[], personal, account });
 }
 
 export type { PasswordStrength };

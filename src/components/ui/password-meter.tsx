@@ -26,14 +26,17 @@ const COLORS: Record<PasswordScore, string> = {
 export function PasswordMeter({
   password,
   personal = [],
+  account,
 }: {
   password: string;
   personal?: (string | null | undefined)[];
+  /** Nur Benutzername und E-Mail – das prüft der Server (siehe PasswordContext.account). */
+  account?: (string | null | undefined)[];
 }) {
   const colors = useTheme();
   if (!password) return null;
 
-  const result = passwordStrength(password, personal);
+  const result = passwordStrength(password, personal, account);
   const active = result.score === 0 ? 1 : result.score;
   const color = COLORS[result.score];
   const hint = result.hints[0];

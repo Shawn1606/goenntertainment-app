@@ -1,9 +1,9 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { Mascot, MascotEmpty } from '@/components/mascot';
+import { Mascot, MascotEmpty, MascotError } from '@/components/mascot';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
@@ -12,7 +12,7 @@ import { FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constant
 import { BOOKING_STATUS_LABEL } from '@/domain/booking-status';
 import { formatClock } from '@/domain/date-format';
 import { useTheme } from '@/hooks/use-theme';
-import { api, errorMessage, type Booking, type CheckinResult } from '@/lib/api';
+import { api, errorMessage, type StaffBooking, type StaffCheckinResult } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
@@ -32,22 +32,41 @@ export default function PartnerModeScreen() {
   const colors = useTheme();
   const { token } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
-  const [partners, setPartners] = useState<StaffPartner[]>([]);
+  /** `null`, solange geladen wird – leer heißt wirklich „für keinen Partner freigeschaltet". */
+  const [partners, setPartners] = useState<StaffPartner[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   const [partnerId, setPartnerId] = useState<number | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [result, setResult] = useState<CheckinResult | null>(null);
-  const [bookings, setBookings] = useState<Booking[]>([]);
+  const [result, setResult] = useState<StaffCheckinResult | null>(null);
+  const [bookings, setBookings] = useState<StaffBooking[]>([]);
   const [checkedIn, setCheckedIn] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const busy = useRef(false);
 
+  // Ein Netzfehler ist kein „nicht freigeschaltet": Er zeigt sich als Fehler mit „Nochmal".
   useEffect(() => {
     if (!token) return;
-    api.staffPartners(token).then(({ data }) => {
-      setPartners(data);
-      if (data.length > 0) setPartnerId(data[0].id);
-    });
-  }, [token]);
+    let active = true;
+    api
+      .staffPartners(token)
+      .then(({ data }) => {
+        if (!active) return;
+        setPartners(data);
+        setLoadError(null);
+        setPartnerId((current) => current ?? data[0]?.id ?? null);
+      })
+      .catch((e) => {
+        if (active) setLoadError(errorMessage(e, 'Der Partner-Modus ließ sich nicht laden.'));
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, attempt]);
+  const retryPartners = () => {
+    setLoadError(null);
+    setAttempt((n) => n + 1);
+  };
 
   const loadBookings = useCallback(async () => {
     if (!token || !partnerId) return;
@@ -78,12 +97,11 @@ export default function PartnerModeScreen() {
     } catch (e) {
       feedback.failed();
       await notifyUser('Pass nicht erkannt', errorMessage(e));
-    } finally {
-      busy.current = false;
     }
+    busy.current = false;
   };
 
-  const redeem = async (booking: Booking) => {
+  const redeem = async (booking: StaffBooking) => {
     if (!token) return;
     try {
       await api.staffRedeem(token, booking.id);
@@ -94,6 +112,15 @@ export default function PartnerModeScreen() {
       await notifyUser('Einlösen hat nicht geklappt', errorMessage(e));
     }
   };
+
+  if (partners === null) {
+    return (
+      <View style={[styles.flex, styles.center, { backgroundColor: colors.backgroundElement }]}>
+        <Stack.Screen options={{ headerShown: true, title: 'Partner-Modus' }} />
+        {loadError ? <MascotError detail={loadError} onRetry={retryPartners} /> : <ActivityIndicator color={colors.tint} />}
+      </View>
+    );
+  }
 
   if (partners.length === 0) {
     return (
@@ -180,7 +207,7 @@ export default function PartnerModeScreen() {
             <View style={styles.resultHead}>
               <Mascot mood="cheer" size={56} celebrate />
               <View style={{ flex: 1 }}>
-                <Text style={[styles.resultTitle, { color: colors.text }]}>Hallo {result.customer?.first_name}!</Text>
+                <Text style={[styles.resultTitle, { color: colors.text }]}>Hallo {result.customer.first_name}!</Text>
                 <Text style={[styles.text, { color: colors.textSecondary, textAlign: 'left' }]}>
                   {result.stamped ? `Stempel vergeben (${result.stamps.filled === 0 ? result.stamps.fields : result.stamps.filled}/${result.stamps.fields}).` : 'Heute schon gestempelt.'}
                   {result.reward_credits > 0 ? ` Karte voll – ${result.reward_credits} Credits gutgeschrieben!` : ''}
@@ -214,7 +241,7 @@ export default function PartnerModeScreen() {
   );
 }
 
-function BookingLine({ booking, onRedeem }: { booking: Booking; onRedeem?: () => void }) {
+function BookingLine({ booking, onRedeem }: { booking: StaffBooking; onRedeem?: () => void }) {
   const colors = useTheme();
   return (
     <View style={styles.line}>
@@ -224,7 +251,7 @@ function BookingLine({ booking, onRedeem }: { booking: Booking; onRedeem?: () =>
           {booking.offer_title} · {booking.people} P.
         </Text>
         <Text style={[styles.lineMeta, { color: colors.textSecondary }]}>
-          {booking.customer?.first_name ?? 'Gast'} · {booking.code ?? ''} · {BOOKING_STATUS_LABEL[booking.status]}
+          {booking.customer.first_name} · {booking.code ?? ''} · {BOOKING_STATUS_LABEL[booking.status]}
           {booking.redeemed_at ? ` ${formatClock(booking.redeemed_at)}` : ''}
           {booking.pay_method === 'credits' ? ' · mit Credits bezahlt' : ' · bezahlt'}
         </Text>

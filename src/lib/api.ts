@@ -4,6 +4,8 @@ import { API_URL } from '@/constants/config';
 import type { ClubPlan, GroupTier, PlanKey } from '@/domain/club';
 import type { AdminFeatureState, BingoState, FeatureKey, FeatureState, PreviewMode } from '@/domain/features';
 import type { NewChallengeInput, TestphaseState } from '@/domain/testphase';
+import type { ReportTarget } from '@/domain/report-reason';
+import type { ReportSnapshot } from '@/domain/report-snapshot';
 import { createSessionWatch } from '@/domain/session';
 
 /**
@@ -249,8 +251,14 @@ export type Booking = {
   feedback_given?: boolean;
   /** Nur in der Gruppenansicht: wer gebucht hat. */
   booked_by?: string | null;
-  /** Nur im Partner-Modus. */
-  customer?: { first_name: string };
+};
+
+/**
+ * Eine Buchung, wie der Partner sie sieht (PartnerStaffController::forStaff): ohne die
+ * Gruppe der Person, ihre Club-Stufe und den Kalender-Link – dafür mit dem Vornamen.
+ */
+export type StaffBooking = Omit<Booking, 'group' | 'plan_key' | 'calendar_path'> & {
+  customer: { first_name: string };
 };
 
 export type StampEntry = {
@@ -365,11 +373,19 @@ export type CheckinResult = {
   bonus_stamp?: boolean;
   reward_credits: number;
   stamps: StampCard;
-  /** Fehlt im Partner-Modus (der Partner sieht fremde Stände nicht). */
   credits?: number;
   open_bookings: Booking[];
-  /** Nur im Partner-Modus. */
-  customer?: { first_name: string };
+};
+
+/**
+ * Was der Partner nach dem Scan des Passes sieht (PartnerStaffController::staffResult): den
+ * Vornamen, die laufende Karte mit nur SEINEN Stempeln und die offenen Buchungen bei ihm –
+ * keinen Credit-Stand, keine Club-Stufe, keine Besuche bei anderen Partnern.
+ */
+export type StaffCheckinResult = Pick<CheckinResult, 'partner' | 'stamped' | 'bonus_stamp' | 'reward_credits'> & {
+  stamps: Pick<StampCard, 'filled' | 'fields' | 'remaining' | 'stamps'>;
+  open_bookings: StaffBooking[];
+  customer: { first_name: string };
 };
 
 export type PassToken = {
@@ -447,7 +463,7 @@ export type ChatRoom = { group_id: number; title: string; can_moderate: boolean 
 
 export type BlockedPerson = { id: number; name: string; username: string | null; avatar: string | null };
 
-export type ReportTarget = 'message' | 'user' | 'group' | 'partner' | 'offer';
+export type { ReportTarget };
 
 /* ================================================================ Admin */
 
@@ -514,8 +530,10 @@ export type AdminReport = {
   id: number;
   target_type: string;
   target_id: number;
-  /** Was gemeldet wurde, in einem Satz – `null`, wenn es inzwischen weg ist. */
+  /** Was gemeldet wurde, wie es JETZT heißt – `null`, wenn es inzwischen weg ist. */
   target: string | null;
+  /** Was im Moment der Meldung da stand – `null` bei älteren Meldungen oder wenn es schon weg war. */
+  snapshot: ReportSnapshot | null;
   reason: string;
   note: string | null;
   status: 'open' | 'reviewed' | 'dismissed';
@@ -637,6 +655,15 @@ export function errorMessage(error: unknown, fallback = 'Bitte versuch es gleich
   return error instanceof ApiError ? error.firstError() : fallback;
 }
 
+/**
+ * Fehler je Eingabefeld, wie ein Formular sie zeigt. Ohne Feldangaben landet die
+ * Meldung bei `field` – so steht nie ein Fehler ohne Platz da.
+ */
+export function fieldErrors(error: unknown, field: string): Record<string, string[]> {
+  if (!(error instanceof ApiError)) return { [field]: ['Unbekannter Fehler.'] };
+  return Object.keys(error.errors).length > 0 ? error.errors : { [field]: [error.firstError()] };
+}
+
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
@@ -644,6 +671,15 @@ type RequestOptions = {
 };
 
 const OFFLINE = 'Keine Verbindung zum Server. Bist du online?';
+
+/**
+ * So lange darf eine Anfrage samt Antwort dauern. Ohne Grenze hinge sie bei einer stockenden
+ * Verbindung (WLAN mit Anmeldeseite, ein Balken im Keller, ein hängender Server) für immer –
+ * React Native setzt auf Android selbst keine. Danach gilt sie wie „keine Verbindung", und die
+ * Offline-Wege (Pass, Tickets) greifen. Uploads dürfen länger dauern.
+ */
+const REQUEST_TIMEOUT_MS = 15_000;
+const UPLOAD_TIMEOUT_MS = 60_000;
 
 /**
  * Every answer to an authenticated request is reported here (F-20): a 401 means the server no
@@ -657,50 +693,73 @@ export const sessionWatch = createSessionWatch();
  * Reads an answer: reports its status with the token the request carried, parses JSON, and
  * throws an ApiError with the full body (bans put their details there) when the request failed.
  * Every fetch site of this file goes through here.
+ *
+ * A success that is not JSON does not come from this API (every route answers JSON) but from
+ * something in between, such as a Wi-Fi sign-in page: it counts as no connection, instead of
+ * handing `null` to callers that expect data. The same for a body that breaks off or is not JSON.
  */
 async function parseResponse<T>(response: Response, token: string | null | undefined): Promise<T> {
   sessionWatch.report(response.status, token);
 
-  const isJson = response.headers.get('content-type')?.includes('application/json');
-  const data = isJson ? await response.json() : null;
+  const isJson = response.headers.get('content-type')?.includes('application/json') === true;
+  let data = null;
+  if (isJson) {
+    try {
+      data = await response.json();
+    } catch {
+      throw response.ok ? new ApiError(OFFLINE, 0) : new ApiError('Etwas ist schiefgelaufen.', response.status);
+    }
+  }
   if (!response.ok) {
     throw new ApiError(data?.message ?? 'Etwas ist schiefgelaufen.', response.status, data?.errors ?? {}, data ?? null);
   }
+  if (!isJson && response.status !== 204) throw new ApiError(OFFLINE, 0);
   return data as T;
+}
+
+/**
+ * One request to the API with a time limit for the whole exchange (the answer is read inside
+ * it, see REQUEST_TIMEOUT_MS). A network error or the time running out throws the offline
+ * ApiError (status 0).
+ */
+async function exchange<T>(path: string, init: RequestInit, token: string | null | undefined, timeoutMs: number): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, { ...init, signal: controller.signal });
+    } catch {
+      throw new ApiError(OFFLINE, 0);
+    }
+    return await parseResponse<T>(response, token);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, token } = options;
-  let response: Response;
-  try {
-    response = await fetch(`${API_URL}${path}`, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-  } catch {
-    throw new ApiError(OFFLINE, 0);
-  }
-  return parseResponse<T>(response, token);
+  const init: RequestInit = {
+    method,
+    headers: {
+      Accept: 'application/json',
+      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  };
+  return exchange<T>(path, init, token, REQUEST_TIMEOUT_MS);
 }
 
 /** multipart/form-data – den Content-Type samt Boundary setzt `fetch` selbst. */
 async function upload<T>(token: string, path: string, form: FormData): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_URL}${path}`, {
-      method: 'POST',
-      headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-      body: form,
-    });
-  } catch {
-    throw new ApiError(OFFLINE, 0);
-  }
-  return parseResponse<T>(response, token);
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+    body: form,
+  };
+  return exchange<T>(path, init, token, UPLOAD_TIMEOUT_MS);
 }
 
 /**
@@ -847,8 +906,6 @@ export const api = {
   quote: (token: string, offerId: number, people: number, payMethod: PayMethod) =>
     request<{ data: Quote }>(`/offers/${offerId}/quote`, { method: 'POST', body: { people, pay_method: payMethod }, token }),
 
-  partners: (token: string) => request<{ data: Partner[] }>('/partners', { token }),
-
   partner: (token: string, id: number) => request<{ data: Partner }>(`/partners/${id}`, { token }),
 
   /* -------------------------------------------------------------- Buchen */
@@ -927,8 +984,6 @@ export const api = {
 
   /* ------------------------------------------------ Stempel und Check-in */
 
-  stamps: (token: string) => request<{ data: StampCard }>('/stamps', { token }),
-
   pass: (token: string) => request<{ data: PassToken }>('/pass', { token }),
 
   checkin: (token: string, input: { token: string; method: CheckinMethod; lat?: number | null; lng?: number | null }) =>
@@ -940,13 +995,13 @@ export const api = {
     request<{ data: { id: number; name: string; role: string }[] }>('/partner/me', { token }),
 
   staffCheckin: (token: string, partnerId: number, pass: string) =>
-    request<{ data: CheckinResult }>('/partner/checkins', { method: 'POST', body: { partner_id: partnerId, pass }, token }),
+    request<{ data: StaffCheckinResult }>('/partner/checkins', { method: 'POST', body: { partner_id: partnerId, pass }, token }),
 
   staffBookings: (token: string, partnerId: number) =>
-    request<{ data: Booking[]; checked_in_today: number; generated_at: string }>(`/partner/bookings?partner_id=${partnerId}`, { token }),
+    request<{ data: StaffBooking[]; checked_in_today: number; generated_at: string }>(`/partner/bookings?partner_id=${partnerId}`, { token }),
 
   staffRedeem: (token: string, bookingId: number) =>
-    request<{ data: Booking }>(`/partner/bookings/${bookingId}/redeem`, { method: 'POST', token }),
+    request<{ data: StaffBooking }>(`/partner/bookings/${bookingId}/redeem`, { method: 'POST', token }),
 
   /* ---------------------------------------------------------------- Gruppen */
 
@@ -956,9 +1011,6 @@ export const api = {
 
   createGroup: (token: string, name: string, description?: string) =>
     request<{ data: Group }>('/groups', { method: 'POST', body: { name, description: description || null }, token }),
-
-  updateGroup: (token: string, id: number, input: { name?: string; description?: string | null }) =>
-    request<{ data: Group }>(`/groups/${id}`, { method: 'PATCH', body: input, token }),
 
   deleteGroup: (token: string, id: number) => request<{ message: string }>(`/groups/${id}`, { method: 'DELETE', token }),
 
@@ -1043,6 +1095,20 @@ export const api = {
 
     renameUser: (token: string, id: number, username: string) =>
       request<{ message: string; username: string }>(`/admin/users/${id}`, { method: 'PATCH', body: { username }, token }),
+
+    /** Anstößigen Profilnamen (wird zum Benutzernamen) und/oder das Profilbild zurücksetzen. */
+    clearProfile: (token: string, id: number, parts: { name?: boolean; avatar?: boolean }) =>
+      request<{ message: string; data: AdminUserDetail }>(`/admin/users/${id}/clear-profile`, { method: 'POST', body: parts, token }),
+
+    /** Moderation: jede Nachricht im Gruppen-Chat, auch ohne Mitgliedschaft. */
+    deleteMessage: (token: string, id: number) => request<{ message: string }>(`/admin/messages/${id}`, { method: 'DELETE', token }),
+
+    /** Moderation: Gruppe umbenennen oder ihre Beschreibung ändern bzw. leeren (`null`). */
+    updateGroup: (token: string, id: number, changes: { name?: string; description?: string | null }) =>
+      request<{ message: string }>(`/admin/groups/${id}`, { method: 'PATCH', body: changes, token }),
+
+    /** Moderation: Gruppe löschen – Chat, Mitglieder und Abstimmungen gehen mit. */
+    deleteGroup: (token: string, id: number) => request<{ message: string }>(`/admin/groups/${id}`, { method: 'DELETE', token }),
 
     banUser: (token: string, id: number, reason: string, image?: ImageUpload | null) =>
       imageForm({ reason }, 'evidence', image).then((form) => upload<{ message: string }>(token, `/admin/users/${id}/ban`, form)),
@@ -1166,15 +1232,25 @@ export const api = {
   },
 };
 
-/** Für Downloads mit Token (CSV im Admin-Bereich). */
+/** Für Downloads mit Token (CSV im Admin-Bereich) – mit demselben Zeitlimit wie Uploads. */
 export async function fetchText(token: string, path: string): Promise<string> {
-  let response: Response;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
   try {
-    response = await fetch(`${API_URL}${path}`, { headers: { Authorization: `Bearer ${token}` } });
-  } catch {
-    throw new ApiError(OFFLINE, 0);
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, { headers: { Authorization: `Bearer ${token}` }, signal: controller.signal });
+    } catch {
+      throw new ApiError(OFFLINE, 0);
+    }
+    sessionWatch.report(response.status, token);
+    if (!response.ok) throw new ApiError('Download fehlgeschlagen.', response.status);
+    try {
+      return await response.text();
+    } catch {
+      throw new ApiError(OFFLINE, 0);
+    }
+  } finally {
+    clearTimeout(timer);
   }
-  sessionWatch.report(response.status, token);
-  if (!response.ok) throw new ApiError('Download fehlgeschlagen.', response.status);
-  return response.text();
 }

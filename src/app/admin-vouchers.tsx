@@ -1,8 +1,9 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { AdminScreen, SectionTitle, numberOrNull } from '@/components/admin-ui';
+import { MascotError } from '@/components/mascot';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { TextField } from '@/components/ui/text-field';
@@ -23,7 +24,9 @@ import { shareText } from '@/lib/share';
 export default function AdminVouchers() {
   const colors = useTheme();
   const { token } = useAuth();
-  const [batches, setBatches] = useState<VoucherBatch[]>([]);
+  /** `null`, solange noch nichts geladen ist – „Noch keine" nur, wenn es stimmt. */
+  const [batches, setBatches] = useState<VoucherBatch[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [label, setLabel] = useState('');
   const [retailer, setRetailer] = useState('');
   const [credits, setCredits] = useState('100');
@@ -33,7 +36,14 @@ export default function AdminVouchers() {
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(() => {
-    if (token) api.admin.voucherBatches(token).then(({ data }) => setBatches(data));
+    if (!token) return;
+    api.admin
+      .voucherBatches(token)
+      .then(({ data }) => {
+        setBatches(data);
+        setLoadError(null);
+      })
+      .catch((e) => setLoadError(errorMessage(e, 'Die Auflagen ließen sich nicht laden.')));
   }, [token]);
 
   useFocusEffect(load);
@@ -41,29 +51,31 @@ export default function AdminVouchers() {
   const create = async () => {
     if (!token) return;
     setSaving(true);
+    // Vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const input = {
+      label: label.trim(),
+      retailer: retailer.trim() || null,
+      credits: numberOrNull(credits) ?? 0,
+      quantity: numberOrNull(quantity) ?? 0,
+      expires_at: expires.trim() || null,
+    };
     try {
-      await api.admin.createVoucherBatch(token, {
-        label: label.trim(),
-        retailer: retailer.trim() || null,
-        credits: numberOrNull(credits) ?? 0,
-        quantity: numberOrNull(quantity) ?? 0,
-        expires_at: expires.trim() || null,
-      });
+      await api.admin.createVoucherBatch(token, input);
       setLabel('');
       load();
       await notifyUser('Auflage erstellt', 'Die Codes kannst du jetzt als CSV holen.');
     } catch (e) {
       await notifyUser('Nicht erstellt', errorMessage(e));
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   };
 
   const exportCsv = async (batch: VoucherBatch) => {
     if (!token) return;
+    const inBrowser = Platform.OS === 'web' && typeof document !== 'undefined';
     try {
       const csv = await fetchText(token, api.admin.voucherCsvPath(batch.id));
-      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      if (inBrowser) {
         const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
         const a = document.createElement('a');
         a.href = url;
@@ -113,8 +125,10 @@ export default function AdminVouchers() {
       </Card>
 
       <SectionTitle>Auflagen</SectionTitle>
-      {batches.length === 0 ? <Text style={[styles.hint, { color: colors.textSecondary }]}>Noch keine.</Text> : null}
-      {batches.map((b) => (
+      {loadError ? <MascotError detail={loadError} onRetry={load} /> : null}
+      {batches === null && !loadError ? <ActivityIndicator color={colors.tint} /> : null}
+      {batches?.length === 0 ? <Text style={[styles.hint, { color: colors.textSecondary }]}>Noch keine.</Text> : null}
+      {(batches ?? []).map((b) => (
         <Card key={b.id} style={styles.batch}>
           <Text style={[styles.title, { color: colors.text }]}>{b.label}</Text>
           <Text style={[styles.hint, { color: colors.textSecondary }]}>

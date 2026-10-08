@@ -274,6 +274,7 @@ export function OfferRow({
   distanceKm,
   reasons,
   priceLine,
+  discountPercent,
   onPress,
 }: {
   offer: Offer;
@@ -283,6 +284,12 @@ export function OfferRow({
   reasons?: string[];
   /** Eigene Preiszeile, z. B. „14,99 € p. P. · 59,96 € zusammen". */
   priceLine?: string | null;
+  /**
+   * Rabatt für das Abzeichen auf dem Bild. Entdecken gibt den Rabatt der ganzen
+   * Gruppe mit – sonst stünde dort der Rabatt für eine Person („−5 %"), während
+   * darunter „Ihr spart 10 %" steht.
+   */
+  discountPercent?: number;
   /** Statt der Detailseite ohne Vorgaben (Entdecken gibt Personenzahl und Gruppe mit). */
   onPress?: () => void;
 }) {
@@ -290,6 +297,7 @@ export function OfferRow({
   const router = useRouter();
   const { user } = useAuth();
   const quote = soloPrice(offer, user?.club_plan);
+  const percent = discountPercent ?? quote?.percent ?? 0;
   const distance = formatDistance(distanceKm);
 
   return (
@@ -300,9 +308,9 @@ export function OfferRow({
       accessibilityLabel={`${offer.title} bei ${offer.partner?.name ?? 'Partner'}`}
       style={[styles.row, { borderColor: colors.border, backgroundColor: colors.background }]}>
       <OfferCover offer={offer} interest={interest} showPartner={false} iconSize={72} style={styles.thumb}>
-        {quote && quote.percent > 0 ? (
+        {percent > 0 ? (
           <View style={[styles.discount, styles.discountSmall]}>
-            <Text style={[styles.discountText, styles.discountTextSmall]}>−{formatPercent(quote.percent)}</Text>
+            <Text style={[styles.discountText, styles.discountTextSmall]}>−{formatPercent(percent)}</Text>
           </View>
         ) : null}
       </OfferCover>

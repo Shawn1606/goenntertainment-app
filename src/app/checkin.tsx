@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Stack, useFocusEffect, useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { useCelebrate } from '@/components/celebration';
 import { Mascot } from '@/components/mascot';
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { QrCode } from '@/components/ui/qr-code';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing, Stroke } from '@/constants/theme';
 import { formatCredits } from '@/domain/club';
@@ -21,6 +22,7 @@ import { useAuth } from '@/lib/auth-context';
 import { notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
+import { goBack } from '@/lib/navigation';
 import { cancelNfc, nfcState, readSticker, type NfcState } from '@/lib/nfc';
 import { loadOfflinePass, saveOfflinePass } from '@/lib/offline-cache';
 import { currentCoords } from '@/lib/use-location';
@@ -46,7 +48,7 @@ export default function CheckinScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: mode === 'pass' ? 'Mein Pass' : 'Einchecken' }} />
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <PullToCloseScroll contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <View style={[styles.segment, { borderColor: colors.border, backgroundColor: colors.background }]}>
           {(['scan', 'pass'] as const).map((m) => {
             const active = mode === m;
@@ -69,7 +71,7 @@ export default function CheckinScreen() {
         ) : (
           <PassPanel />
         )}
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }
@@ -113,48 +115,64 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
     }
   };
 
-  const submit = useCallback(
-    async (scanned: string, method: CheckinMethod) => {
-      if (!token || handled.current) return;
-      handled.current = true;
-      setDone(true);
-      setBusy(true);
-      setError(null);
-      try {
-        const coords = await currentCoords();
-        const { data } = await api.checkin(token, { token: scanned, method, lat: coords?.lat ?? null, lng: coords?.lng ?? null });
-        setResult(data);
-        setSticker(scanned);
-        if (typeof data.credits === 'number') market.setCredits(data.credits);
-        void market.refreshClub();
-        // Volle Karte = der große Moment; ein einzelner Stempel landet auf der Karte selbst.
-        if (data.reward_credits > 0) {
-          celebrate({ title: 'Stempelkarte voll!', credits: data.reward_credits, kind: 'coins', subtitle: 'Die Credits sind schon auf deinem Konto. Die neue Karte wartet.' });
-        } else if (data.stamped) feedback.achieved();
-        else feedback.tapped();
+  /** Was nach dem Einchecken mit dem Ticket passiert, von dem man kam (`bookingId`). */
+  const settleTicket = async (data: CheckinResult, scanned: string) => {
+    if (!bookingId) return;
+    if (data.open_bookings.some((b) => b.id === bookingId)) {
+      await redeem(bookingId, scanned, data);
+      return;
+    }
+    // Ein Aufkleber eines anderen Partners: Der Stempel zählt, das Ticket bleibt offen.
+    await notifyUser('Ticket nicht eingelöst', 'Dein Ticket gehört zu einem anderen Partner (oder ist schon eingelöst). Der Stempel hier zählt trotzdem.');
+  };
 
-        // Kam man von einem Ticket: diese Buchung gleich einlösen, wenn sie hierher gehört.
-        if (bookingId && data.open_bookings.some((b) => b.id === bookingId)) {
-          await redeem(bookingId, scanned, data);
-        }
-      } catch (e) {
-        feedback.failed();
-        setError(errorMessage(e, 'Das hat nicht geklappt.'));
-        handled.current = false;
-        setDone(false);
-      } finally {
-        setBusy(false);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [token, bookingId],
-  );
+  const submit = async (scanned: string, method: CheckinMethod) => {
+    if (!token || handled.current) return;
+    handled.current = true;
+    setDone(true);
+    setBusy(true);
+    setError(null);
+    // Vor dem `try` (currentCoords wirft nie): Bedingungen darin kann der React Compiler nicht übersetzen.
+    const coords = await currentCoords();
+    const input = { token: scanned, method, lat: coords?.lat ?? null, lng: coords?.lng ?? null };
+    try {
+      const { data } = await api.checkin(token, input);
+      setResult(data);
+      setSticker(scanned);
+      if (typeof data.credits === 'number') market.setCredits(data.credits);
+      void market.refreshClub();
+      // Volle Karte = der große Moment; ein einzelner Stempel landet auf der Karte selbst.
+      if (data.reward_credits > 0) {
+        celebrate({ title: 'Stempelkarte voll!', credits: data.reward_credits, kind: 'coins', subtitle: 'Die Credits sind schon auf deinem Konto. Die neue Karte wartet.' });
+      } else if (data.stamped) feedback.achieved();
+      else feedback.tapped();
+      await settleTicket(data, scanned);
+    } catch (e) {
+      feedback.failed();
+      setError(errorMessage(e, 'Das hat nicht geklappt.'));
+      // Die Kamera bleibt aus, bis man „Nochmal scannen" tippt: Sonst schickte sie
+      // denselben Code, der noch im Bild ist, alle paar Sekunden erneut.
+      handled.current = false;
+    }
+    setBusy(false);
+  };
 
-  // Über einen Link geöffnet (Aufkleber mit normaler Kamera gescannt): gleich einchecken.
+  /** Nach einem Fehler: die Kamera wieder scharf schalten. */
+  const scanAgain = () => {
+    setError(null);
+    setDone(false);
+  };
+
+  // Über einen Link geöffnet (Aufkleber mit normaler Kamera gescannt): gleich einchecken –
+  // beim Öffnen und wenn man zurückkommt, nicht bei jedem Neuzeichnen.
+  const submitLatest = useRef(submit);
+  useEffect(() => {
+    submitLatest.current = submit;
+  });
   useFocusEffect(
     useCallback(() => {
-      if (deepLinkToken) void submit(deepLinkToken, 'qr');
-    }, [deepLinkToken, submit]),
+      if (deepLinkToken) void submitLatest.current(deepLinkToken, 'qr');
+    }, [deepLinkToken]),
   );
 
   const tapNfc = async () => {
@@ -210,8 +228,8 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
           </Card>
         ) : null}
 
-        <Button title="Zur Stempelkarte" icon="stamp" variant="secondary" onPress={() => router.replace('/stamps')} />
-        <Button title="Fertig" variant="ghost" onPress={() => router.back()} />
+        <Button title="Zur Stempelkarte" icon="stamp" variant="secondary" onPress={() => router.dismissTo('/stamps')} />
+        <Button title="Fertig" variant="ghost" onPress={() => goBack()} />
       </View>
     );
   }
@@ -256,6 +274,7 @@ function ScanPanel({ bookingId, deepLinkToken }: { bookingId: number | null; dee
           <Text style={[styles.errorText, { color: colors.text }]}>{error}</Text>
         </View>
       ) : null}
+      {done && !busy ? <Button title="Nochmal scannen" icon="scan" variant="secondary" onPress={scanAgain} /> : null}
 
       <Text style={[styles.small, { color: colors.textSecondary }]}>
         Für den Stempel prüfen wir einmal kurz deinen Standort – damit niemand mit einem Foto des Aufklebers von zu Hause stempelt.
@@ -303,19 +322,18 @@ function PassPanel() {
     }, [load]),
   );
 
-  // Jede Minute ein frischer Pass – der alte gilt noch eine weitere Minute.
+  // Jede Minute ein frischer Pass – der alte gilt noch eine weitere Minute. Nur
+  // solange der Pass zu sehen ist: Liegt ein anderer Bildschirm darüber, ruht beides.
+  const focused = useIsFocused();
   useEffect(() => {
-    const timer = setInterval(() => {
-      setLeft((s) => {
-        if (s <= 1) {
-          void load();
-          return 60;
-        }
-        return s - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [load]);
+    if (!focused) return;
+    const countdown = setInterval(() => setLeft((s) => (s <= 1 ? 60 : s - 1)), 1000);
+    const renew = setInterval(() => void load(), 60_000);
+    return () => {
+      clearInterval(countdown);
+      clearInterval(renew);
+    };
+  }, [focused, load]);
 
   return (
     <View style={styles.panel}>

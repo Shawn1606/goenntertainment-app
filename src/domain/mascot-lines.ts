@@ -158,6 +158,22 @@ export function pokeLine(count: number): Tip {
 export const DUCK_LINE: Tip = tip('Okay, ich mach kurz Pause. Tipp auf meine Antenne, wenn du mich brauchst!', 'happy');
 export const BACK_LINE: Tip = tip('Da bin ich wieder!', 'cheer');
 
+/**
+ * Nach einem Flug (ganz schnell nach unten gescrollt): Goenni sagt nichts von
+ * selbst – aber wer ihn kurz danach antippt, hört, wie es war.
+ */
+export const FLIGHT_LINES: readonly Tip[] = [
+  tip('Huiii! Nicht so schnell – mir ist ganz schwindelig.', 'silly'),
+  tip('Wow, das war ein Flug! Nochmal? Lieber nicht.', 'wow'),
+  tip('Uff, gelandet. Du scrollst schneller als ich fliegen kann!', 'oops'),
+];
+
+/** Der Satz nach dem `n`-ten Flug (1-basiert) – reihum, damit es nicht immer derselbe ist. */
+export function flightLine(n: number): Tip {
+  const i = Math.max(0, Math.floor(Number.isFinite(n) ? n : 1) - 1);
+  return FLIGHT_LINES[i % FLIGHT_LINES.length];
+}
+
 /** Nach einem Credit-Kauf. `until` ist das fertige Datum („05.10.2027"). */
 export function purchaseLine(added: number, until: string | null): Tip {
   const amount = formatCredits(added);

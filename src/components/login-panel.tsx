@@ -1,6 +1,6 @@
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Alert, Linking, Modal, Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Linking, Modal, Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandGradientText } from '@/components/brand-gradient-text';
@@ -13,6 +13,7 @@ import { SUPPORT_EMAIL, supportMailto } from '@/constants/links';
 import { Brand, MaxContentWidth, Spacing, FontFamily } from '@/constants/theme';
 import { api, ApiError, type BanInfo, type TwoFactorChallenge } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { notifyUser } from '@/lib/confirm';
 import { clearSavedEmail, loadSavedEmail, saveEmail } from '@/lib/credential-store';
 import { passwordStrength } from '@/lib/password-strength';
 import { flagWeakPassword } from '@/lib/security-nudge';
@@ -119,32 +120,53 @@ export function LoginPanel({ active, onBack }: Props) {
    * aktiver 2FA ist man da noch nicht angemeldet.
    */
   async function finishLogin() {
+    // Zuerst und ohne `await`: Der Auth-Gate wechselt schon in die App, und die Startseite
+    // fragt den Hinweis beim ersten Erscheinen ab.
+    flagWeakPassword(passwordStrength(password, [email.trim()]).score <= 1);
     if (remember) {
       await saveEmail(email.trim());
     } else {
       await clearSavedEmail();
     }
-    flagWeakPassword(passwordStrength(password, [email.trim()]).score <= 1);
-    // Der Auth-Gate wechselt jetzt automatisch in die App.
   }
 
+  /** Das Passwort stimmte, jetzt fehlt der Code (Zwei-Faktor-Anmeldung). */
+  function askForCode(pending: TwoFactorChallenge) {
+    setChallenge(pending);
+    setCode('');
+    setResendIn(pending.method === 'email' ? 60 : 0);
+  }
+
+  // Die try-Blöcke unten bleiben bewusst ohne `finally` und ohne Bedingungen
+  // (`?:`, `&&`): Beides kann der React Compiler nicht übersetzen, und dann bliebe
+  // die ganze Karte unoptimiert – jeder Tastendruck zeichnete sie komplett neu.
   async function onSubmit() {
     setLoading(true);
     setErrors({});
     setGeneralError(null);
     try {
       const pending = await login(email.trim(), password);
-      if (pending) {
-        setChallenge(pending);
-        setCode('');
-        setResendIn(pending.method === 'email' ? 60 : 0);
-        return;
-      }
-      await finishLogin();
+      if (pending) askForCode(pending);
+      else await finishLogin();
     } catch (error) {
       showError(error);
-    } finally {
-      setLoading(false);
+    }
+    setLoading(false);
+  }
+
+  /**
+   * Abgelaufen oder zu viele Versuche: Der Beleg ist verbraucht, es geht nur mit
+   * einer neuen Anmeldung weiter. Dann zurück zum Passwort, statt ein Code-Feld
+   * stehen zu lassen, das nie mehr funktionieren kann.
+   */
+  function showCodeError(error: unknown) {
+    if (error instanceof ApiError && error.errors.challenge) {
+      setChallenge(null);
+      setGeneralError(error.firstError());
+    } else if (error instanceof ApiError && Object.keys(error.errors).length === 0) {
+      setErrors({ code: [error.firstError()] });
+    } else {
+      showError(error);
     }
   }
 
@@ -162,22 +184,9 @@ export function LoginPanel({ active, onBack }: Props) {
       await completeTwoFactor(challenge.challenge, value);
       await finishLogin();
     } catch (error) {
-      // Abgelaufen oder zu viele Versuche: Der Beleg ist verbraucht, es geht nur
-      // mit einer neuen Anmeldung weiter. Dann zurück zum Passwort, statt ein
-      // Code-Feld stehen zu lassen, das nie mehr funktionieren kann.
-      if (error instanceof ApiError && error.errors.challenge) {
-        setChallenge(null);
-        setGeneralError(error.firstError());
-        return;
-      }
-      if (error instanceof ApiError && Object.keys(error.errors).length === 0) {
-        setErrors({ code: [error.firstError()] });
-        return;
-      }
-      showError(error);
-    } finally {
-      setLoading(false);
+      showCodeError(error);
     }
+    setLoading(false);
   }
 
   async function onResend() {
@@ -187,7 +196,8 @@ export function LoginPanel({ active, onBack }: Props) {
       setResendIn(60);
       setGeneralError(null);
       setErrors({});
-      Alert.alert('Neuer Code', res.message);
+      // notifyUser statt Alert.alert: Alert tut im Browser nichts.
+      void notifyUser('Neuer Code', res.message);
     } catch (error) {
       showError(error);
     }
@@ -212,7 +222,7 @@ export function LoginPanel({ active, onBack }: Props) {
       '',
     ].filter((line): line is string => line !== null);
     Linking.openURL(supportMailto('Widerspruch gegen Sperre', lines.join('\n'))).catch(() => {
-      Alert.alert('Mail ließ sich nicht öffnen', `Schreib uns an ${SUPPORT_EMAIL}.`);
+      void notifyUser('Mail ließ sich nicht öffnen', `Schreib uns an ${SUPPORT_EMAIL}.`);
     });
   }
 

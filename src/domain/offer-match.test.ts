@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { ClubRules } from './club.ts';
-import { DEFAULT_CRITERIA, matchOffer, normalizeAges, rankOffers, type MatchableOffer } from './offer-match.ts';
+import { DEFAULT_CRITERIA, formatAgeRange, matchOffer, normalizeAges, rankOffers, type MatchableOffer } from './offer-match.ts';
 
 const RULES = JSON.parse(
   readFileSync(join(import.meta.dirname, '..', '..', 'shared', 'club.json'), 'utf8'),
@@ -45,6 +45,21 @@ test('zu jung ist hart, zu alt nur ein Hinweis', () => {
   assert.ok(fits);
   assert.ok(fits.reasons.some((r) => r.includes('passt für alle')));
   assert.ok(fits.score > older.score);
+});
+
+test('nur eine Altersgrenze bekannt: sie gilt für beide Seiten', () => {
+  // Älteste:r 8, Jüngste:r offen → niemand ist 16: ein Angebot ab 16 fliegt raus.
+  assert.equal(matchOffer(RULES, offer({ id: 1, min_age: 16 }), { ...DEFAULT_CRITERIA, youngest: null, oldest: 8 }, ctx), null);
+  // Jüngste:r 40, Älteste:r offen → alle sind über 17: Hinweis statt „passt für alle".
+  const grown = matchOffer(RULES, offer({ id: 2, max_age: 17 }), { ...DEFAULT_CRITERIA, youngest: 40, oldest: null }, ctx);
+  assert.ok(grown);
+  assert.equal(grown.caveats.length, 1);
+  assert.ok(!grown.reasons.some((r) => r.includes('passt für alle')));
+  // Eine Grenze, und sie passt: als Grund genannt, aber ohne „für alle".
+  const one = matchOffer(RULES, offer({ id: 3, min_age: 6, max_age: 12 }), { ...DEFAULT_CRITERIA, youngest: 8, oldest: null }, ctx);
+  assert.ok(one);
+  assert.ok(one.reasons.includes('6–12 Jahre'));
+  assert.ok(!one.reasons.some((r) => r.includes('passt für alle')));
 });
 
 test('Prämien (Freigetränk) gehören nicht in den Gruppen-Finder', () => {
@@ -119,4 +134,13 @@ test('Alter: vertauschte Eingaben werden getauscht', () => {
   assert.deepEqual(normalizeAges(40, 8), { youngest: 8, oldest: 40 });
   assert.deepEqual(normalizeAges(-2, 140), { youngest: 0, oldest: 99 });
   assert.deepEqual(normalizeAges(null, 12), { youngest: null, oldest: 12 });
+});
+
+test('Alter: Chip-Text zeigt nur, was eingestellt ist', () => {
+  assert.equal(formatAgeRange(18, 30), '18–30 J.');
+  assert.equal(formatAgeRange(25, 25), '25 J.');
+  assert.equal(formatAgeRange(18, null), 'ab 18 J.');
+  assert.equal(formatAgeRange(null, 30), 'bis 30 J.');
+  assert.equal(formatAgeRange(0, null), 'ab 0 J.');
+  assert.equal(formatAgeRange(null, null), null);
 });

@@ -3,6 +3,7 @@
 namespace App\Support;
 
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 /**
  * Passwoerter pruefen - ueber die Grenze zweier bcrypt-Umsetzungen hinweg.
@@ -49,6 +50,9 @@ class Passwords
      */
     private const EQUIVALENT_PREFIXES = ['$2a$', '$2b$', '$2x$'];
 
+    /** Siehe unusableHash(). */
+    private static ?string $unusableHash = null;
+
     /**
      * Stimmt das Passwort zu diesem Hash?
      *
@@ -62,6 +66,29 @@ class Passwords
         }
 
         return Hash::check($plain, self::normalize($hash));
+    }
+
+    /**
+     * Fuer die Anmeldung: rechnet IMMER einmal bcrypt - auch wenn es zur Adresse kein Konto
+     * (oder kein Passwort) gibt, dann gegen einen Hash, zu dem niemand das Passwort kennt.
+     * Sonst antwortete eine unbekannte Adresse um eine bcrypt-Rechnung schneller als eine
+     * bekannte, und die Antwortzeit verriete, welche Adressen registriert sind.
+     */
+    public static function checkForSignIn(string $plain, ?string $hash): bool
+    {
+        if ($hash === null || $hash === '') {
+            Hash::check($plain, self::unusableHash());
+
+            return false;
+        }
+
+        return self::check($plain, $hash);
+    }
+
+    /** Hash mit den Kosten der Konfiguration zu einem Zufallswert, den niemand kennt - je Prozess einmal. */
+    private static function unusableHash(): string
+    {
+        return self::$unusableHash ??= Hash::make(Str::random(40));
     }
 
     /** Auf den Praefix umschreiben, den PHP als bcrypt akzeptiert. */

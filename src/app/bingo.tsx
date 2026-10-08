@@ -1,10 +1,10 @@
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { BingoCard } from '@/components/bingo-card';
 import { useCelebrate } from '@/components/celebration';
-import { MascotEmpty } from '@/components/mascot';
+import { MascotEmpty, MascotError } from '@/components/mascot';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { FontFamily, MaxContentWidth, Spacing } from '@/constants/theme';
@@ -15,6 +15,7 @@ import { useAuth } from '@/lib/auth-context';
 import { notifyUser } from '@/lib/confirm';
 import { useFeatures } from '@/lib/features-context';
 import { useMarket } from '@/lib/market-context';
+import { goBack } from '@/lib/navigation';
 
 /**
  * Stadt-Bingo – die Monatskarte für alle, sobald ein Admin sie freischaltet
@@ -22,7 +23,6 @@ import { useMarket } from '@/lib/market-context';
  * statt einer leeren Seite.
  */
 export default function BingoScreen() {
-  const router = useRouter();
   const colors = useTheme();
   const { token } = useAuth();
   const market = useMarket();
@@ -30,11 +30,17 @@ export default function BingoScreen() {
   const { features, bingo, setBingo, refreshBingo } = useFeatures();
   const [busy, setBusy] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  /** Laden gescheitert: Fehler mit „Nochmal" statt eines Kreisels, der nie endet. */
+  const [failed, setFailed] = useState(false);
+
+  const load = useCallback(async () => {
+    setFailed(!(await refreshBingo()));
+  }, [refreshBingo]);
 
   useFocusEffect(
     useCallback(() => {
-      void refreshBingo();
-    }, [refreshBingo]),
+      void load();
+    }, [load]),
   );
 
   const claim = async (c: TestphaseClaim) => {
@@ -47,9 +53,8 @@ export default function BingoScreen() {
       celebrate({ title: 'Bingo!', subtitle: c.label, credits: res.credits, kind: 'coins' });
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   return (
@@ -62,7 +67,7 @@ export default function BingoScreen() {
             refreshing={refreshing}
             onRefresh={async () => {
               setRefreshing(true);
-              await refreshBingo();
+              await load();
               setRefreshing(false);
             }}
             tintColor={colors.tint}
@@ -73,7 +78,7 @@ export default function BingoScreen() {
             <MascotEmpty mood="sleepy">
               <Text style={[styles.title, { color: colors.text }]}>Gerade kein Bingo</Text>
               <Text style={[styles.text, { color: colors.textSecondary }]}>Das Stadt-Bingo läuft zweimal im Jahr. Wir sagen Bescheid, wenn es wieder losgeht!</Text>
-              <Button title="Zurück" variant="secondary" size="small" onPress={() => router.back()} />
+              <Button title="Zurück" variant="secondary" size="small" onPress={() => goBack()} />
             </MascotEmpty>
           </Card>
         ) : bingo ? (
@@ -83,6 +88,8 @@ export default function BingoScreen() {
               Partner-Felder erledigst du mit einem Besuch in diesem Monat, Aufgaben-Felder mit der Sache, die darauf steht. Belohnungen gibt es als Credits.
             </Text>
           </>
+        ) : failed ? (
+          <MascotError detail="Das Bingo ließ sich gerade nicht laden." onRetry={load} />
         ) : (
           <ActivityIndicator color={colors.tint} style={{ marginTop: Spacing.six }} />
         )}

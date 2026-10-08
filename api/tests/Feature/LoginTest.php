@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Testing\TestResponse;
 use Tests\AppFeatureTestCase;
@@ -74,6 +75,70 @@ class LoginTest extends AppFeatureTestCase
         $response = $this->login($user->email, self::TEST_PASSWORD)->assertOk();
 
         $this->assertNotEmpty($response->json('token'));
+        $this->assertSame(1, $this->tokenCount($user));
+    }
+
+    /**
+     * An unknown address (or an account without a password) costs one bcrypt check, as a known
+     * one does: otherwise the response time would tell which addresses have an account. The test
+     * counts the checks, not the time, which is reliable in a test run.
+     */
+    public function test_an_unknown_address_costs_the_same_password_check_as_a_known_one(): void
+    {
+        $known = $this->makeUser();
+        $passwordless = $this->makeUser(['password' => null]);
+        $hasher = new class(Hash::getFacadeRoot())
+        {
+            public int $checks = 0;
+
+            public function __construct(private readonly object $hasher) {}
+
+            public function check(string $value, ?string $hashedValue, array $options = []): bool
+            {
+                $this->checks++;
+
+                return $this->hasher->check($value, $hashedValue, $options);
+            }
+
+            public function __call(string $method, array $arguments): mixed
+            {
+                return $this->hasher->{$method}(...$arguments);
+            }
+        };
+        Hash::swap($hasher);
+
+        $cases = [
+            'unknown address' => self::freeUsername('nobody').'@example.invalid',
+            'known address' => $known->email,
+            'account without a password' => $passwordless->email,
+        ];
+        foreach ($cases as $case => $email) {
+            $hasher->checks = 0;
+            $this->login($email, 'Wrong-Pass-1357')
+                ->assertStatus(422)
+                ->assertJsonPath('errors.email.0', 'Diese Zugangsdaten passen nicht zu unseren Aufzeichnungen.');
+            $this->assertSame(1, $hasher->checks, "{$case}: password checks");
+        }
+
+        $hasher->checks = 0;
+        $this->login($known->email, self::TEST_PASSWORD)->assertOk();
+        $this->assertSame(1, $hasher->checks, 'right password: password checks');
+    }
+
+    /** POST /api/logout ends the session of the token it is sent with - only that one. */
+    public function test_logout_deletes_only_the_token_in_use(): void
+    {
+        $this->postJson('/api/logout')->assertUnauthorized();
+
+        $user = $this->makeUser();
+        $phone = $this->issueToken($user);
+        $tablet = $this->issueToken($user);
+
+        $this->withBearer($phone)->postJson('/api/logout')->assertOk()->assertJsonPath('message', 'Abgemeldet.');
+
+        $this->withBearer($phone)->getJson('/api/user')->assertUnauthorized();
+        $this->withBearer($phone)->postJson('/api/logout')->assertUnauthorized();
+        $this->withBearer($tablet)->getJson('/api/user')->assertOk();
         $this->assertSame(1, $this->tokenCount($user));
     }
 }

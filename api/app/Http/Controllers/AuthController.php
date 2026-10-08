@@ -196,7 +196,10 @@ class AuthController extends Controller
 
         $user = User::where('email', $request->input('email'))->first();
 
-        if ($user === null || ! Passwords::check((string) $request->input('password'), $user->password)) {
+        // Erst pruefen, dann nach dem Konto fragen: Auch eine unbekannte Adresse kostet eine
+        // bcrypt-Rechnung, sonst verriete die Antwortzeit, welche Adressen registriert sind.
+        $matches = Passwords::checkForSignIn((string) $request->input('password'), $user?->password);
+        if ($user === null || ! $matches) {
             throw self::wrongCredentials();
         }
 

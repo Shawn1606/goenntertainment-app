@@ -15,8 +15,8 @@
  *   Rabatt = Club-Rabatt + Gruppenrabatt der Stufe, höchstens der Deckel
  *   des Angebots (sonst der allgemeine Deckel).
  *
- * Den Gruppenrabatt gibt es in jeder Stufe; Gold und Platinum haben je
- * Personenzahl einen eigenen, höheren Wert (Tabelle in club.json).
+ * Den Gruppenrabatt gibt es in jeder Stufe, seit 06.10.2026 überall gleich hoch
+ * (Tabelle in club.json); Gold und Platinum legen ihren Club-Rabatt obendrauf.
  *
  * Er gilt für Euro- UND Credit-Preise gleich, damit „du sparst 20 %" nicht davon
  * abhängt, wie man bezahlt. Euro wird kaufmännisch auf den Cent gerundet,

@@ -9,9 +9,9 @@ These rules apply to every change, whether a person or an AI assistant writes it
 - Never log secrets, passwords, tokens, reset codes or 2FA codes, not even in development. Mail
   goes to the local mail catcher (README, "Mail in development"), never to the log mailer.
 - Every route needs authentication, authorisation, input limits, a rate limit and a test.
-- One backend owns each path: once Laravel (`api/`) serves a route, Node (`server/`) must not
-  serve it too (`api/tests/Feature/NodeTwinRoutesTest.php` fails otherwise). Node routers come
-  from `createRouter()` (`server/src/router.js`).
+- One backend owns each path: Laravel (`api/`) serves every route the app calls
+  (`src/domain/laravel-routes.test.ts` fails otherwise). The former Node backend (`server/`) is
+  not deployed; its routers come from `createRouter()` (`server/src/router.js`).
 - Every kind of user content needs moderation and a report path.
 - No personal data in fixtures, docs or commits: use obviously fake values (`example.invalid`
   addresses, made-up passwords), never a real address or a working credential.

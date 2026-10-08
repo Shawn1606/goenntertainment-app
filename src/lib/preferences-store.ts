@@ -63,6 +63,12 @@ export type AppSettings = {
   mascotCompanion: boolean;
   /** Kleine Saison-Deko (Kürbisse, Christbaumkugeln …) in Kopfzeile und Karten. */
   seasonalDecor: boolean;
+  /**
+   * Leistungsanzeige oben links: Bilder pro Sekunde auf UI- und JS-Thread
+   * (src/components/perf-meter.tsx). Ein Messwerkzeug – darum aus und nur für
+   * Admins bzw. im Entwicklungs-Build zu sehen.
+   */
+  perfMeter: boolean;
 };
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -76,6 +82,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   sounds: false,
   mascotCompanion: true,
   seasonalDecor: true,
+  perfMeter: false,
 };
 
 /** Nur bekannte Schlüssel übernehmen – alles andere kommt aus den Vorgaben. */

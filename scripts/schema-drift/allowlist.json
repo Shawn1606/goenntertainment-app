@@ -22,7 +22,7 @@
       ]
     },
     {
-      "reason": "Stock Laravel skeleton tables for sessions and queues. The deploy runs Laravel with SESSION_DRIVER=array and QUEUE_CONNECTION=sync (deploy/docker-compose.yml) and never runs Laravel migrations (api/docker/entrypoint.sh); only a local `composer setup` creates these tables. (The cache tables are in server/schema.sql since the deploy uses CACHE_STORE=database.)",
+      "reason": "Stock Laravel skeleton tables for sessions and queues. Laravel's skeleton migrations create them (also the `migrate` of api/docker/entrypoint.sh), but nothing uses them: the deploy runs Laravel with SESSION_DRIVER=array and QUEUE_CONNECTION=sync (deploy/docker-compose.yml). (The cache tables are in server/schema.sql since the deploy uses CACHE_STORE=database.)",
       "entries": [
         "laravel/migrate table-extra failed_jobs(id,uuid,connection,queue,payload,exception,failed_at)",
         "laravel/migrate table-extra job_batches(id,name,total_jobs,pending_jobs,failed_jobs,failed_job_ids,options,cancelled_at,created_at,finished_at)",

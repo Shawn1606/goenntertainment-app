@@ -11,9 +11,9 @@ import { parseSessionUserId, serializeSessionUserId } from '@/domain/session';
 const KEY = 'goenn_api_token';
 
 /**
- * The signed-in account's id, kept beside the token (src/domain/session.ts): when the stored
- * session is rejected at app start, it says whose search history leaves the device (F-44). Only a
- * help for that: reading and writing it never fails a sign-in or the app start.
+ * The signed-in account's id, kept beside the token (src/domain/session.ts): the offline copy of
+ * bookings and pass belongs to it and is read for this account only (F-44,
+ * src/lib/offline-cache.ts). Reading and writing it never fails a sign-in or the app start.
  */
 const USER_KEY = 'goenn_session_user_id';
 
