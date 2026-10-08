@@ -8,7 +8,7 @@
  * einen Fingerabdruck des Inhalts (beides in normalize.js).
  */
 import { pool, first } from '../db.js';
-import { hashPassword } from '../auth.js';
+import { findSystemAccount, systemAccountPasswordHash } from '../system-accounts.js';
 
 /**
  * Merkzettel: welches Event der Quelle wurde zu welcher Aktivitaet.
@@ -55,25 +55,29 @@ export async function ensureImportSchema() {
  *
  * Das Konto hat ein Zufallspasswort und keine verifizierte Mail: Anmelden soll
  * sich damit niemand, es traegt nur die Events.
+ *
+ * An existing account is taken over only when it is exactly the host's account (same address,
+ * expected username; see src/system-accounts.js). An account that merely matches the way the
+ * database compares addresses, e.g. one with an accented letter in the domain, is refused with
+ * SystemAccountConflict before anything is written, and the import run stops with exit code 1.
  */
 export async function ensureVenueHost(source) {
-  const existing = await first('SELECT id FROM users WHERE email = ?', [source.host.email]);
-  if (existing) {
+  const existingId = await findSystemAccount(pool, source.host);
+  if (existingId !== null) {
     // account_type nachziehen, falls das Konto aus einer frueheren Fassung stammt.
     await pool.query(
       `UPDATE users SET granted_account_type = 'business',
               account_type = COALESCE(NULLIF(account_type, 'standard'), 'business'),
               updated_at = NOW()
         WHERE id = ?`,
-      [existing.id],
+      [existingId],
     );
-    return existing.id;
+    return existingId;
   }
 
-  const password = await hashPassword(
-    // Kein festes Passwort im Quelltext: Das Konto soll nicht anmeldbar sein.
-    `${source.slug}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`,
-  );
+  // Kein festes Passwort im Quelltext: Das Konto soll nicht anmeldbar sein.
+  // The bcrypt hash of a secret from node:crypto that is never printed or kept (src/system-accounts.js).
+  const password = await systemAccountPasswordHash();
 
   const [result] = await pool.query(
     `INSERT INTO users (name, username, email, password, account_type, granted_account_type, created_at, updated_at)

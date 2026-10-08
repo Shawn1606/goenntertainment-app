@@ -27,8 +27,11 @@
  * abgelaufen, Konto nicht gesperrt. Steht der Filter zweimal verschieden da,
  * zeigt eine Liste irgendwann einen Ring, hinter dem nichts mehr ist.
  */
-import { pool, toIso } from './db.js';
-import { mediaUrl, publicBase } from './media.js';
+import { first, pool, toIso } from './db.js';
+import { logError } from './log.js';
+import { mediaUrl } from './media.js';
+import { blockExistsBetween } from './people.js';
+import { removeStored } from './storage.js';
 
 /** Wie lange eine Story sichtbar bleibt. Gegenstueck: `STORY_HOURS` in src/domain/story.ts. */
 export const STORY_HOURS = 24;
@@ -61,7 +64,9 @@ export function transformStory(req, row) {
   return {
     id: row.id,
     caption: row.caption,
-    image_url: row.image_path ? `${publicBase(req)}/storage/${row.image_path}` : null,
+    // A private address (media.js): the image is served only while the story runs (see
+    // storyImageVisible below).
+    image_url: mediaUrl(req, row.image_path),
     created_at: toIso(row.created_at),
     expires_at: toIso(row.expires_at),
     /**
@@ -150,4 +155,61 @@ export async function attachStories(people, viewerId) {
 
   const meta = await storyMetaFor(viewerId, list.map((person) => person.id));
   return list.map((person) => ({ ...person, story: meta.get(Number(person.id)) ?? null }));
+}
+
+/**
+ * May `viewer` see the image of a story (GET /api/media/stories/:file, F-11 and F-13)?
+ *
+ * Story images are private (storage.js): an address alone opens nothing. The image is shown
+ * while the story runs, i.e. not after expires_at, with exactly the rules of the lists above:
+ *   - the story has not expired (also for admins: an expired story is gone for everybody);
+ *   - the author's account is not banned (STORY_LIVE), except for admins, who moderate stories
+ *     of banned accounts in the admin panel (GET /api/admin/stories lists them);
+ *   - no block stands between viewer and author, in either direction, except for admins and
+ *     for one's own stories.
+ * Every "no" is the same 404 as for an unknown file, so the answer tells nothing about blocks.
+ *
+ * `value` is the stored path ('stories/<name>'), compared as a bound value.
+ */
+export async function storyImageVisible(value, viewer) {
+  const story = await first(
+    `SELECT s.user_id, (u.banned_until IS NOT NULL AND u.banned_until > NOW()) AS banned
+       FROM stories s
+       JOIN users u ON u.id = s.user_id
+      WHERE s.image_path = ? AND s.expires_at > NOW()
+      LIMIT 1`,
+    [value],
+  );
+  if (!story) return false;
+  if (viewer.is_admin) return true;
+  if (Number(story.banned)) return false;
+  if (Number(story.user_id) === Number(viewer.id)) return true;
+  return !(await blockExistsBetween(viewer.id, story.user_id));
+}
+
+/**
+ * Removes expired stories and their image files.
+ *
+ * Runs hourly (index.js) and on every read of the story bar (routes/stories.js): the checked
+ * image route already refuses an expired story at once, this only frees the space. At most 200
+ * stories per run; the next run takes the rest. Never throws: a failed run is logged and the
+ * next one tries again.
+ */
+export async function sweepExpiredStories() {
+  try {
+    const [rows] = await pool.query('SELECT id, image_path FROM stories WHERE expires_at <= NOW() LIMIT 200');
+    if (rows.length === 0) return 0;
+
+    await pool.query(
+      `DELETE FROM stories WHERE id IN (${rows.map(() => '?').join(', ')})`,
+      rows.map((row) => row.id),
+    );
+    for (const row of rows) {
+      if (row.image_path) await removeStored(row.image_path);
+    }
+    return rows.length;
+  } catch (err) {
+    logError('[stories] Removing expired stories failed', err);
+    return 0;
+  }
 }

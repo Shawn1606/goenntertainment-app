@@ -35,9 +35,15 @@ export const Palette = {
   ink: '#0a0a0a',
   inkMuted: '#737373',
   inkSubtle: '#a8a8a8',
-  /** Konturen ersetzen Schatten – das prägt den sachlichen Eindruck. */
-  ring: '#dbdbdb',
-  ringStrong: '#c7c7c7',
+  /**
+   * Konturen ersetzen Schatten – das prägt den sachlichen Eindruck.
+   *
+   * Seit dem Marktplatz-Umbau eine Stufe kräftiger (vorher #dbdbdb): Karten,
+   * Felder und Knöpfe sollen sich klar vom Grund abheben, statt ineinander zu
+   * schwimmen.
+   */
+  ring: '#d6d6de',
+  ringStrong: '#b9b9c6',
   /** Akzent: Indigo. Auf hellem Grund die kräftigere Stufe für Kontrast. */
   indigo: '#fe2c55',
   indigoStrong: '#e8174a',
@@ -73,7 +79,7 @@ export const Palette = {
   surfaceDark: '#121212',
   inkDark: '#f5f5f5',
   inkMutedDark: '#a8a8a8',
-  ringDark: '#262626',
+  ringDark: '#34343c',
   indigoLight: '#ff3b64',
   indigoSoftDark: 'rgba(255,59,100,0.16)',
   indigoSofterDark: 'rgba(255,59,100,0.28)',
@@ -131,21 +137,82 @@ export const Colors = {
     text: Palette.ink,
     background: Palette.canvas,
     backgroundElement: Palette.canvasAlt,
-    backgroundSelected: '#efefef',
+    backgroundSelected: '#efeff3',
     textSecondary: Palette.inkMuted,
     tint: Palette.indigoStrong,
     tintText: '#ffffff',
+    /** Kontur von Karten und Feldern. */
+    border: Palette.ring,
+    /** Kontur, die bewusst auffallen soll (aktive Karte, Hauptfläche). */
+    borderStrong: Palette.ringStrong,
   },
   dark: {
     text: Palette.inkDark,
     background: Palette.canvasDark,
     backgroundElement: Palette.surfaceDark,
-    backgroundSelected: '#262626',
+    backgroundSelected: '#26262c',
     textSecondary: Palette.inkMutedDark,
     tint: Palette.indigoLight,
     tintText: '#ffffff',
+    border: Palette.ringDark,
+    borderStrong: '#4a4a55',
   },
 } as const;
+
+/**
+ * Die Nacht des Instagram-Auftritts: Goenni auf tiefem Lila mit Glitzer
+ * (assets/brand/goe4fun-logo.svg). Steht auf den Flächen, die „Club" sagen –
+ * Stempelkarte, Club-Karte, Kopf der Startseite –, damit App und Kanal
+ * dieselbe Sprache sprechen.
+ */
+export const Night = {
+  deep: '#1c0833',
+  mid: '#3d1263',
+  glow: '#6a2399',
+  /** Verlauf von oben nach unten, wie der Hintergrund des Logos. */
+  gradient: ['#6a2399', '#3d1263', '#1c0833'] as const,
+  sparkle: '#25f4ee',
+  text: '#ffffff',
+  textMuted: 'rgba(255,255,255,0.72)',
+  line: 'rgba(255,255,255,0.18)',
+} as const;
+
+/**
+ * Aussehen der drei Club-Stufen. Die Namen und Zahlen stehen in shared/club.json,
+ * hier nur die Farben.
+ *
+ * Gold und Platinum bekommen einen Verlauf, der nach Metall aussieht – der
+ * Unterschied zu Free muss auf einen Blick sichtbar sein, auch am kleinen Ring um
+ * das Profilbild in der Kopfzeile.
+ */
+export const PlanLook = {
+  free: {
+    gradient: ['#fe2c55', '#dd2a7b', '#8134af'] as const,
+    ring: '#fe2c55',
+    ink: '#ffffff',
+    badgeBg: 'rgba(254,44,85,0.12)',
+    badgeText: '#e8174a',
+  },
+  gold: {
+    gradient: ['#fff1a8', '#f5c542', '#d99a06', '#f7d774'] as const,
+    ring: '#e3a60b',
+    ink: '#3b2600',
+    badgeBg: 'rgba(245,181,10,0.16)',
+    badgeText: '#9a6a00',
+  },
+  platinum: {
+    gradient: ['#f4f7fb', '#c9d3e0', '#8fa3b8', '#e6ecf4'] as const,
+    ring: '#8fa3b8',
+    ink: '#1f2a37',
+    badgeBg: 'rgba(143,163,184,0.18)',
+    badgeText: '#4b5f75',
+  },
+} as const;
+
+export type PlanLookKey = keyof typeof PlanLook;
+
+/** Holografischer Glitzer der Stempel – der „Sammelkarten"-Moment. */
+export const HoloGradient = ['#ff5f80', '#fe2c55', '#dd2a7b', '#8134af', '#25f4ee', '#fff1a8', '#ff5f80'] as const;
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
@@ -283,10 +350,16 @@ export type GlassSurface = (typeof Glass)['light'];
  */
 export const Radius = {
   chip: 999,
-  field: 8,
-  card: 12,
-  panel: 16,
+  field: 12,
+  card: 16,
+  panel: 22,
 } as const;
+
+/**
+ * Die eine Konturstärke der App. 1.5 px statt Haarlinie: sichtbar auf jedem
+ * Display, ohne schwer zu wirken.
+ */
+export const Stroke = 1.5;
 
 /** Schriftfamilie der Referenz. Wird in _layout.tsx geladen. */
 export const FontFamily = {
@@ -346,5 +419,14 @@ export const Spacing = {
   six: 64,
 } as const;
 
-export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
+/**
+ * Wie weit Inhalt über der unteren Leiste enden muss.
+ *
+ * 0, seit die Leiste eine eigene ist (src/components/app-tabs.tsx): Sie steht im
+ * normalen Fluss UNTER dem Tab-Inhalt und überdeckt nichts mehr. Die native
+ * Leiste lag durchscheinend über dem Inhalt, dafür waren 50/80 px nötig. Der
+ * Wert bleibt als Name stehen, damit die Stellen, die ihn brauchten, auffindbar
+ * sind, falls die Leiste je wieder schwebt.
+ */
+export const BottomTabInset = 0;
 export const MaxContentWidth = 800;

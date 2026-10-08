@@ -100,7 +100,15 @@ function positiveInt(value) {
 export function parseMessageInput(input) {
   const raw = input ?? {};
 
-  const body = stripControlChars(String(raw.body ?? '').replace(/\r\n?/g, '\n'))
+  // Length first, before any pattern runs (F-02). The raw text may be longer than the stored
+  // one (CRLF line breaks, control characters and blank lines are removed below), but never
+  // more than twice as long for anything a person typed.
+  const rawBody = String(raw.body ?? '');
+  if (rawBody.length > MAX_MESSAGE_LENGTH * 2) {
+    return { error: `Eine Nachricht fasst hoechstens ${MAX_MESSAGE_LENGTH} Zeichen.` };
+  }
+
+  const body = stripControlChars(rawBody.replace(/\r\n?/g, '\n'))
     // Mehr als eine Leerzeile in Folge schiebt sonst den Verlauf aus dem Bild.
     .replace(/\n{3,}/g, '\n\n')
     .trim();

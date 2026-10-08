@@ -1,15 +1,20 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
+import { endsSession, signOutLocally } from '@/domain/session';
 import {
   api,
   ApiError,
   needsTwoFactor,
+  sessionWatch,
   type RegisterInput,
   type TwoFactorChallenge,
   type UpdateProfileInput,
   type User,
 } from '@/lib/api';
-import { clearToken, loadToken, saveToken } from '@/lib/token-store';
+import { notifyUser } from '@/lib/confirm';
+import { migrateSavedLogin } from '@/lib/credential-store';
+import { clearOfflineCache } from '@/lib/offline-cache';
+import { clearToken, loadToken, saveSessionUserId, saveToken } from '@/lib/token-store';
 
 type AuthContextValue = {
   /** true, solange beim App-Start der gespeicherte Token geprüft wird. */
@@ -26,25 +31,14 @@ type AuthContextValue = {
   completeTwoFactor: (challenge: string, code: string) => Promise<void>;
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: UpdateProfileInput) => Promise<void>;
-  /**
-   * Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat.
-   *
-   * Für Endpunkte, die das Konto ändern, ohne `updateProfile` zu sein – etwa
-   * Profilbild und Banner (siehe `api.setProfileImage`). Ohne das zeigten
-   * Kopfzeile und Konto-Blatt weiter das alte Bild. Bewusst kein zweiter
-   * Netzaufruf wie bei `refreshUser`: Die Antwort IST schon der neue Stand.
-   */
+  /** Übernimmt einen Nutzer, den ein anderer Aufruf schon zurückgegeben hat. */
   applyUser: (user: User) => void;
   /**
-   * Die eigenen Daten neu vom Server holen.
-   *
-   * Nötig, weil sich das Konto auch OHNE Zutun der Person ändern kann: Ein Admin
-   * bestätigt eine Anfrage auf Creator (siehe admin-requests.tsx), und die App
-   * wüsste bis zum nächsten Anmelden nichts davon – Events erstellen wäre
-   * freigeschaltet, der Knopf dafür aber weiter versteckt. Scheitert still: Ein
-   * fehlgeschlagener Abgleich darf den Bildschirm nicht mit einem Fehler
-   * überziehen, der mit dem zu tun hat, was man dort gerade macht.
+   * Einzelne Felder sofort ändern – vor allem der Credit-Stand nach Kauf,
+   * Buchung oder Stempel. Die Kopfzeile zählt dann mit, ohne `/user` neu zu laden.
    */
+  patchUser: (patch: Partial<User>) => void;
+  /** Die eigenen Daten neu vom Server holen. Scheitert still. */
   refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -56,23 +50,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
 
+  /**
+   * The token of the current session, for the 401 listener below (it must not re-subscribe on
+   * every sign-in). Updated in an effect, never during render (React Compiler rules); logout and
+   * endLocalSession clear it first, so their own requests cannot report the session as ended.
+   */
+  const tokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  /**
+   * The one way this device signs out (F-20): deliberate logout and a 401 during a session both
+   * end here, so whatever else must leave the device at sign-out is added in this one place.
+   * `notify` marks the 401 case and tells the person why. The order and the handling of a
+   * storage error are in signOutLocally (src/domain/session.ts): memory first, then storage; a
+   * storage error rejects only a deliberate logout. The offline copy of the bookings and the pass
+   * (src/lib/offline-cache.ts) goes too (F-44), on every path - logout, the 401, and the logout
+   * after deleting the account - and never fails it.
+   */
+  const endLocalSession = useCallback((notify: boolean) => {
+    return signOutLocally(
+      {
+        forget: () => {
+          tokenRef.current = null;
+          setToken(null);
+          setUser(null);
+        },
+        clearStorage: clearToken,
+        clearHistory: () => clearOfflineCache(),
+        notice: () =>
+          notifyUser(
+            'Abgemeldet',
+            'Deine Anmeldung ist abgelaufen oder wurde auf einem anderen Gerät beendet. Bitte melde dich neu an.',
+          ),
+      },
+      notify,
+    );
+  }, []);
+
+  // A 401 to a request with the current token: the server no longer accepts this session.
+  // Nothing to report if the notice fails: the session is already gone on this device.
+  useEffect(
+    () =>
+      sessionWatch.subscribe((rejected) => {
+        if (endsSession(401, rejected, tokenRef.current)) void endLocalSession(true).catch(() => {});
+      }),
+    [endLocalSession],
+  );
+
   // Beim Start: gespeicherten Token laden und gegen /api/user prüfen.
   useEffect(() => {
     let active = true;
 
     (async () => {
+      // First of all: an earlier version may have stored the password on this device; it goes
+      // now, even if the sign-in screen is never shown (src/lib/credential-store.ts).
+      await migrateSavedLogin();
+
       const stored = await loadToken();
       if (stored) {
         try {
           const { user: me } = await api.me(stored);
+          // Kept beside the token, also for a session from before this version (F-44).
+          await saveSessionUserId(me.id);
           if (active) {
             setToken(stored);
             setUser(me);
           }
         } catch (error) {
-          // Token ungültig (401) → verwerfen. Bei reinem Netzfehler behalten.
-          if (error instanceof ApiError && error.status === 401) {
+          // Token ungültig (401) oder Konto gesperrt (403) → verwerfen. Bei
+          // reinem Netzfehler behalten, damit man offline nicht abgemeldet wird.
+          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
             await clearToken();
+            // The session ended while the app was closed (the account deleted, the token
+            // revoked): its offline copy goes too (F-44).
+            await clearOfflineCache().catch(() => undefined);
           } else if (active && stored) {
             setToken(stored);
           }
@@ -88,6 +141,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function applyAuth(result: { token: string; user: User }) {
     await saveToken(result.token);
+    await saveSessionUserId(result.user.id);
     setToken(result.token);
     setUser(result.user);
   }
@@ -117,17 +171,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(updated);
       },
       applyUser: (updated) => setUser(updated),
+      patchUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
       refreshUser: async () => {
         if (!token) return;
         try {
           const { user: me } = await api.me(token);
           setUser(me);
         } catch {
-          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. Ein
-          // ungültiger Token faellt ohnehin beim naechsten Start auf.
+          // Kein Netz oder Server weg: Der bekannte Stand bleibt stehen. A rejected token (401)
+          // has already ended the session through sessionWatch (endLocalSession).
         }
       },
       logout: async () => {
+        // Clear the ref first: the server's answer to this logout must not count as a 401
+        // during the session (after an account deletion the token is already gone).
+        tokenRef.current = null;
         if (token) {
           try {
             await api.logout(token);
@@ -135,12 +193,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // egal – lokal trotzdem abmelden
           }
         }
-        await clearToken();
-        setToken(null);
-        setUser(null);
+        await endLocalSession(false);
       },
     }),
-    [isBootstrapping, token, user],
+    [isBootstrapping, token, user, endLocalSession],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -152,4 +208,10 @@ export function useAuth(): AuthContextValue {
     throw new Error('useAuth muss innerhalb von <AuthProvider> benutzt werden.');
   }
   return ctx;
+}
+
+/** Das angemeldete Konto samt Token – für Screens hinter dem Login-Wächter. */
+export function useSession(): { token: string; user: User } | null {
+  const { token, user } = useAuth();
+  return token && user ? { token, user } : null;
 }

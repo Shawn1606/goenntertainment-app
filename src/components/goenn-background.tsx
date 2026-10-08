@@ -1,5 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Animated, Dimensions, Easing, Platform, StyleSheet, View, type ViewProps } from 'react-native';
 import Svg, { Circle, Defs, Line, Path, Pattern, RadialGradient, Rect, Stop } from 'react-native-svg';
 
@@ -19,7 +19,7 @@ const GRID_SIZE = 32;
 const NATIVE = Platform.OS !== 'web';
 
 function useLoop(duration: number) {
-  const t = useRef(new Animated.Value(0)).current;
+  const [t] = useState(() => new Animated.Value(0));
   useEffect(() => {
     const anim = Animated.loop(
       Animated.sequence([

@@ -1,0 +1,32 @@
+# Was NICHT ins Abbild der Laravel-API wandert.
+
+# Echte Zugangsdaten kommen auf dem Server aus deploy/.env, nicht aus einer
+# mitgebauten Datei – sonst trüge jedes Abbild das lokale DB-Passwort und den
+# APP_KEY mit sich.
+.env
+.env.*
+!.env.example
+
+# Entstehen im Abbild neu (composer install) bzw. werden dort nicht gebraucht.
+vendor/
+node_modules/
+
+# public/storage ist lokal eine Verknüpfung auf server/storage – also auf ALLE
+# hochgeladenen Bilder. Die gehören nicht ins Abbild.
+# In the container nothing lies there: uploads are served by the edge, never by Apache, and the
+# image build stops if a public/storage arrives all the same (Dockerfile, runtime stage).
+public/storage
+
+# Laufzeit-Dateien vom PC: Logs (enthalten u. a. 2FA-Codes aus dem Mail-Log),
+# Caches, Sitzungen.
+storage/logs/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+storage/framework/testing/*
+bootstrap/cache/*.php
+
+tests/
+phpunit.xml
+*.md
+.git

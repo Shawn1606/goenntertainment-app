@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { REPORT_REASONS, isUrgent, reportReasonLabel } from './report-reason.ts';
+// A namespace import: a test of an export that does not exist yet then fails on its assertion,
+// not on loading the file.
+import * as report from './report-reason.ts';
 import { UI_ICON_NAMES } from './ui-icon.ts';
+
+const { REPORT_REASONS, isUrgent, reportReasonLabel } = report;
 
 test('jeder Grund hat Schluessel, Beschriftung, Hinweis und Symbol', () => {
   assert.ok(REPORT_REASONS.length > 0);
@@ -38,4 +42,21 @@ test('unbekannte Schluessel zeigt die Anzeige unveraendert, statt leer zu bleibe
 test('genau ein Grund gilt als dringend', () => {
   const urgent = REPORT_REASONS.filter((reason) => isUrgent(reason.key));
   assert.deepEqual(urgent.map((reason) => reason.key), ['danger']);
+});
+
+test('every report target has a label and a known icon, and comments are reportable (F-08)', () => {
+  const exports = report as unknown as Record<string, unknown>;
+  const targets = exports.REPORT_TARGETS;
+  assert.ok(Array.isArray(targets), 'the app has no list of report targets');
+  assert.ok(targets.includes('post_comment'), 'comments under posts cannot be reported');
+  assert.ok(targets.includes('activity_comment'), 'comments under events cannot be reported');
+  assert.equal(new Set(targets).size, targets.length, 'a target is listed twice');
+
+  const labels = exports.REPORT_TARGET_LABELS as Record<string, { icon: string; label: string }>;
+  for (const target of targets as string[]) {
+    assert.ok(labels?.[target]?.label, `${target}: no label for the admin list`);
+    assert.ok((UI_ICON_NAMES as readonly string[]).includes(labels[target].icon), `${target}: unknown icon`);
+  }
+  assert.equal(report.isCommentTarget('activity_comment'), true);
+  assert.equal(report.isCommentTarget('post'), false);
 });

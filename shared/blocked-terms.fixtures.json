@@ -168,5 +168,15 @@
     { "input": "Du Idiot", "mode": "text", "blocked": false, "note": "milde Beleidigung - Sache der KI und der Meldungen" },
     { "input": "", "mode": "text", "blocked": false },
     { "input": "   ", "mode": "name", "blocked": false }
+  ],
+  "length_cases_about": "Input around max_input_length (shared/blocked-terms.json). Each case is the string `unit` repeated `count` times; every implementation builds it and must answer blocked = (count > max_input_length) - a blocked case as a hit of kind 'length' with an empty term. Lengths count Unicode code points (an emoji is one, although it takes two UTF-16 units in JS and four bytes in PHP). The length is checked first, so even blank input over the maximum is a hit.",
+  "length_cases": [
+    { "unit": "x", "count": 2000, "mode": "text", "blocked": false, "note": "exactly the maximum" },
+    { "unit": "x", "count": 2001, "mode": "text", "blocked": true, "note": "one over the maximum" },
+    { "unit": "😀", "count": 2000, "mode": "name", "blocked": false, "note": "2000 code points in 4000 UTF-16 units" },
+    { "unit": "😀", "count": 2001, "mode": "name", "blocked": true, "note": "one code point over" },
+    { "unit": "ä", "count": 2001, "mode": "username", "blocked": true, "note": "two UTF-8 bytes each" },
+    { "unit": " ", "count": 2001, "mode": "text", "blocked": true, "note": "blank, but over the maximum" },
+    { "unit": "a", "count": 100000, "mode": "text", "blocked": true, "note": "100,000 characters" }
   ]
 }

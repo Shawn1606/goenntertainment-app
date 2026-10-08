@@ -85,9 +85,6 @@ test('eine andere Person zeigt immer ihren Namen', () => {
   assert.equal(showsAuthor(theirs, mine), true);
 });
 
-// Die Ungelesen-Plakette wird in `unread-badge.test.ts` geprüft – sie gehört
-// nicht mehr allein den Chats.
-
 /* ---------------------------------------------------------------- Cursor */
 
 test('der Cursor ist die hoechste ID, nicht die letzte Zeile', () => {

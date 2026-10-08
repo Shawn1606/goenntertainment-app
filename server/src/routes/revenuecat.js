@@ -26,12 +26,14 @@
  * koennte – und sie fiele niemandem auf, weil alles funktioniert.
  */
 import crypto from 'node:crypto';
-import { Router } from 'express';
+import { createRouter } from '../router.js';
 import { pool, toIso } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { rateLimit } from '../rate-limit.js';
 import { applyRevenueCatEvent } from '../subscriptions.js';
+import { logError, logInfo } from '../log.js';
 
-const router = Router();
+const router = createRouter();
 
 /**
  * Vergleich in konstanter Zeit.
@@ -40,6 +42,14 @@ const router = Router();
  * Antwortzeit liesse sich der Token Zeichen fuer Zeichen erraten. Die Laengen
  * werden vorher geprueft, weil `timingSafeEqual` bei ungleicher Laenge wirft.
  */
+/**
+ * The event type for the log: RevenueCat's types are upper-case words with underscores
+ * (INITIAL_PURCHASE, EXPIRATION, ...). Anything else is not printed - it is request data.
+ */
+export function eventTypeForLog(type) {
+  return typeof type === 'string' && /^[A-Z_]{1,64}$/.test(type) ? type : '(unknown type)';
+}
+
 function tokenMatches(given, expected) {
   const a = Buffer.from(String(given ?? ''));
   const b = Buffer.from(String(expected ?? ''));
@@ -48,11 +58,11 @@ function tokenMatches(given, expected) {
 }
 
 // POST /api/webhooks/revenuecat  (oeffentlich, per Token im Header geschuetzt)
-router.post('/webhooks/revenuecat', async (req, res, next) => {
+router.post('/webhooks/revenuecat', rateLimit('webhook'), async (req, res, next) => {
   try {
     const expected = process.env.REVENUECAT_WEBHOOK_TOKEN;
     if (!expected) {
-      console.error('[revenuecat] REVENUECAT_WEBHOOK_TOKEN fehlt – Webhook abgelehnt.');
+      logError('[revenuecat] Webhook abgelehnt', 'REVENUECAT_WEBHOOK_TOKEN fehlt');
       return res.status(503).json({ message: 'Webhook nicht eingerichtet.' });
     }
     if (!tokenMatches(req.get('authorization'), expected)) {
@@ -65,12 +75,15 @@ router.post('/webhooks/revenuecat', async (req, res, next) => {
     // geaendert hat. RevenueCat wiederholt alles, was nicht mit 2xx antwortet:
     // Ein Paywall-Aufruf oder ein Ereignis zu einem geloeschten Konto wuerde
     // sonst tagelang erneut geschickt. Was passiert ist, steht im Log.
+    // Only values the code has checked: the type (eventTypeForLog), the account id and the
+    // entitlements that exist in this app (applyRevenueCatEvent filters them), never the body.
+    const type = eventTypeForLog(req.body?.event?.type);
     if (result.applied) {
-      console.log(
-        `[revenuecat] ${req.body?.event?.type} -> Nutzer ${result.userId}: ${result.entitlements.join(',')} = ${result.status}, Stufe ${result.tier}`,
+      logInfo(
+        `[revenuecat] ${type} -> Nutzer ${result.userId}: ${result.entitlements.join(',')} = ${result.status}, Stufe ${result.tier}`,
       );
     } else {
-      console.log(`[revenuecat] ${req.body?.event?.type} ignoriert: ${result.reason}`);
+      logInfo(`[revenuecat] ${type} ignoriert: ${result.reason}`);
     }
     return res.json({ ok: true, ...result });
   } catch (err) {

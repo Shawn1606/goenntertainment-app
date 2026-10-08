@@ -1,32 +1,22 @@
 import { useRouter, type Href } from 'expo-router';
-import { Pressable } from 'react-native';
 
-import { Icon } from '@/components/ui/icon';
-import { useTheme } from '@/hooks/use-theme';
+import { BackButton } from '@/components/ui/icon-button';
 
 /**
  * Zurück-Knopf für Stack-Kopfzeilen, der auch OHNE Verlauf funktioniert.
  *
- * Der eingebaute Zurück-Pfeil erscheint nur, wenn es einen Bildschirm darunter
- * gibt. Öffnet man eine Stack-Route direkt – Neuladen im Browser, ein Link, ein
- * Neustart nach Absturz –, fehlt er, und die Seite liegt als Sackgasse über der
- * Tab-Leiste. Dieser Knopf geht zurück, wenn es geht, und sonst zu `fallback`.
+ * Öffnet man eine Stack-Route direkt – Neuladen im Browser, ein Link, ein
+ * Neustart nach Absturz –, gibt es keinen Bildschirm darunter, und die Seite
+ * läge als Sackgasse über der Tab-Leiste. Dieser Knopf geht dann zu `fallback`
+ * statt zur Startseite – aus den Sicherheits-Screens z. B. in die Einstellungen.
  *
- * Gedacht als `headerLeft` – aber nur, wenn es KEINEN Verlauf gibt; sonst bleibt
- * der eingebaute Pfeil mit seiner Wisch-Geste auf iOS.
+ * Gedacht als `headerLeft` – aber nur, wenn es KEINEN Verlauf gibt; sonst zeichnet
+ * `AppHeader` seinen eigenen Zurück-Knopf (derselbe Kreis, siehe icon-button.tsx).
  */
 export function useHeaderBackFallback(fallback: Href) {
   const router = useRouter();
-  const colors = useTheme();
   if (router.canGoBack()) return undefined;
-  return () => (
-    <Pressable
-      onPress={() => router.replace(fallback)}
-      hitSlop={10}
-      accessibilityRole="button"
-      accessibilityLabel="Zurück"
-      style={({ pressed }) => [{ paddingRight: 8 }, pressed && { opacity: 0.6 }]}>
-      <Icon name="chevron-left" size={26} color={colors.text} />
-    </Pressable>
-  );
+  return function HeaderBack() {
+    return <BackButton fallback={fallback} />;
+  };
 }

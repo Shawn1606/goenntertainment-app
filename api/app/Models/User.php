@@ -26,7 +26,8 @@ use Laravel\Sanctum\HasApiTokens;
  *
  * `is_admin` fehlt in `#[Fillable]`, und das ist der Kern der Rechtevergabe:
  * Sonst genuegte ein `is_admin: true` im Anmelde-Formular. Wo ein Admin gesetzt
- * wird, geschieht das durch ausdrueckliche Zuweisung im Admin-Bereich.
+ * wird, geschieht das durch ausdrueckliche Zuweisung im Admin-Bereich. Dasselbe
+ * gilt fuer Club-Stufe und Credits: Die schreibt nur der Server selbst.
  */
 #[Fillable([
     'name',
@@ -34,7 +35,6 @@ use Laravel\Sanctum\HasApiTokens;
     'email',
     'password',
     'account_type',
-    'google_id',
     'avatar',
     'banner',
     'terms_version',
@@ -46,6 +46,10 @@ use Laravel\Sanctum\HasApiTokens;
  * aber verschluesselt ist nicht dasselbe wie „darf raus": Jede Kopie ausserhalb
  * der DB ist eine, die man nicht zurueckholt. Dieselbe Liste steht in
  * `serializeUser` in server/src/auth.js.
+ *
+ * `google_id` is hidden too: Google sign-in was removed from both backends. The
+ * column stays in the schema, inert (nothing reads or writes it), and neither
+ * API returns it.
  */
 #[Hidden([
     'password',
@@ -54,6 +58,7 @@ use Laravel\Sanctum\HasApiTokens;
     'two_factor_recovery_codes',
     'two_factor_confirmed_at',
     'two_factor_last_step',
+    'google_id',
 ])]
 class User extends Authenticatable
 {
@@ -73,6 +78,10 @@ class User extends Authenticatable
             'is_admin' => 'boolean',
             'banned_until' => 'datetime',
             'terms_accepted_at' => 'datetime',
+            // The minimum age confirmed at sign-up and when (F-14). Not fillable: set by
+            // AuthController::register from shared/legal.json, never from request data.
+            'min_age_confirmed' => 'integer',
+            'min_age_confirmed_at' => 'datetime',
             // Verschluesselt mit APP_KEY (siehe App\Support\TwoFactor). Die
             // Codes sind zusaetzlich einzeln gehasht - auch entschluesselt steht
             // dort nichts, das man eintippen koennte.
@@ -80,7 +89,26 @@ class User extends Authenticatable
             'two_factor_recovery_codes' => 'encrypted:array',
             'two_factor_confirmed_at' => 'datetime',
             'two_factor_last_step' => 'integer',
+            // Club und Credits (Marktplatz). Geschrieben nur ueber
+            // App\Support\ClubMembership und App\Support\Wallet.
+            'club_since' => 'datetime',
+            'club_renews_at' => 'datetime',
+            'club_cancel_at_period_end' => 'boolean',
+            'club_credits_next_at' => 'datetime',
+            'credits_balance' => 'integer',
         ];
+    }
+
+    /** Die Partner, fuer die dieses Konto im Partner-Modus scannen darf. */
+    public function staffPartners(): BelongsToMany
+    {
+        return $this->belongsToMany(Partner::class, 'partner_staff')->withPivot('role', 'created_at');
+    }
+
+    /** Die Gruppen, in denen dieses Konto Mitglied ist (auch die eigenen). */
+    public function groups(): BelongsToMany
+    {
+        return $this->belongsToMany(Group::class, 'group_members', 'user_id', 'group_id')->withPivot('created_at');
     }
 
     /**
@@ -133,12 +161,17 @@ class User extends Authenticatable
     }
 
     /**
-     * Profil vollstaendig: Benutzername + Kontostufe gesetzt und mindestens drei
-     * Kategorien gewaehlt. Die App schickt sonst niemanden in die Anwendung.
+     * Profil vollstaendig: Benutzername gesetzt und mindestens drei Kategorien
+     * gewaehlt - daraus entstehen die Vorschlaege auf der Startseite. Die App
+     * schickt sonst niemanden in die Anwendung.
+     *
+     * Die Kontostufe gehoert seit dem Marktplatz-Umbau nicht mehr dazu: Die alten
+     * Stufen (Creator/Business) gibt es nicht mehr, und die Club-Stufe hat jedes
+     * Konto von Anfang an (Free).
      */
     public function profileComplete(): bool
     {
-        if ($this->username === null || $this->account_type === null) {
+        if ($this->username === null) {
             return false;
         }
 

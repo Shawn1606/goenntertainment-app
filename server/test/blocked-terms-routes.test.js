@@ -14,8 +14,12 @@ import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createApp } from '../src/app.js';
+import { FUNCTIONAL_WRITE_LIMITS } from './support/app.js';
 import { ensureSchema, pool } from '../src/db.js';
 import { blockedTermMessageFor } from '../src/blocked-terms.js';
+import { createUser, deleteTestUsers, uniqueStamp as stamp } from './support/fixtures.js';
+// Kleinstes gueltiges PNG (1×1) – fuer Storys, die ohne Bild gar nicht gehen.
+import { PNG_1X1 } from './support/images.js';
 
 process.env.FEATURE_ACCOUNT_TIERS = 'true';
 
@@ -27,40 +31,14 @@ let base;
 let server;
 const createdUserIds = [];
 
-const stamp = () => `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-
-function registerBody(overrides = {}) {
-  const s = stamp();
-  return {
-    name: 'Blockterm Test',
-    username: `blockterm${s}`.slice(0, 28),
-    email: `blockterm-test-${s}@example.invalid`,
-    password: 'Wortliste2026',
-    account_type: 'standard',
-    device_name: 'test',
-    ...overrides,
-  };
-}
-
-async function tryRegister(overrides) {
-  const res = await fetch(`${base}/api/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(registerBody(overrides)),
-  });
-  const body = await res.json();
-  if (body?.user?.id) createdUserIds.push(body.user.id);
-  return { status: res.status, body };
-}
-
-async function registerUser(accountType = 'creator') {
-  const { status, body } = await tryRegister();
-  assert.equal(status, 201, 'Registrierung muss klappen');
-  if (accountType !== 'standard') {
-    await pool.query('UPDATE users SET account_type = ? WHERE id = ?', [accountType, body.user.id]);
-  }
-  return body;
-}
+/**
+ * Throw-away account with a token, written straight to the database (test/support/fixtures.js):
+ * sign-up belongs to Laravel. (The word filter on sign-up and on PATCH /api/user is tested in
+ * api/tests/Feature/RegisterTest.php and UserProfileTest.php; Node's copies of those routes are
+ * deleted.)
+ */
+const registerUser = (accountType = 'creator') =>
+  createUser('blockterm', { accountType, created: createdUserIds });
 
 const send = (method, path, token, body) =>
   fetch(`${base}${path}`, {
@@ -80,51 +58,21 @@ async function assertBlocked(res, field, message) {
   assert.deepEqual(body.errors[field], [message]);
 }
 
-/** Kleinstes gueltiges PNG (1×1) – fuer Storys, die ohne Bild gar nicht gehen. */
-const PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
-  'base64',
-);
-
 before(async () => {
   await ensureSchema();
-  server = createApp().listen(0);
+  server = createApp({ writeLimits: FUNCTIONAL_WRITE_LIMITS }).listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
 });
 
 after(async () => {
-  if (createdUserIds.length) {
-    await pool.query(`DELETE FROM users WHERE id IN (${createdUserIds.map(() => '?').join(',')})`, createdUserIds);
+  // Closed even when the cleanup throws; open handles would keep `npm test` from exiting.
+  try {
+    await deleteTestUsers(pool, createdUserIds);
+  } finally {
+    await pool.end();
+    server?.close();
   }
-  await pool.end();
-  server.close();
-});
-
-test('POST /api/register (Node): gesperrter Benutzername und Name werden abgelehnt', async () => {
-  const username = await tryRegister({ username: 'xXhurensohnXx' });
-  assert.equal(username.status, 422);
-  assert.deepEqual(username.body.errors.username, [MSG_USERNAME]);
-
-  const name = await tryRegister({ name: 'Adolf Hitler' });
-  assert.equal(name.status, 422);
-  assert.equal(name.body.message, MSG_NAME);
-
-  // Echter Nachname im Namen-Feld: geht durch.
-  const fick = await tryRegister({ name: 'Adolf Fick' });
-  assert.equal(fick.status, 201);
-});
-
-test('PATCH /api/user (Node): neuer gesperrter Wert nein, alter Wert blockiert nichts', async () => {
-  const { token, user } = await registerUser('standard');
-  await assertBlocked(await send('PATCH', '/api/user', token, { username: 'sieg_heil' }), 'username', MSG_USERNAME);
-  await assertBlocked(await send('PATCH', '/api/user', token, { name: 'Du Fotze' }), 'name', MSG_NAME);
-
-  // Ein Altname, den die Liste heute traefe, bleibt beim Speichern anderer Felder
-  // stehen – sonst liesse sich nicht einmal mehr das Interesse aendern.
-  await pool.query('UPDATE users SET name = ? WHERE id = ?', ['Schlampe', user.id]);
-  const res = await send('PATCH', '/api/user', token, { name: 'Schlampe', interests: [] });
-  assert.equal(res.status, 200);
 });
 
 test('PATCH /api/admin/users/:id: auch Admins vergeben keinen gesperrten Benutzernamen', async () => {
@@ -221,7 +169,7 @@ test('Beitraege und Kommentare: Anlegen, Bearbeiten, Kommentieren', async () => 
 test('Storys: die Bildunterschrift wird geprueft, bevor das Bild gespeichert wird', async () => {
   const { token } = await registerUser('creator');
   const form = new FormData();
-  form.append('image', new Blob([PNG], { type: 'image/png' }), 'story.png');
+  form.append('image', new Blob([PNG_1X1], { type: 'image/png' }), 'story.png');
   form.append('caption', 'H E I L  H I T L E R');
   await assertBlocked(await sendForm('/api/stories', token, form), 'caption', MSG_TEXT);
 });

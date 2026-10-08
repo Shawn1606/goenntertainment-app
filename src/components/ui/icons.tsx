@@ -1045,3 +1045,189 @@ export function ShieldCheckIcon({ size = 20, color = '#6366f1', ...rest }: IconP
     </Svg>
   );
 }
+
+/** Drei Regler – Filter. */
+export function SlidersIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+        <Circle cx={15} cy={7} r={2} />
+        <Circle cx={9} cy={17} r={2} />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Drei Punkte – weitere Optionen. Gefüllt, damit sie klein noch lesbar sind. */
+export function MoreIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Circle cx={5.5} cy={12} r={1.7} fill={color} />
+      <Circle cx={12} cy={12} r={1.7} fill={color} />
+      <Circle cx={18.5} cy={12} r={1.7} fill={color} />
+    </Svg>
+  );
+}
+
+/** Uhr mit Pfeil zurück – Suchverlauf. */
+export function HistoryIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4.5 12a7.5 7.5 0 1 0 2.2-5.3" />
+        <Path d="M4.5 4.5v3.2h3.2" />
+        <Path d="M12 8v4.2l2.8 1.8" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/* ------------------------------------------------ Marktplatz und Club */
+
+/** Münze mit Stern – Credits. */
+export function CoinIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Circle cx={12} cy={12} r={8.4} />
+        <Circle cx={12} cy={12} r={5.6} strokeDasharray="1.2 2" />
+        <Path d="M12 9.2l.9 1.9 2 .2-1.5 1.4.4 2-1.8-1-1.8 1 .4-2-1.5-1.4 2-.2z" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Geschenk – Gutschein, Prämie. */
+export function GiftIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={4} y={9} width={16} height={11} rx={1.5} />
+        <Path d="M3.5 9h17M12 9v11M12 9c-1-2.6-3.6-4.4-5-3-1.2 1.3.4 3 5 3ZM12 9c1-2.6 3.6-4.4 5-3 1.2 1.3-.4 3-5 3Z" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Funkwellen – NFC antippen. */
+export function NfcIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={3.5} y={6} width={9} height={14} rx={2} />
+        <Path d="M7 17h2M15.5 9.5c1.4 1.4 1.4 3.6 0 5M18 7c2.8 2.8 2.8 7.2 0 10" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** QR-Code – scannen, Pass zeigen. */
+export function QrIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Rect x={4} y={4} width={6} height={6} rx={1} />
+        <Rect x={14} y={4} width={6} height={6} rx={1} />
+        <Rect x={4} y={14} width={6} height={6} rx={1} />
+        <Path d="M14 14h2v2M20 14v.01M18 18h2v2M14 20h.01M16 18v2" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Rahmen mit Ecken – Scanner. */
+export function ScanIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M7 12h10" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Stempel – Stempelkarte. */
+export function StampIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M9.5 4.5h5a1.5 1.5 0 0 1 1.5 1.5v1.5a2.5 2.5 0 0 1-1.5 2.3V13h3.5a1.5 1.5 0 0 1 1.5 1.5V17H4.5v-2.5A1.5 1.5 0 0 1 6 13h3.5V9.8A2.5 2.5 0 0 1 8 7.5V6a1.5 1.5 0 0 1 1.5-1.5Z" />
+        <Path d="M5 20h14" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Krone – Club-Stufe. */
+export function CrownIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M4 8l4 3.5L12 5l4 6.5L20 8l-1.6 9.5H5.6z" />
+        <Path d="M6 20h12" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Prozent – Rabatt. */
+export function PercentIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M18 6 6 18" />
+        <Circle cx={7.5} cy={7.5} r={2.5} />
+        <Circle cx={16.5} cy={16.5} r={2.5} />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Geldbörse – Credit-Konto. */
+export function WalletIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M5 7h13a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h10v3" />
+        <Path d="M16 13.5h.01" strokeWidth={2.6} />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Minus – weniger (Personen-Zähler). */
+export function MinusIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M6 12h12" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Kreispfeil – neu laden, erneuern. */
+export function RefreshIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v3.2h-3.2" />
+      </Stroke>
+    </Svg>
+  );
+}
+
+/** Kind und Erwachsene:r – Alter. */
+export function AgeIcon({ size = 20, color = '#6366f1', ...rest }: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none" {...rest}>
+      <Stroke color={color}>
+        <Circle cx={8} cy={6.5} r={2.5} />
+        <Path d="M4 20v-4.5A3.5 3.5 0 0 1 7.5 12h1A3.5 3.5 0 0 1 12 15.5V20" />
+        <Circle cx={16.5} cy={10.5} r={1.8} />
+        <Path d="M14 20v-2.5a2.5 2.5 0 0 1 5 0V20" />
+      </Stroke>
+    </Svg>
+  );
+}

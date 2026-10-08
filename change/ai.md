@@ -52,7 +52,7 @@ decisions:
   - ThemeProvider import von @react-navigation/native (nicht expo-router; canonical, tsc-clean)
   - RN Animated statt reanimated (kein babel-plugin nötig)
 tests: bundle android=200; tsc clean own; browser: register->home, logout->welcome, login->home; CORS ok
-note: erzeugt DB-Testuser expotest01@example.com / geheim1234 (dev)
+note: erzeugt einen DB-Testuser (nur dev; Zugangsdaten stehen bewusst nicht im Repo)
 
 STEP 3 · app · PR #1 (gleicher branch, commit nach STEP 2)
 goal: altes Web-Marken-Design + Login-Overlay portieren

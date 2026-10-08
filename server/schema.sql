@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS users (
   -- Stand zugestimmt hat. NULL = Bestandskonto von vor der Zustimmung.
   terms_version     VARCHAR(20)     NULL,
   terms_accepted_at DATETIME        NULL,
+  -- The minimum age confirmed at sign-up and when (F-14; the age comes from shared/legal.json,
+  -- Laravel's sign-up refuses a registration without it). How age is verified beyond this
+  -- confirmation is an operator decision. NULL = an account from before the confirmation.
+  min_age_confirmed    TINYINT UNSIGNED NULL,
+  min_age_confirmed_at DATETIME         NULL,
   -- Zwei-Faktor-Anmeldung (bedient von Laravel, api/app/Support/TwoFactor.php).
   -- `two_factor_method` ist der EINZIGE Schalter: NULL = aus, 'email' | 'totp' =
   -- an. Ein gesetztes Secret bei NULL-Methode ist eine angefangene, noch nicht
@@ -66,6 +71,15 @@ CREATE TABLE IF NOT EXISTS users (
   remember_token    VARCHAR(100)    NULL,
   created_at        TIMESTAMP       NULL,
   updated_at        TIMESTAMP       NULL,
+  -- Marketplace club plan and credits balance (the Laravel migrations in api/database/migrations
+  -- add them in this order).
+  club_plan                 VARCHAR(20) NOT NULL DEFAULT 'free',
+  club_since                DATETIME NULL,
+  club_renews_at            DATETIME NULL,
+  club_cancel_at_period_end TINYINT(1) NOT NULL DEFAULT 0,
+  credits_balance           INT NOT NULL DEFAULT 0,
+  club_interval             VARCHAR(5) NOT NULL DEFAULT 'month',
+  club_credits_next_at      DATETIME NULL,
   PRIMARY KEY (id),
   UNIQUE KEY users_email_unique (email),
   UNIQUE KEY users_username_unique (username),
@@ -73,6 +87,9 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Passwort-Zuruecksetzen (E-Mail -> Token)
+-- No longer written: the reset works by a mailed code (purpose 'reset' in
+-- two_factor_challenges, F-09). The table stays until its removal from every
+-- schema copy (backlog).
 CREATE TABLE IF NOT EXISTS password_reset_tokens (
   email      VARCHAR(255) NOT NULL,
   token      VARCHAR(255) NOT NULL,
@@ -98,6 +115,29 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
   KEY personal_access_tokens_expires_at_idx (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- Laravel's database cache store (CACHE_STORE=database): the rate-limit counters of the sign-in,
+-- sign-up, password and two-factor routes, including the per-account caps across addresses, and
+-- the two-factor failure count. In the database rather than in a file inside the api container,
+-- because a file counter loses increments under concurrent requests and starts again from zero
+-- whenever the container is recreated. Same columns, types and index names as Laravel's stock
+-- migration (api/database/migrations/0001_01_01_000001_create_cache_table.php); `expiration` is a
+-- Unix timestamp. Keys are hashes, values are counts.
+CREATE TABLE IF NOT EXISTS cache (
+  `key`      VARCHAR(255) NOT NULL,
+  value      MEDIUMTEXT   NOT NULL,
+  expiration BIGINT       NOT NULL,
+  PRIMARY KEY (`key`),
+  KEY cache_expiration_index (expiration)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cache_locks (
+  `key`      VARCHAR(255) NOT NULL,
+  owner      VARCHAR(255) NOT NULL,
+  expiration BIGINT       NOT NULL,
+  PRIMARY KEY (`key`),
+  KEY cache_locks_expiration_index (expiration)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- Offene Zwei-Faktor-Vorgaenge: ein Schritt, der auf einen Code wartet.
 --
 -- purpose:
@@ -106,8 +146,16 @@ CREATE TABLE IF NOT EXISTS personal_access_tokens (
 --   'confirm' – E-Mail-Code fuer eine heikle Aktion bei aktiver E-Mail-Methode
 --               (2FA ausschalten, neue Wiederherstellungscodes, Konto loeschen).
 --   'delete'  – Freigabe von Laravel an Node: „diese Person hat das Loeschen
---               vollstaendig bestaetigt" (siehe server/src/routes/account.js).
+--               vollstaendig bestaetigt" (siehe server/src/routes/internal.js).
 --               Kein Code, nur der Token; lebt zwei Minuten.
+--   'reset'   – a password reset code (POST /forgot-password, signed out); its token is
+--               never handed out (api/app/Support/PasswordReset.php). The former link
+--               tokens table, password_reset_tokens, is no longer written.
+--   'new_email' – a code mailed to the NEW address of an e-mail change; the address takes
+--               effect only with it. The address is not stored: the code's HMAC covers it
+--               (api/app/Support/AddressCode.php).
+--   'first_pw' – a code mailed to the account's own address before an account without a
+--               password sets its first one (same file).
 --
 -- Gespeichert werden nur Hashes: `token_hash` = sha256 des Tokens, den die App
 -- in der Hand haelt; `code_hash` = HMAC des Codes (Schluessel APP_KEY). Wer die
@@ -162,6 +210,79 @@ CREATE TABLE IF NOT EXISTS interest_user (
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
   CONSTRAINT interest_user_interest_id_fk
     FOREIGN KEY (interest_id) REFERENCES interests (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Marketplace partners and their offers (api/database/migrations). Here, before the chat tables,
+-- because chat_messages.shared_offer_id refers to offers; the other marketplace tables follow at
+-- the end of this file.
+CREATE TABLE IF NOT EXISTS partners (
+  id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  slug                  VARCHAR(80) NOT NULL,
+  name                  VARCHAR(120) NOT NULL,
+  tagline               VARCHAR(160) NULL,
+  description           TEXT NULL,
+  interest_id           BIGINT UNSIGNED NULL,
+  address               VARCHAR(200) NULL,
+  city                  VARCHAR(80) NULL,
+  lat                   DECIMAL(10,7) NULL,
+  lng                   DECIMAL(10,7) NULL,
+  logo_path             VARCHAR(255) NULL,
+  cover_path            VARCHAR(255) NULL,
+  phone                 VARCHAR(40) NULL,
+  website               VARCHAR(200) NULL,
+  instagram             VARCHAR(80) NULL,
+  opening_hours         VARCHAR(500) NULL,
+  checkin_token         VARCHAR(40) NOT NULL,
+  max_discount_percent  TINYINT UNSIGNED NULL,
+  is_active             TINYINT(1) NOT NULL DEFAULT 1,
+  is_featured           TINYINT(1) NOT NULL DEFAULT 0,
+  created_at            TIMESTAMP NULL,
+  updated_at            TIMESTAMP NULL,
+  wheelchair_accessible TINYINT(1) NULL,
+  kid_friendly          TINYINT(1) NULL,
+  quiet_times           VARCHAR(160) NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY partners_slug_unique (slug),
+  UNIQUE KEY partners_checkin_token_unique (checkin_token),
+  KEY partners_interest_id_foreign (interest_id),
+  CONSTRAINT partners_interest_id_foreign
+    FOREIGN KEY (interest_id) REFERENCES interests (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS offers (
+  id                   BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  partner_id           BIGINT UNSIGNED NOT NULL,
+  kind                 VARCHAR(20) NOT NULL DEFAULT 'activity',
+  title                VARCHAR(120) NOT NULL,
+  subtitle             VARCHAR(160) NULL,
+  description          TEXT NULL,
+  interest_id          BIGINT UNSIGNED NULL,
+  image_path           VARCHAR(255) NULL,
+  price_cents          INT UNSIGNED NULL,
+  price_credits        INT UNSIGNED NULL,
+  max_discount_percent TINYINT UNSIGNED NULL,
+  min_people           SMALLINT UNSIGNED NOT NULL DEFAULT 1,
+  max_people           SMALLINT UNSIGNED NULL,
+  min_age              TINYINT UNSIGNED NULL,
+  max_age              TINYINT UNSIGNED NULL,
+  duration_minutes     SMALLINT UNSIGNED NULL,
+  indoor               TINYINT(1) NULL,
+  valid_days           SMALLINT UNSIGNED NOT NULL DEFAULT 90,
+  is_active            TINYINT(1) NOT NULL DEFAULT 1,
+  is_featured          TINYINT(1) NOT NULL DEFAULT 0,
+  sort                 SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at           TIMESTAMP NULL,
+  updated_at           TIMESTAMP NULL,
+  daily_capacity       SMALLINT UNSIGNED NULL,
+  platinum_reserved    SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  KEY offers_partner_id_foreign (partner_id),
+  KEY offers_interest_id_foreign (interest_id),
+  KEY offers_is_active_kind_index (is_active, kind),
+  CONSTRAINT offers_interest_id_foreign
+    FOREIGN KEY (interest_id) REFERENCES interests (id) ON DELETE SET NULL,
+  CONSTRAINT offers_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Aktivitaeten
@@ -294,7 +415,11 @@ CREATE TABLE IF NOT EXISTS ban_evidence (
 --   verdict: 'ok' | 'auffaellig' | 'abgelehnt' | 'refusal' | 'error'
 --   severity: 0 unbedenklich · 1 grenzwertig · 2 nicht jugendfrei · 3 schwer
 --   action: 'none' (durchgelassen) | 'blocked' (abgelehnt) | 'timeout' (+ Sperre)
--- user_id -> SET NULL, damit Berichte eine Konto-Loeschung ueberdauern.
+-- user_id -> SET NULL only as a fallback: deleting an account (server/src/account-deletion.js,
+-- F-16) deletes the person's rows and their images with it. server/src/retention.js deletes every
+-- row older than MODERATION_REPORT_RETENTION_DAYS, which covers rows left without an account by
+-- earlier deletions, and clears images older than EVIDENCE_RETENTION_DAYS. Both settings are
+-- required in production; where they are unset, nothing is pruned.
 CREATE TABLE IF NOT EXISTS moderation_reports (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id     BIGINT UNSIGNED NULL,
@@ -317,6 +442,16 @@ CREATE TABLE IF NOT EXISTS moderation_reports (
   KEY moderation_reports_created_at_idx (created_at),
   CONSTRAINT moderation_reports_user_id_fk
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- AI moderation calls per UTC day (F-07): the counter of the global budget
+-- MODERATION_DAILY_CALL_LIMIT (server/src/moderation.js). One row per day; every call to the model
+-- first reserves one unit here, and a reservation beyond the limit is refused. Counts only, no user
+-- data. server/src/retention.js deletes the rows of past days.
+CREATE TABLE IF NOT EXISTS moderation_call_counts (
+  day   DATE         NOT NULL,                       -- UTC
+  calls INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (day)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Aktive Tage je Nutzer:in – Grundlage der Serie ("Streak").
@@ -451,7 +586,10 @@ CREATE TABLE IF NOT EXISTS friend_groups (
   description VARCHAR(200)    NULL,
   created_at  TIMESTAMP       NULL,
   updated_at  TIMESTAMP       NULL,
+  -- The marketplace's invitation code (api/database/migrations/2026_10_01_000300_group_invites_and_offer_sharing.php).
+  invite_code VARCHAR(12)     NULL,
   PRIMARY KEY (id),
+  UNIQUE KEY friend_groups_invite_code_unique (invite_code),
   KEY friend_groups_owner_idx (owner_id),
   CONSTRAINT friend_groups_owner_fk
     FOREIGN KEY (owner_id) REFERENCES users (id) ON DELETE CASCADE
@@ -593,16 +731,21 @@ CREATE TABLE IF NOT EXISTS chat_messages (
   shared_activity_id BIGINT UNSIGNED NULL,
   shared_title       VARCHAR(255)    NULL,
   created_at         TIMESTAMP       NULL,
+  -- An offer shared into a group chat (the same marketplace migration as invite_code).
+  shared_offer_id    BIGINT UNSIGNED NULL,
   PRIMARY KEY (id),
   -- (room_id, id): genau die Reihenfolge, in der der Verlauf gelesen wird.
   KEY chat_messages_room_idx (room_id, id),
   KEY chat_messages_user_id_idx (user_id),
+  KEY chat_messages_shared_offer_id_foreign (shared_offer_id),
   CONSTRAINT chat_messages_room_fk
     FOREIGN KEY (room_id) REFERENCES chat_rooms (id) ON DELETE CASCADE,
   CONSTRAINT chat_messages_user_fk
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
   CONSTRAINT chat_messages_shared_activity_fk
-    FOREIGN KEY (shared_activity_id) REFERENCES activities (id) ON DELETE SET NULL
+    FOREIGN KEY (shared_activity_id) REFERENCES activities (id) ON DELETE SET NULL,
+  CONSTRAINT chat_messages_shared_offer_id_foreign
+    FOREIGN KEY (shared_offer_id) REFERENCES offers (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Bis wohin jemand einen Raum gelesen hat. Eine Zeile pro Person und Raum;
@@ -651,7 +794,7 @@ CREATE TABLE IF NOT EXISTS user_blocks (
 CREATE TABLE IF NOT EXISTS content_reports (
   id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   reporter_id BIGINT UNSIGNED NULL,                 -- SET NULL: Meldung ueberdauert das Konto
-  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story
+  target_type VARCHAR(20)     NOT NULL,             -- activity|message|user|post|story|post_comment|activity_comment
   target_id   BIGINT UNSIGNED NOT NULL,
   reason      VARCHAR(30)     NOT NULL,             -- Schluessel aus src/reports.js
   note        VARCHAR(500)    NULL,                 -- freie Schilderung (freiwillig)
@@ -683,6 +826,39 @@ CREATE TABLE IF NOT EXISTS activity_saves (
   CONSTRAINT activity_saves_activity_fk
     FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
   CONSTRAINT activity_saves_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Gefaellt-mir an einem Event. Gleicher Aufbau wie `post_likes`: eine Zeile pro
+-- Person und Event, damit die Zahl „wie vielen gefaellt das" bedeutet und nicht
+-- „wie oft wurde geklickt". Unabhaengig von Teilnahme und Merkliste – man darf
+-- ein Event moegen, ohne hinzugehen.
+CREATE TABLE IF NOT EXISTS activity_likes (
+  activity_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  created_at  DATETIME        NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (activity_id, user_id),
+  KEY activity_likes_user_idx (user_id),
+  CONSTRAINT activity_likes_activity_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+  CONSTRAINT activity_likes_user_fk
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Kommentare an einem Event. Gleicher Aufbau wie `post_comments`; der Index
+-- (activity_id, id) traegt die Liste „aelteste zuerst" unter einem Event.
+CREATE TABLE IF NOT EXISTS activity_comments (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  activity_id BIGINT UNSIGNED NOT NULL,
+  user_id     BIGINT UNSIGNED NOT NULL,
+  body        VARCHAR(500)    NOT NULL,
+  created_at  DATETIME        NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY activity_comments_activity_idx (activity_id, id),
+  KEY activity_comments_user_idx (user_id),
+  CONSTRAINT activity_comments_activity_fk
+    FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE CASCADE,
+  CONSTRAINT activity_comments_user_fk
     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -799,4 +975,424 @@ CREATE TABLE IF NOT EXISTS imported_events (
   KEY imported_events_activity_id_idx (activity_id),
   CONSTRAINT imported_events_activity_id_fk
     FOREIGN KEY (activity_id) REFERENCES activities (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ---------------------------------------------------------------------------
+-- Marketplace (api/database/migrations, 2026_10_01 to 2026_10_06): payments, bookings, check-ins
+-- and stamps, vouchers, credits and their expiry lots, feature switches, group polls, partner staff
+-- and wishes, and the admins' test phase. Laravel's migrations create these on a fresh database;
+-- each definition here is the one MySQL reports for them (scripts/schema-drift compares both).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS payments (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      BIGINT UNSIGNED NULL,
+  purpose      VARCHAR(20) NOT NULL,
+  amount_cents INT UNSIGNED NOT NULL,
+  provider     VARCHAR(20) NOT NULL,
+  provider_ref VARCHAR(120) NULL,
+  status       VARCHAR(20) NOT NULL,
+  description  VARCHAR(200) NOT NULL,
+  created_at   TIMESTAMP NULL,
+  updated_at   TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY payments_user_id_created_at_index (user_id, created_at),
+  CONSTRAINT payments_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS bookings (
+  id               BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  code             VARCHAR(12) NOT NULL,
+  user_id          BIGINT UNSIGNED NULL,
+  offer_id         BIGINT UNSIGNED NULL,
+  partner_id       BIGINT UNSIGNED NULL,
+  group_id         BIGINT UNSIGNED NULL,
+  offer_title      VARCHAR(120) NOT NULL,
+  partner_name     VARCHAR(120) NOT NULL,
+  people           SMALLINT UNSIGNED NOT NULL,
+  plan_key         VARCHAR(20) NOT NULL,
+  pay_method       VARCHAR(10) NOT NULL,
+  unit_price_cents INT UNSIGNED NULL,
+  unit_credits     INT UNSIGNED NULL,
+  discount_percent DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  subtotal_cents   INT UNSIGNED NOT NULL DEFAULT 0,
+  discount_cents   INT UNSIGNED NOT NULL DEFAULT 0,
+  total_cents      INT UNSIGNED NOT NULL DEFAULT 0,
+  subtotal_credits INT UNSIGNED NOT NULL DEFAULT 0,
+  total_credits    INT UNSIGNED NOT NULL DEFAULT 0,
+  status           VARCHAR(12) NOT NULL DEFAULT 'confirmed',
+  preferred_date   DATE NULL,
+  valid_until      DATETIME NOT NULL,
+  redeemed_at      DATETIME NULL,
+  redeemed_by      BIGINT UNSIGNED NULL,
+  cancelled_at     DATETIME NULL,
+  payment_id       BIGINT UNSIGNED NULL,
+  created_at       TIMESTAMP NULL,
+  updated_at       TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY bookings_code_unique (code),
+  KEY bookings_offer_id_foreign (offer_id),
+  KEY bookings_group_id_foreign (group_id),
+  KEY bookings_redeemed_by_foreign (redeemed_by),
+  KEY bookings_payment_id_foreign (payment_id),
+  KEY bookings_user_id_status_index (user_id, status),
+  KEY bookings_partner_id_status_index (partner_id, status),
+  CONSTRAINT bookings_group_id_foreign
+    FOREIGN KEY (group_id) REFERENCES friend_groups (id) ON DELETE SET NULL,
+  CONSTRAINT bookings_offer_id_foreign
+    FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE SET NULL,
+  CONSTRAINT bookings_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+  CONSTRAINT bookings_payment_id_foreign
+    FOREIGN KEY (payment_id) REFERENCES payments (id) ON DELETE SET NULL,
+  CONSTRAINT bookings_redeemed_by_foreign
+    FOREIGN KEY (redeemed_by) REFERENCES users (id) ON DELETE SET NULL,
+  CONSTRAINT bookings_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS booking_feedback (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  booking_id BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NULL,
+  partner_id BIGINT UNSIGNED NULL,
+  rating     TINYINT UNSIGNED NOT NULL,
+  comment    VARCHAR(500) NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY booking_feedback_booking_id_unique (booking_id),
+  KEY booking_feedback_user_id_foreign (user_id),
+  KEY booking_feedback_partner_id_foreign (partner_id),
+  CONSTRAINT booking_feedback_booking_id_foreign
+    FOREIGN KEY (booking_id) REFERENCES bookings (id) ON DELETE CASCADE,
+  CONSTRAINT booking_feedback_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+  CONSTRAINT booking_feedback_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS booking_shares (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  booking_id  BIGINT UNSIGNED NOT NULL,
+  debtor_id   BIGINT UNSIGNED NOT NULL,
+  creditor_id BIGINT UNSIGNED NOT NULL,
+  credits     INT UNSIGNED NOT NULL,
+  status      VARCHAR(10) NOT NULL DEFAULT 'pending',
+  created_at  TIMESTAMP NULL,
+  settled_at  TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY booking_shares_booking_id_debtor_id_unique (booking_id, debtor_id),
+  KEY booking_shares_debtor_id_foreign (debtor_id),
+  KEY booking_shares_creditor_id_foreign (creditor_id),
+  CONSTRAINT booking_shares_booking_id_foreign
+    FOREIGN KEY (booking_id) REFERENCES bookings (id) ON DELETE CASCADE,
+  CONSTRAINT booking_shares_creditor_id_foreign
+    FOREIGN KEY (creditor_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT booking_shares_debtor_id_foreign
+    FOREIGN KEY (debtor_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS checkins (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id       BIGINT UNSIGNED NOT NULL,
+  partner_id    BIGINT UNSIGNED NOT NULL,
+  method        VARCHAR(10) NOT NULL,
+  staff_user_id BIGINT UNSIGNED NULL,
+  stamped       TINYINT(1) NOT NULL DEFAULT 0,
+  created_at    TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY checkins_user_id_foreign (user_id),
+  KEY checkins_staff_user_id_foreign (staff_user_id),
+  KEY checkins_partner_id_created_at_index (partner_id, created_at),
+  CONSTRAINT checkins_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE CASCADE,
+  CONSTRAINT checkins_staff_user_id_foreign
+    FOREIGN KEY (staff_user_id) REFERENCES users (id) ON DELETE SET NULL,
+  CONSTRAINT checkins_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS voucher_batches (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  label      VARCHAR(120) NOT NULL,
+  retailer   VARCHAR(80) NULL,
+  credits    INT UNSIGNED NOT NULL,
+  quantity   INT UNSIGNED NOT NULL,
+  expires_at DATETIME NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NULL,
+  updated_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY voucher_batches_created_by_foreign (created_by),
+  CONSTRAINT voucher_batches_created_by_foreign
+    FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS vouchers (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  batch_id    BIGINT UNSIGNED NOT NULL,
+  code        VARCHAR(20) NOT NULL,
+  credits     INT UNSIGNED NOT NULL,
+  expires_at  DATETIME NULL,
+  redeemed_by BIGINT UNSIGNED NULL,
+  redeemed_at DATETIME NULL,
+  disabled_at DATETIME NULL,
+  created_at  TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY vouchers_code_unique (code),
+  KEY vouchers_batch_id_foreign (batch_id),
+  KEY vouchers_redeemed_by_foreign (redeemed_by),
+  CONSTRAINT vouchers_batch_id_foreign
+    FOREIGN KEY (batch_id) REFERENCES voucher_batches (id) ON DELETE CASCADE,
+  CONSTRAINT vouchers_redeemed_by_foreign
+    FOREIGN KEY (redeemed_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS credit_transactions (
+  id            BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id       BIGINT UNSIGNED NOT NULL,
+  amount        INT NOT NULL,
+  balance_after INT NOT NULL,
+  kind          VARCHAR(20) NOT NULL,
+  description   VARCHAR(200) NOT NULL,
+  booking_id    BIGINT UNSIGNED NULL,
+  payment_id    BIGINT UNSIGNED NULL,
+  voucher_id    BIGINT UNSIGNED NULL,
+  created_at    TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY credit_transactions_booking_id_foreign (booking_id),
+  KEY credit_transactions_payment_id_foreign (payment_id),
+  KEY credit_transactions_voucher_id_foreign (voucher_id),
+  KEY credit_transactions_user_id_id_index (user_id, id),
+  CONSTRAINT credit_transactions_booking_id_foreign
+    FOREIGN KEY (booking_id) REFERENCES bookings (id) ON DELETE SET NULL,
+  CONSTRAINT credit_transactions_payment_id_foreign
+    FOREIGN KEY (payment_id) REFERENCES payments (id) ON DELETE SET NULL,
+  CONSTRAINT credit_transactions_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT credit_transactions_voucher_id_foreign
+    FOREIGN KEY (voucher_id) REFERENCES vouchers (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS credit_lots (
+  id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id               BIGINT UNSIGNED NOT NULL,
+  credit_transaction_id BIGINT UNSIGNED NULL,
+  amount                INT NOT NULL,
+  remaining             INT NOT NULL,
+  expires_at            TIMESTAMP NOT NULL,
+  created_at            TIMESTAMP NULL,
+  reminded_30_at        TIMESTAMP NULL,
+  reminded_7_at         TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY credit_lots_credit_transaction_id_foreign (credit_transaction_id),
+  KEY credit_lots_user_id_expires_at_index (user_id, expires_at),
+  KEY credit_lots_expires_at_remaining_index (expires_at, remaining),
+  CONSTRAINT credit_lots_credit_transaction_id_foreign
+    FOREIGN KEY (credit_transaction_id) REFERENCES credit_transactions (id) ON DELETE SET NULL,
+  CONSTRAINT credit_lots_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS credit_lot_uses (
+  id                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  credit_lot_id         BIGINT UNSIGNED NOT NULL,
+  credit_transaction_id BIGINT UNSIGNED NOT NULL,
+  amount                INT NOT NULL,
+  PRIMARY KEY (id),
+  KEY credit_lot_uses_credit_lot_id_foreign (credit_lot_id),
+  KEY credit_lot_uses_credit_transaction_id_index (credit_transaction_id),
+  CONSTRAINT credit_lot_uses_credit_lot_id_foreign
+    FOREIGN KEY (credit_lot_id) REFERENCES credit_lots (id) ON DELETE CASCADE,
+  CONSTRAINT credit_lot_uses_credit_transaction_id_foreign
+    FOREIGN KEY (credit_transaction_id) REFERENCES credit_transactions (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS feature_flags (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `key`      VARCHAR(40) NOT NULL,
+  enabled    TINYINT(1) NOT NULL DEFAULT 0,
+  value      VARCHAR(40) NULL,
+  created_at TIMESTAMP NULL,
+  updated_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY feature_flags_key_unique (`key`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS feature_previews (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  `key`      VARCHAR(40) NOT NULL,
+  enabled    TINYINT(1) NULL,
+  value      VARCHAR(40) NULL,
+  created_at TIMESTAMP NULL,
+  updated_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY feature_previews_user_id_key_unique (user_id, `key`),
+  CONSTRAINT feature_previews_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS group_polls (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  group_id   BIGINT UNSIGNED NOT NULL,
+  created_by BIGINT UNSIGNED NULL,
+  title      VARCHAR(120) NOT NULL,
+  closed_at  TIMESTAMP NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY group_polls_group_id_foreign (group_id),
+  KEY group_polls_created_by_foreign (created_by),
+  CONSTRAINT group_polls_created_by_foreign
+    FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL,
+  CONSTRAINT group_polls_group_id_foreign
+    FOREIGN KEY (group_id) REFERENCES friend_groups (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS group_poll_options (
+  id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  poll_id     BIGINT UNSIGNED NOT NULL,
+  offer_id    BIGINT UNSIGNED NULL,
+  offer_title VARCHAR(120) NOT NULL,
+  day         DATE NULL,
+  PRIMARY KEY (id),
+  KEY group_poll_options_poll_id_foreign (poll_id),
+  KEY group_poll_options_offer_id_foreign (offer_id),
+  CONSTRAINT group_poll_options_offer_id_foreign
+    FOREIGN KEY (offer_id) REFERENCES offers (id) ON DELETE SET NULL,
+  CONSTRAINT group_poll_options_poll_id_foreign
+    FOREIGN KEY (poll_id) REFERENCES group_polls (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS group_poll_votes (
+  poll_id    BIGINT UNSIGNED NOT NULL,
+  option_id  BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (poll_id, user_id),
+  KEY group_poll_votes_option_id_foreign (option_id),
+  KEY group_poll_votes_user_id_foreign (user_id),
+  CONSTRAINT group_poll_votes_option_id_foreign
+    FOREIGN KEY (option_id) REFERENCES group_poll_options (id) ON DELETE CASCADE,
+  CONSTRAINT group_poll_votes_poll_id_foreign
+    FOREIGN KEY (poll_id) REFERENCES group_polls (id) ON DELETE CASCADE,
+  CONSTRAINT group_poll_votes_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS partner_staff (
+  partner_id BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  role       VARCHAR(20) NOT NULL DEFAULT 'staff',
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (partner_id, user_id),
+  KEY partner_staff_user_id_foreign (user_id),
+  CONSTRAINT partner_staff_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE CASCADE,
+  CONSTRAINT partner_staff_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS partner_wishes (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  name       VARCHAR(120) NOT NULL,
+  note       VARCHAR(300) NULL,
+  created_by BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  KEY partner_wishes_created_by_foreign (created_by),
+  CONSTRAINT partner_wishes_created_by_foreign
+    FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS partner_wish_votes (
+  wish_id    BIGINT UNSIGNED NOT NULL,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  weight     TINYINT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (wish_id, user_id),
+  KEY partner_wish_votes_user_id_foreign (user_id),
+  CONSTRAINT partner_wish_votes_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT partner_wish_votes_wish_id_foreign
+    FOREIGN KEY (wish_id) REFERENCES partner_wishes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS stamps (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  partner_id BIGINT UNSIGNED NULL,
+  checkin_id BIGINT UNSIGNED NULL,
+  stamp_day  DATE NOT NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY stamps_user_id_partner_id_stamp_day_unique (user_id, partner_id, stamp_day),
+  KEY stamps_partner_id_foreign (partner_id),
+  KEY stamps_checkin_id_foreign (checkin_id),
+  CONSTRAINT stamps_checkin_id_foreign
+    FOREIGN KEY (checkin_id) REFERENCES checkins (id) ON DELETE SET NULL,
+  CONSTRAINT stamps_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL,
+  CONSTRAINT stamps_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS testphase_challenges (
+  id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  type           VARCHAR(12) NOT NULL,
+  title          VARCHAR(120) NOT NULL,
+  description    VARCHAR(300) NULL,
+  metric         VARCHAR(24) NOT NULL,
+  target         SMALLINT UNSIGNED NOT NULL,
+  reward_credits INT UNSIGNED NOT NULL,
+  period         VARCHAR(8) NOT NULL,
+  starts_at      DATE NULL,
+  ends_at        DATE NULL,
+  partner_id     BIGINT UNSIGNED NULL,
+  interest_id    BIGINT UNSIGNED NULL,
+  match_text     VARCHAR(60) NULL,
+  offer_kind     VARCHAR(20) NULL,
+  plans          JSON NULL,
+  is_active      TINYINT(1) NOT NULL DEFAULT 1,
+  sort           SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  created_at     TIMESTAMP NULL,
+  updated_at     TIMESTAMP NULL,
+  is_secret      TINYINT(1) NOT NULL DEFAULT 0,
+  is_choice      TINYINT(1) NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  KEY testphase_challenges_partner_id_foreign (partner_id),
+  KEY testphase_challenges_interest_id_foreign (interest_id),
+  CONSTRAINT testphase_challenges_interest_id_foreign
+    FOREIGN KEY (interest_id) REFERENCES interests (id) ON DELETE SET NULL,
+  CONSTRAINT testphase_challenges_partner_id_foreign
+    FOREIGN KEY (partner_id) REFERENCES partners (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS testphase_choices (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      BIGINT UNSIGNED NOT NULL,
+  challenge_id BIGINT UNSIGNED NOT NULL,
+  period       VARCHAR(20) NOT NULL,
+  created_at   TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY testphase_choices_user_id_challenge_id_period_unique (user_id, challenge_id, period),
+  KEY testphase_choices_challenge_id_foreign (challenge_id),
+  CONSTRAINT testphase_choices_challenge_id_foreign
+    FOREIGN KEY (challenge_id) REFERENCES testphase_challenges (id) ON DELETE CASCADE,
+  CONSTRAINT testphase_choices_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS testphase_claims (
+  id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id    BIGINT UNSIGNED NOT NULL,
+  `key`      VARCHAR(60) NOT NULL,
+  period     VARCHAR(20) NOT NULL,
+  credits    INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY testphase_claims_user_id_key_period_unique (user_id, `key`, period),
+  CONSTRAINT testphase_claims_user_id_foreign
+    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

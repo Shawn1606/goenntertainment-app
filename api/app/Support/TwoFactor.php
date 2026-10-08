@@ -5,14 +5,17 @@ namespace App\Support;
 use App\Mail\TwoFactorCode;
 use App\Models\TwoFactorChallenge;
 use App\Models\User;
+use App\Providers\AppServiceProvider;
 use Closure;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
 
@@ -24,7 +27,11 @@ use RuntimeException;
  * `users.two_factor_method` ist der einzige Schalter (NULL | 'email' | 'totp').
  * Alles, was auf einen Code wartet, ist ein „Vorgang" in two_factor_challenges -
  * die Anmeldung nach dem Passwort ('login'), das Einschalten per E-Mail
- * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm').
+ * ('setup'), das Bestaetigen heikler Aktionen per E-Mail ('confirm'). The password reset
+ * code ('reset') lives there too, with its own rules (App\Support\PasswordReset), and so do the
+ * codes that prove control of an address while signed in: the new address of an e-mail change
+ * ('new_email') and the account's own address before its first password ('first_pw';
+ * App\Support\AddressCode).
  *
  * Die App haelt fuer einen Vorgang nur einen zufaelligen Token in der Hand, in
  * der Tabelle steht sein sha256. Er ist das, was „Passwort war richtig" von
@@ -48,6 +55,21 @@ use RuntimeException;
  * absolut: fuenf falsche Codes, dann ist er verbraucht, und fuer den naechsten
  * braucht es wieder das Passwort. Damit hat, wer raet, fuenf Versuche auf eine
  * Million - pro Passwort-Eingabe.
+ *
+ * ## And per account (F-19)
+ *
+ * Whoever knows the password can start a new challenge as often as the limiters allow, so the
+ * per-challenge cap alone still adds up. Every wrong code also counts per ACCOUNT, across all
+ * challenges and step-ups (sign-in, switching on and off, recovery codes, e-mail change, account
+ * deletion, and the codes of App\Support\AddressCode): at the cap (config ratelimits.two-factor-failures, default 10 in 15 minutes) no
+ * code is checked, no sign-in challenge is started and no code is mailed until the window has
+ * passed. The count lives in the cache store (the database in the deploy) and is not reset by a
+ * right code. A known password can therefore lock the second factor for the window: that is
+ * the price of the cap.
+ *
+ * Looking at the count, checking a code and counting it run under one lock per account
+ * (withAccountLock): requests at the same time take turns, so the cap is exact, not "the cap
+ * plus the number of PHP workers".
  */
 final class TwoFactor
 {
@@ -61,8 +83,23 @@ final class TwoFactor
 
     public const PURPOSE_CONFIRM = 'confirm';
 
-    /** Freigabe an Node fuer DELETE /api/me - siehe server/src/routes/account.js. */
-    public const PURPOSE_DELETE = 'delete';
+    /**
+     * A password reset code (F-09), signed out: App\Support\PasswordReset. It has its own counting
+     * and never goes through attempt(), so wrong reset codes do not feed the account's cap below.
+     */
+    public const PURPOSE_RESET = 'reset';
+
+    /**
+     * A code mailed to the NEW address of an e-mail change (F-04), signed in: the address takes
+     * effect only with it (App\Support\AddressCode, AccountController::confirmEmail).
+     */
+    public const PURPOSE_NEW_EMAIL = 'new_email';
+
+    /**
+     * A code mailed to the account's own address before an account without a password sets its
+     * first one (App\Support\AddressCode, AccountController::updatePassword).
+     */
+    public const PURPOSE_FIRST_PASSWORD = 'first_pw';
 
     /** So lange gilt ein Vorgang (und ein gemailter Code): 10 Minuten. */
     public const CODE_TTL = 600;
@@ -73,15 +110,18 @@ final class TwoFactor
     /** Ab so vielen Fehlversuchen ist ein Vorgang verbraucht. */
     public const MAX_ATTEMPTS = 5;
 
+    /** The account's lock ends by itself after this long if its holder dies (seconds). */
+    private const ACCOUNT_LOCK_SECONDS = 10;
+
+    /** Pause between two tries to get the account's lock (milliseconds). */
+    private const ACCOUNT_LOCK_RETRY_MS = 50;
+
     /**
      * Hoechstalter eines Anmelde-Vorgangs fuer neue Codes. Jede neue Mail gibt
      * dem Code wieder 10 Minuten - ohne diese Grenze liesse sich ein Vorgang
      * durch Nachfordern endlos am Leben halten.
      */
     public const MAX_AGE = 1800;
-
-    /** Lebensdauer einer Loesch-Freigabe an Node: Sekunden, nicht Minuten. */
-    public const DELETE_GRANT_TTL = 120;
 
     public const RECOVERY_CODE_COUNT = 8;
 
@@ -105,6 +145,9 @@ final class TwoFactor
 
     public const EXPIRED = 'expired';
 
+    /** The account's failure cap is reached (see the class comment); nothing was checked. */
+    public const LOCKED = 'locked';
+
     // Meldungen - die App zeigt sie woertlich.
     public const MSG_WRONG = 'Der Code stimmt nicht.';
 
@@ -119,8 +162,6 @@ final class TwoFactor
     public const MSG_REQUEST_FIRST = 'Fordere zuerst einen Code per E-Mail an.';
 
     public const MSG_CODE_REQUIRED = 'Bitte gib den Code ein.';
-
-    public const MSG_PASSWORD_OR_CODE = 'Bitte gib dein Passwort oder einen Code ein.';
 
     public const MSG_PASSWORD_WRONG = 'Das Passwort stimmt nicht.';
 
@@ -144,11 +185,17 @@ final class TwoFactor
      * Der Klartext verlaesst diese Methode genau einmal - in die Antwort an die
      * App. Danach kennt ihn der Server nicht mehr.
      *
+     * `$prune` false skips the clean-up of expired challenges, for a caller that runs this inside
+     * a transaction and prunes before it (PasswordReset::issue): the clean-up touches every
+     * account's rows and should not hold their locks for a whole transaction.
+     *
      * @return array{0: TwoFactorChallenge, 1: string}
      */
-    public static function createChallenge(User $user, string $purpose, ?string $method): array
+    public static function createChallenge(User $user, string $purpose, ?string $method, bool $prune = true): array
     {
-        self::pruneExpired();
+        if ($prune) {
+            self::pruneExpired();
+        }
 
         $token = self::newToken();
 
@@ -189,32 +236,159 @@ final class TwoFactor
      * Der fuenfte Fehlversuch liefert schon TOO_MANY (nicht erst der sechste):
      * Die App soll in dem Moment sagen koennen „neu anmelden", in dem es
      * stimmt - nicht einen Versuch spaeter.
+     *
+     * `$onSuccess` (the sign-in: it writes the token) runs in the same transaction, right after
+     * the challenge is deleted, with the account's row as its argument. That row is then locked
+     * first, before the challenge, in the order of every other lock on both (password reset,
+     * e-mail change). A credential change that revokes sessions thus either ends the challenge
+     * before this transaction, or waits for it and revokes the token written here
+     * (App\Support\Sessions, "Sign-ins under way"). Without it, a reset could commit between
+     * the deletion of the challenge and a token written afterwards, and the token survived it.
      */
-    public static function attempt(TwoFactorChallenge $challenge, Closure $verify): string
+    public static function attempt(TwoFactorChallenge $challenge, Closure $verify, ?Closure $onSuccess = null): string
     {
-        return DB::transaction(function () use ($challenge, $verify) {
-            $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
-
-            if ($locked === null) {
-                return self::EXPIRED;
-            }
-            if ($locked->attempts >= self::MAX_ATTEMPTS) {
-                return self::TOO_MANY;
-            }
-            if ($locked->isExpired()) {
-                return self::EXPIRED;
+        // Cap, check and count as one step per account (see withAccountLock).
+        return self::withAccountLock($challenge->user_id, function () use ($challenge, $verify, $onSuccess): string {
+            // The account's cap first: at the cap no code is even looked at.
+            if (self::accountLocked($challenge->user_id)) {
+                return self::LOCKED;
             }
 
-            if ($verify($locked) === true) {
-                $locked->delete();
+            $guessed = false;
+            $result = DB::transaction(function () use ($challenge, $verify, $onSuccess, &$guessed) {
+                $account = null;
+                if ($onSuccess !== null) {
+                    $account = User::whereKey($challenge->user_id)->lockForUpdate()->first();
+                    if ($account === null) {
+                        return self::EXPIRED;
+                    }
+                }
 
-                return self::OK;
+                $locked = TwoFactorChallenge::whereKey($challenge->getKey())->lockForUpdate()->first();
+
+                if ($locked === null) {
+                    return self::EXPIRED;
+                }
+                if ($locked->attempts >= self::MAX_ATTEMPTS) {
+                    return self::TOO_MANY;
+                }
+                if ($locked->isExpired()) {
+                    return self::EXPIRED;
+                }
+
+                if ($verify($locked) === true) {
+                    $locked->delete();
+                    if ($onSuccess !== null) {
+                        $onSuccess($account);
+                    }
+
+                    return self::OK;
+                }
+
+                $locked->increment('attempts');
+                $guessed = true;
+
+                return $locked->attempts >= self::MAX_ATTEMPTS ? self::TOO_MANY : self::WRONG;
+            });
+
+            // Counted after the transaction, in the cache store: a rollback must not undo it.
+            if ($guessed) {
+                self::recordFailure($challenge->user_id);
             }
 
-            $locked->increment('attempts');
-
-            return $locked->attempts >= self::MAX_ATTEMPTS ? self::TOO_MANY : self::WRONG;
+            return $result;
         });
+    }
+
+    /* --------------------------------------------- Fehlversuche je Konto (F-19) */
+
+    /**
+     * Runs $callback - look at the account's cap, check a code, count it if it was wrong - while
+     * holding the account's lock. Without the lock, requests that arrive at the same time all read
+     * a count below the cap before any of them is counted, and a burst gets about as many codes
+     * checked as there are PHP workers. With it they take turns, so the cap is exact. Every place
+     * that checks a second-factor code goes through here: attempt() (sign-in, e-mail setup,
+     * mailed step-up codes), assertCode() (app and recovery codes) and the app setup
+     * (TwoFactorController::confirmTotp).
+     *
+     * The lock lives in the cache store next to the counters (the database in the deploy: table
+     * cache_locks), so it holds across PHP processes and containers. It is taken outside any
+     * database transaction: inside one, its row would reach the other connections only at the
+     * commit. A request that cannot get it in time (config ratelimits.lock-wait, 5 s by default)
+     * gets the limiters' 429 answer, and nothing was checked or counted.
+     *
+     * @template T
+     *
+     * @param  Closure(): T  $callback
+     * @return T
+     */
+    public static function withAccountLock(int|string $userId, Closure $callback): mixed
+    {
+        try {
+            return Cache::lock("two-factor-account:{$userId}", self::ACCOUNT_LOCK_SECONDS)
+                ->betweenBlockedAttemptsSleepFor(self::ACCOUNT_LOCK_RETRY_MS)
+                ->block(RateLimitRules::lockWaitSeconds(), $callback);
+        } catch (LockTimeoutException) {
+            throw new HttpResponseException(
+                response()->json(['message' => AppServiceProvider::MSG_TOO_MANY], 429)->header('Retry-After', '1'),
+            );
+        }
+    }
+
+    /** @return list<array{max: int, seconds: int}> */
+    private static function failureRules(): array
+    {
+        return RateLimitRules::parse(config('ratelimits.two-factor-failures.account'));
+    }
+
+    private static function failureKey(int|string $userId, int $seconds): string
+    {
+        return "two-factor-failures:{$userId}:{$seconds}";
+    }
+
+    /** Has the account reached its cap of wrong codes? */
+    public static function accountLocked(int|string $userId): bool
+    {
+        foreach (self::failureRules() as $rule) {
+            if (RateLimiter::tooManyAttempts(self::failureKey($userId, $rule['seconds']), $rule['max'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /** Counts one wrong code for the account (every rule of the cap); call it inside withAccountLock. */
+    public static function recordFailure(int|string $userId): void
+    {
+        foreach (self::failureRules() as $rule) {
+            RateLimiter::hit(self::failureKey($userId, $rule['seconds']), $rule['seconds']);
+        }
+    }
+
+    /** "… bitte warte N Minuten …", with the time left until the cap ends. */
+    public static function lockedMessage(int|string $userId): string
+    {
+        $seconds = 0;
+        foreach (self::failureRules() as $rule) {
+            $key = self::failureKey($userId, $rule['seconds']);
+            if (RateLimiter::tooManyAttempts($key, $rule['max'])) {
+                $seconds = max($seconds, RateLimiter::availableIn($key));
+            }
+        }
+        $minutes = max(1, (int) ceil($seconds / 60));
+
+        return $minutes === 1
+            ? 'Zu viele falsche Codes – bitte warte eine Minute und versuch es dann noch mal.'
+            : "Zu viele falsche Codes – bitte warte {$minutes} Minuten und versuch es dann noch mal.";
+    }
+
+    /** Throws the cap's 422 on $field when the account is at its cap. */
+    public static function refuseIfLocked(User $user, string $field): void
+    {
+        if (self::accountLocked($user->getKey())) {
+            throw ValidationException::withMessages([$field => [self::lockedMessage($user->getKey())]]);
+        }
     }
 
     /**
@@ -252,18 +426,20 @@ final class TwoFactor
      * die zum erneuten Versuchen einlaedt - und `last_sent_at` blockiert ihn
      * nicht, denn es wurde ja nichts gesendet.
      *
-     * Der Code selbst taucht in KEINER Antwort auf, nur in der Mail.
+     * Der Code selbst taucht in KEINER Antwort auf, nur in der Mail - and never in a log: CodeMail
+     * refuses the log mailer, which then counts as a failed mail.
      */
     public static function sendCode(TwoFactorChallenge $challenge, User $user): void
     {
         $code = sprintf('%06d', random_int(0, 999999));
 
         try {
-            Mail::to($user->email)->send(new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
+            CodeMail::send((string) $user->email, new TwoFactorCode($code, intdiv(self::CODE_TTL, 60)));
         } catch (\Throwable $e) {
+            // The exception class only (F-38): a transport message can name the recipient.
             Log::error('[two-factor] Code-Mail nicht versendet', [
                 'user_id' => $user->getKey(),
-                'fehler' => $e->getMessage(),
+                'exception' => $e::class,
             ]);
 
             if ($challenge->code_hash === null) {
@@ -338,6 +514,10 @@ final class TwoFactor
      */
     public static function startLogin(User $user): JsonResponse
     {
+        // At the account's cap: no challenge, no code mail (F-19). The caller has proven the
+        // password, so the answer tells nothing new; on `email`, where the sign-in form shows it.
+        self::refuseIfLocked($user, 'email');
+
         $method = $user->two_factor_method;
 
         [$challenge, $token] = self::createChallenge($user, self::PURPOSE_LOGIN, $method);
@@ -608,6 +788,7 @@ final class TwoFactor
                 self::OK => null,
                 self::WRONG => self::MSG_WRONG,
                 self::TOO_MANY => self::MSG_TOO_MANY,
+                self::LOCKED => self::lockedMessage($user->getKey()),
                 default => self::MSG_EXPIRED,
             };
 
@@ -618,69 +799,21 @@ final class TwoFactor
             return;
         }
 
-        $ok = $otp !== null
-            ? self::verifyTotpForUser($user, $otp)
-            : self::consumeRecoveryCode($user, $code);
+        // App codes and recovery codes count toward the account's cap like mailed ones (F-19),
+        // looked at, checked and counted under the account's lock like them.
+        self::withAccountLock($user->getKey(), function () use ($user, $otp, $code, $field): void {
+            self::refuseIfLocked($user, $field);
 
-        if (! $ok) {
-            throw ValidationException::withMessages([$field => [self::MSG_WRONG]]);
-        }
-    }
+            $ok = $otp !== null
+                ? self::verifyTotpForUser($user, $otp)
+                : self::consumeRecoveryCode($user, $code);
 
-    /**
-     * Passwort ODER aktueller Code - fuer Ausschalten und neue Codes.
-     *
-     * Ist ein Passwort mitgeschickt, zaehlt NUR das: Ein falsches Passwort wird
-     * nicht still durch einen zufaellig mitgeschickten Code gerettet, und ein
-     * Wiederherstellungscode wird nicht verbraucht, wenn das Passwort genuegt.
-     */
-    public static function assertPasswordOrCode(User $user, mixed $password, mixed $code): void
-    {
-        if (is_string($password) && $password !== '') {
-            if (! Passwords::check($password, $user->password)) {
-                throw ValidationException::withMessages(['password' => [self::MSG_PASSWORD_WRONG]]);
+            if (! $ok) {
+                self::recordFailure($user->getKey());
+
+                throw ValidationException::withMessages([$field => [self::MSG_WRONG]]);
             }
-
-            return;
-        }
-
-        if (is_scalar($code) && trim((string) $code) !== '') {
-            self::assertCode($user, $code);
-
-            return;
-        }
-
-        $hasPassword = is_string($user->password) && $user->password !== '';
-
-        throw ValidationException::withMessages($hasPassword
-            ? ['password' => [self::MSG_PASSWORD_OR_CODE]]
-            : ['code' => [self::MSG_CODE_REQUIRED]]);
-    }
-
-    /* ------------------------------------------------------ Loesch-Freigabe */
-
-    /**
-     * Freigabe fuer Node: „Loeschen ist vollstaendig bestaetigt" - zwei Minuten,
-     * einmal, nur fuer dieses Konto (Einloesen in server/src/routes/account.js).
-     *
-     * Ablauf mit `NOW()` der DATENBANK, nicht mit der Uhr von PHP: Node
-     * vergleicht mit `NOW()`, und so reden beide ueber dieselbe Uhr.
-     */
-    public static function createDeletionGrant(User $user): string
-    {
-        $token = self::newToken();
-
-        DB::table('two_factor_challenges')->insert([
-            'user_id' => $user->getKey(),
-            'token_hash' => self::hashToken($token),
-            'method' => $user->two_factor_method,
-            'purpose' => self::PURPOSE_DELETE,
-            'attempts' => 0,
-            'expires_at' => DB::raw('NOW() + INTERVAL '.self::DELETE_GRANT_TTL.' SECOND'),
-            'created_at' => DB::raw('NOW()'),
-        ]);
-
-        return $token;
+        });
     }
 
     /* ------------------------------------------------------------- Kleinkram */
@@ -718,10 +851,23 @@ final class TwoFactor
         return hash('sha256', $token);
     }
 
-    /** Der Code haengt am Vorgang: Derselbe Code in einem anderen Vorgang ist ein anderer Hash. */
-    private static function hashCode(string $tokenHash, string $code): string
+    /**
+     * Der Code haengt am Vorgang: Derselbe Code in einem anderen Vorgang ist ein anderer Hash.
+     * Public for the password reset code (PasswordReset), which is stored the same way.
+     */
+    public static function hashCode(string $tokenHash, string $code): string
     {
         return hash_hmac('sha256', 'code|'.$tokenHash.'|'.$code, self::key());
+    }
+
+    /**
+     * A code that proves control of $address (App\Support\AddressCode): the HMAC covers the
+     * challenge AND the address the code was mailed to, so the code confirms that address and no
+     * other, and the address itself is not stored.
+     */
+    public static function hashAddressCode(string $tokenHash, string $code, string $address): string
+    {
+        return hash_hmac('sha256', 'address|'.$tokenHash.'|'.$code.'|'.$address, self::key());
     }
 
     private static function hashRecoveryCode(string $normalized): string

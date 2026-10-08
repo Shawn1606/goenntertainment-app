@@ -39,6 +39,9 @@ export const APP_NAME = 'GÖ4Fun';
  * deutschen Ausgestaltung). Wer die Grenze niedriger setzen will, braucht eine
  * Einwilligung der Erziehungsberechtigten und einen Weg, sie zu prüfen – das ist
  * eine Produktentscheidung, keine Zeile Code.
+ *
+ * Named mirror of `min_age` in shared/legal.json, the age the server requires to be confirmed at
+ * sign-up (F-14); src/domain/legal.test.ts fails when the two differ.
  */
 export const MIN_AGE = 16;
 
