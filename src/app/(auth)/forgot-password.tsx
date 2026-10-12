@@ -48,9 +48,8 @@ export default function ForgotPasswordScreen() {
           ? err.firstError()
           : 'Etwas ist schiefgelaufen. Bitte versuch es später erneut.',
       );
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }
 
   return (
@@ -106,7 +105,7 @@ export default function ForgotPasswordScreen() {
             <Text style={styles.link}>Code eingeben</Text>
           </Pressable>
 
-          <Pressable onPress={() => router.replace('/')} style={styles.loginRow}>
+          <Pressable onPress={() => router.dismissTo('/')} style={styles.loginRow}>
             <Text style={styles.muted}>Doch wieder eingefallen? </Text>
             <Text style={styles.link}>Zum Login</Text>
           </Pressable>

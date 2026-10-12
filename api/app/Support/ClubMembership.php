@@ -46,28 +46,36 @@ final class ClubMembership
         }
 
         $plan = Club::plan($planKey);
-        $current = $user->club_interval ?? 'month';
-        $active = Club::isPaidPlan($user->club_plan);
 
-        if ($active && $current === 'year' && ! ($user->club_plan === $planKey && $user->club_cancel_at_period_end)) {
-            throw ValidationException::withMessages(['plan' => [
-                'Dein Jahresabo läuft bis '.$user->club_renews_at?->format('d.m.Y').'. Ein Wechsel geht danach.',
-            ]]);
-        }
+        return DB::transaction(function () use ($user, $plan, $planKey, $interval) {
+            // Konto sperren und seinen Stand unter der Sperre lesen - nicht den, mit dem die
+            // Anfrage begann. Zwei Abschluesse gleichzeitig sahen sonst beide „Free", und
+            // beide bezahlten und bekamen die Monats-Credits.
+            $locked = User::whereKey($user->getKey())->lockForUpdate()->first();
+            abort_if($locked === null, 404);
+            $user->setRawAttributes($locked->getAttributes(), true);
 
-        if ($user->club_plan === $planKey && ! $user->club_cancel_at_period_end && $current === $interval) {
-            throw ValidationException::withMessages(['plan' => ["Du bist schon im {$plan['name']}."]]);
-        }
+            $current = $user->club_interval ?? 'month';
+            $active = Club::isPaidPlan($user->club_plan);
 
-        // Gekuendigt, aber noch in der Laufzeit, dieselbe Stufe und Laufzeit: nur
-        // die Kuendigung zuruecknehmen. Ein zweites Mal bezahlen waere falsch.
-        if ($user->club_plan === $planKey && $user->club_cancel_at_period_end && $current === $interval) {
-            $user->forceFill(['club_cancel_at_period_end' => false])->save();
+            if ($active && $current === 'year' && ! ($user->club_plan === $planKey && $user->club_cancel_at_period_end)) {
+                throw ValidationException::withMessages(['plan' => [
+                    'Dein Jahresabo läuft bis '.$user->club_renews_at?->format('d.m.Y').'. Ein Wechsel geht danach.',
+                ]]);
+            }
 
-            return $user;
-        }
+            if ($user->club_plan === $planKey && ! $user->club_cancel_at_period_end && $current === $interval) {
+                throw ValidationException::withMessages(['plan' => ["Du bist schon im {$plan['name']}."]]);
+            }
 
-        return DB::transaction(function () use ($user, $plan, $interval) {
+            // Gekuendigt, aber noch in der Laufzeit, dieselbe Stufe und Laufzeit: nur
+            // die Kuendigung zuruecknehmen. Ein zweites Mal bezahlen waere falsch.
+            if ($user->club_plan === $planKey && $user->club_cancel_at_period_end && $current === $interval) {
+                $user->forceFill(['club_cancel_at_period_end' => false])->save();
+
+                return $user;
+            }
+
             $label = $interval === 'year' ? '1 Jahr' : '1 Monat';
             $payment = Payments::charge($user, 'plan', Club::periodPriceCents($plan['key'], $interval), "{$plan['name']} – {$label}");
 

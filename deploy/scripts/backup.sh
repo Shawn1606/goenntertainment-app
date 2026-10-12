@@ -218,8 +218,8 @@ run_once() {
     return 1
   fi
 
-  # The upload volumes are live: node adds and deletes files while tar reads them (uploads,
-  # replaced images, expired stories, account deletions). GNU tar then exits 1 ("file changed as
+  # The upload volumes are live: api adds and deletes files while tar reads them (uploads,
+  # replaced images, pruned evidence, account deletions). GNU tar then exits 1 ("file changed as
   # we read it", "File removed before we read it"): the archive holds the files as tar found them
   # and is kept. 2 or more is a real error. Each --warning keyword is an option of its own: GNU
   # tar 1.34 refuses the comma form, and the keywords silence the messages, not the status.

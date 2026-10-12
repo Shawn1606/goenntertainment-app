@@ -2,6 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\CreditLot;
+use App\Support\CreditReminders;
+use App\Support\Wallet;
 use Illuminate\Database\QueryException;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
@@ -16,7 +19,8 @@ use Throwable;
 /**
  * Logs carry no request data (F-38): a failed query is reported without its bound
  * values, its statement or the driver's message; a code mail that could not be sent (two-factor,
- * reset, a new e-mail address) logs the exception class only (its message carries the recipient).
+ * reset, a new e-mail address) and a credit expiry reminder log the exception class only (its
+ * message carries the recipient).
  *
  * Every log call is captured as text, exceptions included with their messages, so whatever a log
  * formatter could print is checked. Each test first proves that something was logged at all.
@@ -157,6 +161,42 @@ class LogHygieneTest extends AppFeatureTestCase
             $this->assertStringNotContainsString($new, $line);
         }
         $this->assertStringContainsString(TransportException::class, implode("\n", $this->logged));
+    }
+
+    /**
+     * The credit expiry reminder (credits:remind) the same way: a mail that cannot be sent is
+     * logged with the user id and the exception class, never the transport's message or the
+     * address - and stays due for the next run.
+     */
+    public function test_a_credit_reminder_that_cannot_be_sent_logs_the_exception_class_only(): void
+    {
+        Mail::extend('failing-for-test', fn () => new class extends AbstractTransport
+        {
+            protected function doSend(SentMessage $message): void
+            {
+                throw new TransportException('fixture transport failure for '.LogHygieneTest::canary());
+            }
+
+            public function __toString(): string
+            {
+                return 'failing-for-test';
+            }
+        });
+        config(['mail.mailers.failing-for-test' => ['transport' => 'failing-for-test'], 'mail.default' => 'failing-for-test']);
+        $user = $this->makeUser();
+        Wallet::credit($user, 100, 'admin', 'Fixture');
+        CreditLot::where('user_id', $user->id)->update(['expires_at' => now()->addDays(5)]);
+
+        $this->assertSame(0, CreditReminders::sendDue());
+
+        $this->assertLoggedWithoutCanary();
+        foreach ($this->logged as $line) {
+            $this->assertStringNotContainsString($user->email, $line);
+        }
+        $all = implode("\n", $this->logged);
+        $this->assertStringContainsString(TransportException::class, $all);
+        $this->assertStringContainsString('user_id='.$user->id, $all);
+        $this->assertNull(CreditLot::where('user_id', $user->id)->value('reminded_7_at'), 'a failed reminder stays due');
     }
 
     public static function canary(): string

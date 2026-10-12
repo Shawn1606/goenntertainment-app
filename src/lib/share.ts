@@ -1,9 +1,7 @@
 /**
- * Teilen nach draußen: System-Dialog und WhatsApp.
- *
- * Die Trennung zu `src/domain/share-activity.ts` ist Absicht: Dort entsteht der
- * **Text** (rein, getestet), hier passiert die **Wirkung** (Dialog öffnen, App
- * aufrufen). Nur so ist der Text prüfbar, ohne ein Gerät zu haben.
+ * Teilen nach draußen: der System-Dialog (Einladungs-Links, Gutschein-Codes,
+ * Wiederherstellungs-Codes). Den Text bauen die Aufrufer; hier passiert nur die
+ * **Wirkung** (Dialog öffnen, im Web teilen oder kopieren).
  *
  * ## Warum es kein „Kopieren" gibt
  *
@@ -14,7 +12,6 @@
  * Knopf, den es zweimal gibt, wäre schlechter Tausch.
  */
 import { Platform, Share } from 'react-native';
-import * as Linking from 'expo-linking';
 
 import { notifyUser } from '@/lib/confirm';
 
@@ -75,20 +72,3 @@ async function shareOnWeb(text: string, title: string): Promise<ShareOutcome> {
   return 'copied';
 }
 
-/**
- * Öffnet eine Adresse außerhalb der App (WhatsApp, Telegram).
- *
- * Es wird bewusst NICHT vorher `canOpenURL` gefragt: Die Adressen sind
- * `https://wa.me/…` bzw. `https://t.me/…` und damit immer öffenbar – fehlt die
- * App, übernimmt der Browser (siehe `src/domain/share-activity.ts`). Ein
- * `canOpenURL` auf Android bräuchte zusätzlich einen Eintrag in der
- * `queries`-Liste des Manifests und wäre ohne ihn immer `false`.
- */
-export async function openShareTarget(url: string): Promise<ShareOutcome> {
-  try {
-    await Linking.openURL(url);
-    return 'shared';
-  } catch {
-    return 'failed';
-  }
-}

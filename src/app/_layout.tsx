@@ -9,10 +9,13 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router/react-naviga
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
+import { StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { CelebrationProvider } from '@/components/celebration';
 import { CreditsSheetProvider } from '@/components/credits-sheet';
 import { MascotDockProvider } from '@/components/mascot-dock';
+import { PerfMeterOverlay } from '@/components/perf-meter';
 import { renderAppHeader } from '@/components/ui/app-header';
 import { AppSettingsProvider } from '@/lib/app-settings';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
@@ -145,26 +148,36 @@ export default function RootLayout() {
   });
 
   return (
-    <AuthProvider>
-      <ThemePreferenceProvider>
-        <AppSettingsProvider>
-          {/* Admin-Schalter (Bingo, Saison-Thema) – vor allem, was Deko und Goenni zeichnet. */}
-          <FeaturesProvider>
-            {/* Angebote, Club, Gruppen, Buchungen – ein Stand für alle Screens. */}
-            <MarketProvider>
-              {/* Goenni als Begleiter: Zustand hier, Figur in den Tabs. */}
-              <MascotDockProvider>
-                <CreditsSheetProvider>
-                  {/* Feier-Moment (Buchung, Abo, Gutschein) liegt über der Navigation. */}
-                  <CelebrationProvider>
-                    <ThemedNavigation fontsReady={fontsLoaded} />
-                  </CelebrationProvider>
-                </CreditsSheetProvider>
-              </MascotDockProvider>
-            </MarketProvider>
-          </FeaturesProvider>
-        </AppSettingsProvider>
-      </ThemePreferenceProvider>
-    </AuthProvider>
+    // Wurzel für alle Wisch-Gesten (Tabs, Blätter, Bildschirme zuziehen). Ohne
+    // sie kommen Gesten auf Android gar nicht an.
+    <GestureHandlerRootView style={styles.root}>
+      <AuthProvider>
+        <ThemePreferenceProvider>
+          <AppSettingsProvider>
+            {/* Admin-Schalter (Bingo, Saison-Thema) – vor allem, was Deko und Goenni zeichnet. */}
+            <FeaturesProvider>
+              {/* Angebote, Club, Gruppen, Buchungen – ein Stand für alle Screens. */}
+              <MarketProvider>
+                {/* Goenni als Begleiter: Zustand hier, Figur in den Tabs. */}
+                <MascotDockProvider>
+                  <CreditsSheetProvider>
+                    {/* Feier-Moment (Buchung, Abo, Gutschein) liegt über der Navigation. */}
+                    <CelebrationProvider>
+                      <ThemedNavigation fontsReady={fontsLoaded} />
+                      {/* Bilder pro Sekunde – nur wenn in den Einstellungen eingeschaltet. */}
+                      <PerfMeterOverlay />
+                    </CelebrationProvider>
+                  </CreditsSheetProvider>
+                </MascotDockProvider>
+              </MarketProvider>
+            </FeaturesProvider>
+          </AppSettingsProvider>
+        </ThemePreferenceProvider>
+      </AuthProvider>
+    </GestureHandlerRootView>
   );
 }
+
+const styles = StyleSheet.create({
+  root: { flex: 1 },
+});

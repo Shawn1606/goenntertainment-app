@@ -1,3 +1,4 @@
+import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
@@ -86,6 +87,10 @@ export default function AdminUserScreen() {
       <Card style={styles.hero}>
         <View style={[styles.avatar, { backgroundColor: colors.backgroundSelected }]}>
           <Text style={[styles.initials, { color: colors.tint }]}>{initialsOf(user.name)}</Text>
+          {/* Das Bild selbst – wer ein Profilbild zurücksetzt, muss es sehen können. */}
+          {user.avatar ? (
+            <Image source={{ uri: user.avatar }} style={StyleSheet.absoluteFill} contentFit="cover" accessibilityLabel={`Profilbild von ${user.name}`} />
+          ) : null}
         </View>
         <View style={{ flex: 1, gap: 2 }}>
           <Text style={[styles.name, { color: colors.text }]} numberOfLines={1}>
@@ -182,9 +187,8 @@ function CreditsPanel({ user, token, onChanged }: { user: AdminUserDetail; token
       setNote('');
     } catch (e) {
       await notifyUser('Nicht gebucht', errorMessage(e));
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
 
   return (
@@ -254,9 +258,8 @@ function StampsPanel({ user, token, onChanged }: { user: AdminUserDetail; token:
       }
     } catch (e) {
       await notifyUser('Nicht geändert', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   return (
@@ -272,7 +275,7 @@ function StampsPanel({ user, token, onChanged }: { user: AdminUserDetail; token:
   );
 }
 
-/** Umbenennen, sperren, löschen – nur bei fremden Konten. */
+/** Umbenennen, Profil zurücksetzen, sperren, löschen – nur bei fremden Konten. */
 function ModerationPanel({ user, token, onChanged, onDeleted }: { user: AdminUserDetail; token: string; onChanged: (u: AdminUserDetail) => void; onDeleted: () => void }) {
   const [reason, setReason] = useState('');
   const [username, setUsername] = useState(user.username ?? '');
@@ -288,25 +291,49 @@ function ModerationPanel({ user, token, onChanged, onDeleted }: { user: AdminUse
   };
 
   const sanction = async (minutes: number | null) => {
-    if (reason.trim().length < 3) {
+    const why = reason.trim();
+    if (why.length < 3) {
       await notifyUser('Grund fehlt', 'Bitte einen Grund angeben (wird der Person beim Login gezeigt).');
       return;
     }
-    const withImage = await confirmAction('Beweisbild anhängen?', 'Ein Screenshot hilft, die Sperre später nachzuvollziehen.', 'Bild wählen');
+    // Erst die Sperre selbst bestätigen – „Abbrechen" beim Beweisbild hieß früher
+    // „ohne Bild sperren", und ein Fehlgriff ließ sich nicht mehr aufhalten.
+    const span = minutes === null ? 'dauerhaft' : `für ${TIMEOUTS.find((t) => t.minutes === minutes)?.label ?? `${minutes} Minuten`}`;
+    const sure = await confirmAction(`${user.name} ${span} sperren?`, `Grund: „${why}" – sieht die Person beim Login.`, 'Sperren', true);
+    if (!sure) return;
+    const withImage = await confirmAction('Beweisbild anhängen?', 'Ein Screenshot hilft, die Sperre später nachzuvollziehen. „Abbrechen" sperrt ohne Bild.', 'Bild wählen');
     const image = withImage ? await pickImage('Beweisbild', 'beweis') : null;
+    const send = () => (minutes === null ? api.admin.banUser(token, user.id, why, image) : api.admin.timeoutUser(token, user.id, minutes, why, image));
     try {
-      if (minutes === null) await api.admin.banUser(token, user.id, reason.trim(), image);
-      else await api.admin.timeoutUser(token, user.id, minutes, reason.trim(), image);
-      onChanged({ ...user, banned: true, banned_permanent: minutes === null, ban_reason: reason.trim() });
+      await send();
+      onChanged({ ...user, banned: true, banned_permanent: minutes === null, ban_reason: why });
       setReason('');
     } catch (e) {
       await notifyUser('Nicht gesperrt', errorMessage(e));
     }
   };
 
+  /** Anstößiger Profilname oder anstößiges Bild: zurücksetzen – die Person kann danach neu wählen. */
+  const clear = async (parts: { name?: boolean; avatar?: boolean }) => {
+    const question = parts.name ? 'Profilnamen zurücksetzen?' : 'Profilbild entfernen?';
+    const detail = parts.name
+      ? `„${user.name}" wird zu „${user.username || 'Mitglied'}".`
+      : 'Das Bild wird gelöscht; das Konto zeigt dann die Initialen.';
+    if (!(await confirmAction(question, detail, parts.name ? 'Zurücksetzen' : 'Entfernen', true))) return;
+    try {
+      onChanged((await api.admin.clearProfile(token, user.id, parts)).data);
+    } catch (e) {
+      await notifyUser('Nicht zurückgesetzt', errorMessage(e));
+    }
+  };
+
   const unban = async () => {
-    await api.admin.unbanUser(token, user.id);
-    onChanged({ ...user, banned: false, banned_until: null, ban_reason: null });
+    try {
+      await api.admin.unbanUser(token, user.id);
+      onChanged({ ...user, banned: false, banned_until: null, ban_reason: null });
+    } catch (e) {
+      await notifyUser('Sperre nicht aufgehoben', errorMessage(e));
+    }
   };
 
   const remove = async () => {
@@ -328,6 +355,20 @@ function ModerationPanel({ user, token, onChanged, onDeleted }: { user: AdminUse
             <TextField value={username} onChangeText={setUsername} autoCapitalize="none" />
           </View>
           <Button title="Ändern" size="small" variant="secondary" onPress={rename} disabled={!username.trim() || username === user.username} />
+        </View>
+      </Card>
+
+      <Card style={styles.panel}>
+        <PanelHead icon="user" title="Profil zurücksetzen" hint="Für einen anstößigen Namen oder ein anstößiges Bild. Bei Wiederholung: sperren." />
+        <View style={styles.wrap}>
+          <Button
+            title="Namen zurücksetzen"
+            size="small"
+            variant="secondary"
+            onPress={() => clear({ name: true })}
+            disabled={user.name === (user.username || 'Mitglied')}
+          />
+          <Button title="Profilbild entfernen" size="small" variant="secondary" onPress={() => clear({ avatar: true })} disabled={!user.avatar} />
         </View>
       </Card>
 
@@ -401,7 +442,7 @@ function Segmented<K extends string>({
 
 const styles = StyleSheet.create({
   hero: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
-  avatar: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
+  avatar: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   initials: { fontFamily: FontFamily.bold, fontSize: 21 },
   name: { fontFamily: FontFamily.bold, fontSize: 19 },
   text: { fontFamily: FontFamily.medium, fontSize: 14 },

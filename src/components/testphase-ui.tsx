@@ -16,11 +16,12 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import Animated, { Easing, cancelAnimation, useAnimatedStyle, useReducedMotion, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
+import Animated, { Easing, cancelAnimation, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import Svg, { Circle } from 'react-native-svg';
 
 import { Button } from '@/components/ui/button';
 import { Icon } from '@/components/ui/icon';
+import { useStill } from '@/components/ui/motion-pause';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { FontFamily, Radius, Spacing, Stroke } from '@/constants/theme';
 import { formatCredits } from '@/domain/club';
@@ -66,10 +67,11 @@ function isoWeek(date: Date): number {
 
 /** Flamme, die leise flackert, solange die Serie lebt. */
 function Flame({ alive, warn }: { alive: boolean; warn: boolean }) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" und solange die Seite nicht vorn ist (motion-pause.tsx).
+  const still = useStill();
   const flick = useSharedValue(0);
   useEffect(() => {
-    if (reduced || !alive) return;
+    if (still || !alive) return;
     flick.set(
       withRepeat(
         withSequence(withTiming(1, { duration: 420, easing: Easing.inOut(Easing.quad) }), withTiming(-0.6, { duration: 380, easing: Easing.inOut(Easing.quad) })),
@@ -77,8 +79,12 @@ function Flame({ alive, warn }: { alive: boolean; warn: boolean }) {
         true,
       ),
     );
-    return () => cancelAnimation(flick);
-  }, [reduced, alive, flick]);
+    // Angehalten: zurück in die Ruhe, statt schief und gestreckt stehen zu bleiben.
+    return () => {
+      cancelAnimation(flick);
+      flick.set(0);
+    };
+  }, [still, alive, flick]);
   const style = useAnimatedStyle(() => ({ transform: [{ scaleY: 1 + flick.value * 0.06 }, { rotate: `${flick.value * 4}deg` }] }));
 
   return (

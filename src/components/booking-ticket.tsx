@@ -21,6 +21,7 @@ import { BOOKING_STATUS_LABEL, expiryInfo, type ExpiryTone } from '@/domain/book
 import { formatCredits, formatEuro } from '@/domain/club';
 import { formatDay } from '@/domain/date-format';
 import { useSignals, useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import type { Booking } from '@/lib/api';
 
 /** Farben je Dringlichkeit – Bernstein und Rot nur, wenn wirklich etwas abläuft. */
@@ -42,7 +43,8 @@ export function BookingTicket({ booking, showGroup = true, compact = false }: { 
   const router = useRouter();
   const tint = useExpiryColors();
   const open = booking.status === 'confirmed';
-  const expiry = open ? expiryInfo(booking.valid_until, new Date()) : null;
+  const now = useNow();
+  const expiry = open ? expiryInfo(booking.valid_until, now) : null;
   const tone = expiry?.tone ?? 'over';
   const look = tint(tone);
   const price = booking.pay_method === 'money' ? formatEuro(booking.total_cents) : `${formatCredits(booking.total_credits)} Credits`;

@@ -8,21 +8,22 @@
  * goldenen Karte Gold), nicht bunt:
  *
  *  - gezackter Rand mit Prägeschatten, darin eine erhabene Mitte mit Ringen,
- *  - feiner Glitzer und ein Lichtband, das langsam darüberzieht,
- *  - Funkelsterne am Rand, jeder im eigenen Takt.
+ *  - feiner Glitzer; über den neuesten Stempel zieht ab und zu ein Lichtband,
+ *  - ein Funkelstern am Rand blitzt auf.
  *
- * Damit er lebt, macht jeder Stempel ab und zu von selbst etwas – nie alle
- * gleichzeitig (Pausen in src/domain/stamp-scatter.ts):
- *
- *  - er **pocht** kurz auf (minimal, ~4 %),
- *  - der **Stern in der Mitte dreht sich** hin und her, bis zu 65°, Richtung
- *    und Weite zufällig.
+ * Damit die Karte lebt, gibt sie einen Takt vor (`BEAT_MS`): Bei jedem Schlag
+ * funkelt genau EIN Stempel, bei jedem zweiten **pocht** einer kurz auf
+ * (~4 %) und/oder sein **Stern dreht sich** hin und her (bis 65°). Nie alle
+ * gleichzeitig – zehn Stempel mit eigenen Dauer-Animationen ließen die App
+ * ruckeln (gemessen Okt. 2026).
  *
  * ## Wo er sitzt
  *
- * Kein Stempel sitzt gerade und mittig: Jeder ist um bis zu 15 % seiner Größe
- * in X und Y verschoben und leicht gedreht. Die Lage ist zufällig, aber fest
- * (sie hängt an der Stempel-ID) – die Karte sieht beim Zurückkommen gleich aus.
+ * Ein Stempel ist größer als sein Feld (`STAMP_SCALE`) und ragt über den
+ * gestrichelten Rand – aufgedrückt, nicht eingepasst. Kein Stempel sitzt gerade
+ * und mittig: Jeder ist um bis zu 15 % seiner Größe in X und Y verschoben und
+ * leicht gedreht. Die Lage ist zufällig, aber fest (sie hängt an der
+ * Stempel-ID) – die Karte sieht beim Zurückkommen gleich aus.
  *
  * Der frischeste Stempel landet mit einem „Aufdrücken" (groß → klein).
  *
@@ -36,17 +37,15 @@
  * Funkeln, Pochen und Drehen.
  */
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useId, useMemo } from 'react';
+import { memo, useEffect, useId, useMemo, useState, useSyncExternalStore } from 'react';
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
-  cancelAnimation,
   interpolate,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
   withDelay,
-  withRepeat,
   withSequence,
   withSpring,
   withTiming,
@@ -55,13 +54,21 @@ import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Path, Stop } fr
 
 import { DecorCorner } from '@/components/seasonal-decor';
 import { Icon } from '@/components/ui/icon';
-import { Shimmer } from '@/components/ui/glow';
+import { Shimmer } from '@/components/ui/shimmer';
+import { useStill } from '@/components/ui/motion-pause';
 import { FontFamily, Night, Radius, Spacing, Stroke } from '@/constants/theme';
-import { seeded, stampPause, stampPose, starSwing } from '@/domain/stamp-scatter';
+import { seeded, stampForBeat, stampPose, stampSize, starSwing } from '@/domain/stamp-scatter';
 import type { StampCard as StampCardData, StampEntry } from '@/lib/api';
 
 /** Felder, die der Server für die goldene Karte mitschickt (ältere Stände kennen sie nicht). */
 type CardData = StampCardData & { golden?: boolean; cards_until_golden?: number };
+
+/** Takt der Karte: so oft funkelt ein Stempel (groß bzw. klein auf der Startseite). */
+const BEAT_MS = 2200;
+const COMPACT_BEAT_MS = 3400;
+
+/** Ruhe des Lichtbands zwischen zwei Durchzügen über den neuesten Stempel. */
+const SHINE_REST_MS = 3200;
 
 /** Vierzackiger Funkelstern in einer 24er-Box. */
 const SPARKLE = 'M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z';
@@ -124,31 +131,27 @@ function twinklesFor(seed: number) {
   return [first, second].map((a) => ({ x: 0.5 + Math.cos(a) * 0.46, y: 0.5 + Math.sin(a) * 0.46 }));
 }
 
-/** Ein Funkelstern, der in seinem eigenen Takt aufblitzt. */
-function Twinkle({ x, y, s, delay, reduced }: { x: number; y: number; s: number; delay: number; reduced: boolean }) {
-  const t = useSharedValue(reduced ? 0.7 : 0);
+/**
+ * Ein Funkelstern, der einmal aufblitzt, sobald `trigger` eine neue Zahl ist.
+ * Kein eigener Dauertakt: Welcher Stempel gerade funkelt, bestimmt die Karte.
+ */
+function Twinkle({ x, y, s, trigger, reduced }: { x: number; y: number; s: number; trigger?: number; reduced: boolean }) {
+  // Nur bei „Bewegung reduzieren" steht ein ruhiger Stern da. `reduced` heißt auch
+  // „Seite ruht" (useStill) – ein Stempel, der so entstand, zeigte sonst noch lange
+  // nach dem Zurückkommen einen eingefrorenen Stern.
+  const reduceMotion = useReducedMotion();
+  const t = useSharedValue(0);
+  useEffect(() => {
+    t.set(reduceMotion ? 0.7 : 0);
+  }, [reduceMotion, t]);
 
   useEffect(() => {
-    if (reduced) return;
-    t.set(
-      withDelay(
-        delay,
-        withRepeat(
-          withSequence(
-            withTiming(1, { duration: 480, easing: Easing.out(Easing.quad) }),
-            withTiming(0, { duration: 820, easing: Easing.in(Easing.quad) }),
-            withTiming(0, { duration: 1700 }),
-          ),
-          -1,
-          false,
-        ),
-      ),
-    );
-    return () => cancelAnimation(t);
-  }, [reduced, delay, t]);
+    if (reduced || trigger === undefined) return;
+    t.set(withSequence(withTiming(1, { duration: 480, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 820, easing: Easing.in(Easing.quad) })));
+  }, [reduced, trigger, t]);
 
   const style = useAnimatedStyle(() => ({
-    opacity: interpolate(t.value, [0, 1], [0, 1]),
+    opacity: t.value,
     transform: [{ scale: interpolate(t.value, [0, 1], [0.3, 1.1]) }, { rotate: `${interpolate(t.value, [0, 1], [0, 60])}deg` }],
   }));
 
@@ -161,14 +164,63 @@ function Twinkle({ x, y, s, delay, reduced }: { x: number; y: number; s: number;
   );
 }
 
-/** Ein gefülltes Feld: der Folien-Stempel. */
-export function HoloStamp({
+/**
+ * Der Takt der Karte als kleiner Speicher, dem jeder Stempel selbst zuhört
+ * (`useTurn`): Bei einem Schlag rendert nur der Stempel neu, der gerade dran ist.
+ * Lag der Takt als Zustand in der Karte, zeichnete jeder Schlag die ganze Karte
+ * neu – 35 Bausteine, gemessen Okt. 2026 als Ruckler mitten im Scrollen.
+ */
+type CardBeat = { subscribe: (listener: () => void) => () => void; current: () => number; tick: () => void };
+
+function createBeat(): CardBeat {
+  let value = 0;
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    current: () => value,
+    tick() {
+      value += 1;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+const NO_BEAT: CardBeat = { subscribe: () => () => {}, current: () => 0, tick: () => {} };
+
+/** Bei jedem Schlag funkelt genau ein Stempel … */
+const sparkleAt = (beat: number, count: number) => stampForBeat(beat, count);
+/** … und bei jedem zweiten pocht einer oder dreht seinen Stern. */
+const actAt = (beat: number, count: number) => (beat % 2 === 0 ? stampForBeat(beat * 31 + 7, count) : -1);
+
+/** Der Schlag, bei dem Stempel `index` gerade dran ist – sonst `undefined`. */
+function useTurn(beat: CardBeat, index: number, count: number, pick: (beat: number, count: number) => number): number | undefined {
+  const turn = useSyncExternalStore(
+    beat.subscribe,
+    () => {
+      const now = beat.current();
+      return now > 0 && pick(now, count) === index ? now : 0;
+    },
+    () => 0,
+  );
+  return turn > 0 ? turn : undefined;
+}
+
+/**
+ * Ein gefülltes Feld: der Folien-Stempel. Gemerkt (`memo`) und am Takt der Karte
+ * selbst lauschend: Bei einem Schlag rendert nur der Stempel neu, der dran ist.
+ */
+export const HoloStamp = memo(function HoloStamp({
   size,
   index,
   entry,
   fresh = false,
   foil = 'silver',
-  quiet = false,
+  beat = NO_BEAT,
+  count = 0,
+  shine = false,
 }: {
   size: number;
   index: number;
@@ -176,10 +228,19 @@ export function HoloStamp({
   /** Gerade verdient – landet mit einem Aufdrücken. */
   fresh?: boolean;
   foil?: FoilKey;
-  /** Klein auf der Startseite: ohne Lichtband und mit weniger Funkeln. */
-  quiet?: boolean;
+  /** Takt der Karte: ist dieser Stempel dran, funkelt, pocht oder dreht er sich einmal. */
+  beat?: CardBeat;
+  /** Wie viele Stempel auf der Karte sind (unter ihnen wählt der Takt). */
+  count?: number;
+  /** Lichtband über die Folie – nur für den neuesten Stempel der großen Karte. */
+  shine?: boolean;
 }) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
+  /** Jede neue Zahl: einmal funkeln. */
+  const sparkle = useTurn(beat, index, count, sparkleAt);
+  /** Jede neue Zahl: einmal aufpochen und/oder den Stern drehen. */
+  const act = useTurn(beat, index, count, actAt);
   const seed = entry?.id ?? index + 1;
   const pose = useMemo(() => stampPose(seed), [seed]);
   const glitter = useMemo(() => glitterFor(seed), [seed]);
@@ -199,41 +260,26 @@ export function HoloStamp({
     land.set(withDelay(180, withSpring(1, { damping: 11, stiffness: 180, mass: 0.7 })));
   }, [fresh, reduced, land]);
 
-  // Ab und zu: aufpochen und/oder den Stern hin und her drehen – je Stempel eigener Takt.
+  // Aufpochen und/oder den Stern hin und her drehen – wann, bestimmt die Karte (`act`).
   useEffect(() => {
-    if (reduced) return;
-    let timer: ReturnType<typeof setTimeout>;
-    const act = () => {
-      const roll = Math.random();
-      if (roll < 0.62) {
-        const swing = starSwing(Math.random(), Math.random());
-        const back = -swing * (0.2 + Math.random() * 0.35);
-        const ease = Easing.inOut(Easing.quad);
-        star.set(
-          withSequence(
-            withTiming(swing, { duration: 420 + Math.abs(swing) * 5, easing: ease }),
-            withTiming(back, { duration: 520, easing: ease }),
-            withSpring(0, { damping: 8, stiffness: 110, mass: 0.6 }),
-          ),
-        );
-      }
-      if (roll >= 0.45) {
-        pulse.set(withSequence(withTiming(1, { duration: 150, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 460, easing: Easing.inOut(Easing.quad) })));
-      }
-    };
-    const schedule = (wait: number) => {
-      timer = setTimeout(() => {
-        act();
-        schedule(stampPause(Math.random()));
-      }, wait);
-    };
-    schedule(700 + pose.phase * 3200);
-    return () => {
-      clearTimeout(timer);
-      cancelAnimation(star);
-      cancelAnimation(pulse);
-    };
-  }, [reduced, pose.phase, star, pulse]);
+    if (reduced || act === undefined) return;
+    const roll = Math.random();
+    if (roll < 0.62) {
+      const swing = starSwing(Math.random(), Math.random());
+      const back = -swing * (0.2 + Math.random() * 0.35);
+      const ease = Easing.inOut(Easing.quad);
+      star.set(
+        withSequence(
+          withTiming(swing, { duration: 420 + Math.abs(swing) * 5, easing: ease }),
+          withTiming(back, { duration: 520, easing: ease }),
+          withSpring(0, { damping: 8, stiffness: 110, mass: 0.6 }),
+        ),
+      );
+    }
+    if (roll >= 0.45) {
+      pulse.set(withSequence(withTiming(1, { duration: 150, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: 460, easing: Easing.inOut(Easing.quad) })));
+    }
+  }, [reduced, act, star, pulse]);
 
   const dx = pose.dx * size;
   const dy = pose.dy * size;
@@ -251,14 +297,17 @@ export function HoloStamp({
 
   const starStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${star.value}deg` }, { scale: 1 + pulse.value * 0.06 }] }));
 
-  const s = size;
+  // Abwechselnd an einer der zwei festen Stellen am Rand funkeln.
+  const spark = sparks[(sparkle ?? 0) % 2];
+  const sparkSize = sparkSizeFor(size, (sparkle ?? 0) % 2 === 0 ? 0.26 : 0.2);
+
   return (
     <Animated.View
-      style={[{ width: s, height: s }, stampStyle]}
+      style={[{ width: size, height: size }, stampStyle]}
       accessible
       accessibilityLabel={`Stempel ${index + 1}${entry?.partner ? ` von ${entry.partner.name}` : ''}`}>
       {/* Prägeschatten, Folie, erhabene Mitte, Ringe, Glitzer. */}
-      <Svg width={s} height={s} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}>
+      <Svg width={size} height={size} viewBox="0 0 100 100" style={StyleSheet.absoluteFill}>
         <Defs>
           <SvgLinearGradient id={outerId} x1="0" y1="0" x2="1" y2="1">
             {look.outer.map((c, i) => (
@@ -281,37 +330,40 @@ export function HoloStamp({
           <Circle key={i} cx={g.x} cy={g.y} r={g.r} fill="#ffffff" opacity={g.o} />
         ))}
       </Svg>
-      {/* Lichtband über die Folie. */}
-      {reduced || quiet ? null : (
-        <View pointerEvents="none" style={[styles.holoClip, { width: s, height: s, borderRadius: s / 2 }]}>
-          <Shimmer color="rgba(255,255,255,0.75)" radius={s / 2} durationMs={2800 + (seed % 7) * 230} />
+      {/* Lichtband über die Folie: zieht durch, ruht, zieht wieder durch. */}
+      {reduced || !shine ? null : (
+        <View pointerEvents="none" style={[styles.holoClip, { width: size, height: size, borderRadius: size / 2 }]}>
+          <Shimmer color="rgba(255,255,255,0.75)" radius={size / 2} durationMs={1600} restMs={SHINE_REST_MS} />
         </View>
       )}
       {/* Der Stern in der Mitte – dreht sich ab und zu hin und her. */}
       <View style={styles.center} pointerEvents="none">
         <Animated.View style={starStyle}>
-          <Svg width={s * 0.4} height={s * 0.4} viewBox="0 0 24 24">
+          <Svg width={size * 0.4} height={size * 0.4} viewBox="0 0 24 24">
             <Path d={SPARKLE} fill="#ffffff" opacity={0.85} transform="translate(-0.5 -0.6)" />
             <Path d={SPARKLE} fill={look.ink} />
             <Path d="M12 5.2l1 3.6" stroke="#ffffff" strokeOpacity={0.55} strokeWidth={1} strokeLinecap="round" />
           </Svg>
         </Animated.View>
       </View>
-      <Twinkle x={sparks[0].x * s - s * 0.13} y={sparks[0].y * s - s * 0.13} s={s * 0.26} delay={Math.round(pose.phase * 2400)} reduced={reduced} />
-      {quiet ? null : (
-        <Twinkle x={sparks[1].x * s - s * 0.1} y={sparks[1].y * s - s * 0.1} s={s * 0.2} delay={Math.round(pose.phase * 2400) + 900} reduced={reduced} />
-      )}
+      <Twinkle x={spark.x * size - sparkSize / 2} y={spark.y * size - sparkSize / 2} s={sparkSize} trigger={sparkle} reduced={reduced} />
     </Animated.View>
   );
+});
+
+/** Kantenlänge eines Funkelsterns als Anteil der Stempelgröße. */
+function sparkSizeFor(size: number, share: number): number {
+  return Math.round(size * share);
 }
 
-/** Ein leeres Feld: gestrichelter Kreis mit Nummer. Das letzte zeigt das Geschenk. */
 /**
+ * Ein leeres Feld: gestrichelter Kreis mit Nummer. Das letzte zeigt das Geschenk.
+ *
  * Bleibt auch unter einem Stempel liegen (`underStamp`): Der Stempel landet
  * versetzt darauf, und man sieht das Feld darunter – so fühlt es sich an wie
  * gestempelt und nicht wie „ausgefüllt“.
  */
-function EmptySlot({ size, number, reward, underStamp = false }: { size: number; number: number; reward: boolean; underStamp?: boolean }) {
+const EmptySlot = memo(function EmptySlot({ size, number, reward, underStamp = false }: { size: number; number: number; reward: boolean; underStamp?: boolean }) {
   return (
     <View
       style={[styles.empty, { width: size, height: size, borderRadius: size / 2 }, reward && styles.emptyReward]}
@@ -322,7 +374,7 @@ function EmptySlot({ size, number, reward, underStamp = false }: { size: number;
       {reward ? <Icon name="gift" size={size * 0.38} color="#fff1a8" /> : <Text style={[styles.number, { fontSize: size * 0.3 }]}>{number}</Text>}
     </View>
   );
-}
+});
 
 /**
  * Die ganze Karte: zwei Reihen à fünf Felder auf dem Lila des Club-Auftritts.
@@ -348,14 +400,28 @@ export function StampCard({
   const slotSize = compact ? 27 : 54;
   const foil: FoilKey = golden ? 'gold' : 'silver';
 
+  // EIN Takt für die ganze Karte: Bei jedem Schlag funkelt genau ein Stempel, bei
+  // jedem zweiten pocht einer. Vorher hatte jeder Stempel eigene Dauer-Glitzer,
+  // ein eigenes Lichtband und einen eigenen Zeitgeber – zehn Stempel waren
+  // dreißig gleichzeitige Animationen, und die Seite ruckelte. Der Takt ist kein
+  // Zustand der Karte: Die Stempel hören ihm selbst zu (`useTurn`).
+  const still = useStill();
+  const filledCount = card.filled;
+  const [beat] = useState(createBeat);
+  useEffect(() => {
+    if (still || filledCount === 0) return;
+    const timer = setInterval(beat.tick, compact ? COMPACT_BEAT_MS : BEAT_MS);
+    return () => clearInterval(timer);
+  }, [still, filledCount, compact, beat]);
+
   return (
     <View style={[styles.card, compact && styles.cardCompact, golden && styles.cardGolden, style]}>
       <LinearGradient colors={[...Night.gradient]} start={{ x: 0.1, y: 0 }} end={{ x: 0.9, y: 1 }} style={StyleSheet.absoluteFill} />
-      {/* Hintergrund-Glitzer wie im Logo. */}
+      {/* Hintergrund-Glitzer wie im Logo – nur dort, wo kein Text steht (oben links liegt der Titel). */}
       <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-        <View style={[styles.dot, { top: '18%', left: '8%', backgroundColor: '#ffffff' }]} />
-        <View style={[styles.dot, { top: '72%', right: '6%', backgroundColor: Night.sparkle }]} />
-        <View style={[styles.dot, styles.dotSmall, { top: '10%', right: '34%', backgroundColor: '#ffffff' }]} />
+        <View style={[styles.dot, { bottom: 6, left: '47%', backgroundColor: '#ffffff' }]} />
+        <View style={[styles.dot, { top: '72%', right: 6, backgroundColor: Night.sparkle }]} />
+        <View style={[styles.dot, styles.dotSmall, { top: 8, right: '34%', backgroundColor: '#ffffff' }]} />
       </View>
 
       {compact ? (
@@ -410,11 +476,22 @@ export function StampCard({
         {Array.from({ length: fields }, (_, i) => {
           const filled = i < card.filled;
           return (
-            <View key={i} style={[styles.slot, { width: slotSize, height: slotSize }]}>
+            // Gestempelte Felder liegen oben: Der Stempel ist größer als sein Feld
+            // und überdeckt den Rand des Nachbarn – nicht umgekehrt.
+            <View key={i} style={[styles.slot, filled && styles.slotStamped, { width: slotSize, height: slotSize }]}>
               <EmptySlot size={slotSize} number={i + 1} reward={i === fields - 1} underStamp={filled} />
               {filled ? (
                 <View style={styles.stampOnTop} pointerEvents="none">
-                  <HoloStamp size={Math.round(slotSize * 0.9)} index={i} entry={card.stamps[i] ?? null} fresh={freshIndex === i} foil={foil} quiet={compact} />
+                  <HoloStamp
+                    size={stampSize(slotSize)}
+                    index={i}
+                    entry={card.stamps[i] ?? null}
+                    fresh={freshIndex === i}
+                    foil={foil}
+                    beat={beat}
+                    count={filledCount}
+                    shine={!compact && i === filledCount - 1}
+                  />
                 </View>
               ) : null}
             </View>
@@ -453,6 +530,7 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: Spacing.three, paddingBottom: Spacing.one },
   gridCompact: { flexWrap: 'nowrap', rowGap: 0, paddingBottom: 0 },
   slot: { alignItems: 'center', justifyContent: 'center' },
+  slotStamped: { zIndex: 1 },
   /** Der Stempel liegt über dem Feld – mit seinem eigenen Versatz (stamp-scatter.ts). */
   stampOnTop: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
   holoClip: { overflow: 'hidden', position: 'absolute' },

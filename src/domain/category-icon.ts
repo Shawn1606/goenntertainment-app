@@ -52,7 +52,7 @@ export type CategoryIconName = (typeof CATEGORY_ICON_NAMES)[number];
 /** Wenn nichts passt: ein neutrales, nichtssagendes Zeichen (Etikett). */
 export const CATEGORY_ICON_FALLBACK: CategoryIconName = 'tag';
 
-/** Die Slugs aus `server/src/seed.js` → Icon-Name. */
+/** Die Symbol-Schlüssel der Kategorien (Laravel-Migration seed_default_interests) → Icon-Name. */
 const BY_ICON: Record<string, CategoryIconName> = {
   bike: 'bike',
   people: 'people',

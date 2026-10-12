@@ -3,11 +3,13 @@
 namespace Tests\Feature;
 
 use App\Models\CreditTransaction;
+use App\Models\Payment;
 use App\Models\User;
 use App\Models\VoucherBatch;
 use App\Support\ClubMembership;
 use App\Support\Codes;
 use App\Support\Vouchers;
+use Illuminate\Validation\ValidationException;
 
 class ClubWalletTest extends MarketplaceTestCase
 {
@@ -50,6 +52,30 @@ class ClubWalletTest extends MarketplaceTestCase
         $this->travel(32)->days();
         ClubMembership::renewDue();
         $this->assertSame('free', $user->fresh()->club_plan);
+    }
+
+    /**
+     * Zwei Abschluesse zugleich: Der zweite liest den Stand unter der Sperre des Kontos, nicht den
+     * vom Anfang seiner Anfrage - er bezahlt nicht noch einmal und bringt keine zweiten
+     * Monats-Credits. (Ein Konto-Objekt von vorher steht fuer die zweite Anfrage.)
+     */
+    public function test_zweiter_abschluss_mit_altem_stand_bezahlt_nicht_noch_einmal(): void
+    {
+        $user = $this->actingAsUser();
+        $stale = User::findOrFail($user->id);
+
+        $this->postJson('/api/club/subscribe', ['plan' => 'gold'])->assertOk()->assertJsonPath('data.credits', 42);
+
+        try {
+            ClubMembership::subscribe($stale, 'gold');
+            $this->fail('the second subscription went through');
+        } catch (ValidationException $e) {
+            $this->assertSame('Du bist schon im Gold Plan.', $e->validator->errors()->first());
+        }
+
+        $this->assertSame(1, Payment::where('user_id', $user->id)->where('purpose', 'plan')->count());
+        $this->assertSame(42, $user->fresh()->credits_balance);
+        $this->assertSame(1, CreditTransaction::where('user_id', $user->id)->where('kind', 'monthly')->count());
     }
 
     public function test_verlaengerung_bucht_ab_und_schreibt_credits_gut(): void

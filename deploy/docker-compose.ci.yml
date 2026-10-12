@@ -24,6 +24,8 @@ services:
       # CI has no real mail server: Mailpit catches every mail, so no code is ever written to a log.
       MAIL_HOST: mailpit
       MAIL_PORT: '1025'
+      # Mailpit speaks plain SMTP; production requires TLS (docker-compose.yml).
+      MAIL_REQUIRE_TLS: 'false'
     depends_on:
       mailpit:
         condition: service_healthy
@@ -33,6 +35,8 @@ services:
       # The credit reminders' mails go to Mailpit as well.
       MAIL_HOST: mailpit
       MAIL_PORT: '1025'
+      # Mailpit speaks plain SMTP; production requires TLS (docker-compose.yml).
+      MAIL_REQUIRE_TLS: 'false'
     depends_on:
       mailpit:
         condition: service_healthy

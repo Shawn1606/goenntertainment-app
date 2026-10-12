@@ -36,8 +36,15 @@ export const LINE_NAME = ['Reihe 1', 'Reihe 2', 'Reihe 3', 'Spalte 1', 'Spalte 2
 const SOFT_HYPHEN = /­/g;
 
 /** Wo der Strich über einer vollen Reihe liegt (Anteile der Kartenbreite). */
+/**
+ * Kantenlänge eines Feldes in Prozent der Rasterbreite; der Rest (2 × 2,6 %) sind die
+ * Fugen. Nur Prozent, keine festen Punkte: Mit 8 pt Fuge passten auf Handys unter etwa
+ * 375 pt Breite keine drei Felder mehr in eine Reihe, und das Raster brach um.
+ */
+const TILE_PERCENT = (100 - 2 * 2.6) / 3;
+
 function strikeStyle(line: number) {
-  const centers = ['16.6%', '50%', '83.3%'] as const;
+  const centers = [`${TILE_PERCENT / 2}%`, '50%', `${100 - TILE_PERCENT / 2}%`] as const;
   if (line < 3) return { top: centers[line], left: '4%', width: '92%', marginTop: -3 } as const;
   if (line < 6) return { left: centers[line - 3], top: '4%', height: '92%', width: 6, marginLeft: -3 } as const;
   return { top: '50%', left: '-14%', width: '128%', marginTop: -3, transform: [{ rotate: line === 6 ? '45deg' : '-45deg' }] } as const;
@@ -220,8 +227,6 @@ function Dauber() {
   );
 }
 
-const TILE_GAP = 8;
-
 const styles = StyleSheet.create({
   bingo: { borderWidth: Stroke, borderRadius: Radius.panel, overflow: 'hidden' },
   head: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, padding: Spacing.three },
@@ -234,8 +239,8 @@ const styles = StyleSheet.create({
   rewardValue: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 15 },
   rewardLabel: { color: Night.textMuted, fontFamily: FontFamily.semibold, fontSize: 10.5 },
   body: { padding: Spacing.three, gap: Spacing.three },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: TILE_GAP, aspectRatio: 1, width: '100%' },
-  tileWrap: { width: `${(100 - 2 * 2.6) / 3}%`, aspectRatio: 1 },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', alignContent: 'space-between', aspectRatio: 1, width: '100%' },
+  tileWrap: { width: `${TILE_PERCENT}%`, aspectRatio: 1 },
   tile: { flex: 1, borderWidth: Stroke, borderRadius: Radius.card, padding: 6, alignItems: 'center', justifyContent: 'center', gap: 5, overflow: 'hidden' },
   tileJoker: { borderColor: Night.line, borderWidth: Stroke },
   tileSelected: { borderWidth: 2.5 },

@@ -25,15 +25,13 @@ import Animated, {
   Easing,
   cancelAnimation,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
-  withDelay,
-  withRepeat,
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Circle, Defs, Ellipse, G, Line, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 
+import { useBeat, useStill } from '@/components/ui/motion-pause';
 import { seasonByKey, seasonFor, type Season, type SeasonOrnament } from '@/domain/season';
 import { useTheme } from '@/hooks/use-theme';
 import { useAppSettings } from '@/lib/app-settings';
@@ -541,6 +539,12 @@ function motionFor(kind: SeasonOrnament): 'swing' | 'bob' | 'flap' {
   return 'swing';
 }
 
+/** Ruhe nach dem Ausschaukeln eines Anhängers (dazu je Anhänger ein Versatz bis zur selben Länge). */
+const SWING_REST_MS = 12_000;
+
+/** Ruhe nach dem Wippen eines Eck-Grüppchens. */
+const BOB_REST_MS = 6000;
+
 /** Ein Anhänger an einem Faden. Er hängt an seinem oberen Ende und bewegt sich von dort aus. */
 function Hanging({
   kind,
@@ -562,16 +566,36 @@ function Hanging({
   swing: number;
   thread: string;
 }) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const t = useSharedValue(0);
   const motion = motionFor(kind);
 
+  // Einmal ausschaukeln (gedämpft), dann lange Ruhe, dann wieder – nie alle im
+  // Dauerpendeln: Neun Anhänger, die ununterbrochen schwingen, kosteten auf dem
+  // Handy jeden Frame Arbeit. Im Takt (`useBeat`) läuft in der Ruhe gar nichts.
+  const rest = SWING_REST_MS + ((delay * 13 + duration * 7) % SWING_REST_MS);
+  useBeat(
+    () => {
+      const ease = Easing.inOut(Easing.sin);
+      t.set(
+        withSequence(
+          withTiming(1, { duration: duration * 0.5, easing: ease }),
+          withTiming(-0.6, { duration: duration * 0.5, easing: ease }),
+          withTiming(0.3, { duration: duration * 0.45, easing: ease }),
+          withTiming(0, { duration: duration * 0.4, easing: ease }),
+        ),
+      );
+    },
+    Math.round(duration * 1.85) + rest,
+    !reduced,
+    delay,
+  );
   useEffect(() => {
-    if (reduced) return;
-    const ease = Easing.inOut(Easing.sin);
-    t.set(withDelay(delay, withRepeat(withSequence(withTiming(1, { duration, easing: ease }), withTiming(-1, { duration, easing: ease })), -1, true)));
-    return () => cancelAnimation(t);
-  }, [reduced, delay, duration, t]);
+    if (!reduced) return;
+    cancelAnimation(t);
+    t.set(0);
+  }, [reduced, t]);
 
   const style = useAnimatedStyle(() => {
     if (motion === 'bob') return { transform: [{ translateY: (t.value + 1) * 4 }] };
@@ -675,15 +699,35 @@ export function DecorCorner({
   style?: StyleProp<ViewStyle>;
 }) {
   const season = useSeason();
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const bob = useSharedValue(0);
   const { settings } = useAppSettings();
 
+  // Zweimal wippen, dann Ruhe – kein Dauerwippen (kostet sonst jeden Frame). Ohne
+  // Saison-Deko gibt es nichts zu wippen.
+  const bobbing = !reduced && settings.seasonalDecor;
+  useBeat(
+    () => {
+      const ease = Easing.inOut(Easing.sin);
+      bob.set(
+        withSequence(
+          withTiming(1, { duration: 800, easing: ease }),
+          withTiming(0, { duration: 800, easing: ease }),
+          withTiming(1, { duration: 800, easing: ease }),
+          withTiming(0, { duration: 800, easing: ease }),
+        ),
+      );
+    },
+    3200 + BOB_REST_MS,
+    bobbing,
+    0,
+  );
   useEffect(() => {
-    if (reduced) return;
-    bob.set(withRepeat(withTiming(1, { duration: 1600, easing: Easing.inOut(Easing.sin) }), -1, true));
-    return () => cancelAnimation(bob);
-  }, [reduced, bob]);
+    if (bobbing) return;
+    cancelAnimation(bob);
+    bob.set(0);
+  }, [bobbing, bob]);
 
   const even = useAnimatedStyle(() => ({ transform: [{ translateY: bob.value * -2.5 }, { rotate: `${-10 + bob.value * 8}deg` }] }));
   const odd = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - bob.value) * -2 }, { rotate: `${12 - bob.value * 8}deg` }] }));

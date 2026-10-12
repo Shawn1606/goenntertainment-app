@@ -1,5 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { AdminScreen, SectionTitle, ToggleRow, numberOrNull } from '@/components/admin-ui';
@@ -137,11 +137,26 @@ export default function AdminPartnerScreen() {
     setKids(p.kid_friendly ?? null);
   };
 
+  // Den Partner nur beim ersten Öffnen laden: Beim Zurückkommen aus einem Angebot
+  // überschriebe er sonst ungespeicherte Änderungen im Formular. Die Angebote
+  // kommen jedes Mal frisch – die ändert man ja gerade dort.
+  const loadedFor = useRef<string | null>(null);
   useFocusEffect(
     useCallback(() => {
       if (!token || !id) return;
-      api.admin.partner(token, Number(id)).then(({ data }) => apply(data));
-      api.admin.offers(token, Number(id)).then(({ data }) => setOffers(data));
+      if (loadedFor.current !== id) {
+        api.admin
+          .partner(token, Number(id))
+          .then(({ data }) => {
+            loadedFor.current = id;
+            apply(data);
+          })
+          .catch((e) => void notifyUser('Partner nicht geladen', errorMessage(e)));
+      }
+      api.admin
+        .offers(token, Number(id))
+        .then(({ data }) => setOffers(data))
+        .catch((e) => void notifyUser('Angebote nicht geladen', errorMessage(e)));
     }, [token, id]),
   );
 
@@ -171,19 +186,25 @@ export default function AdminPartnerScreen() {
       kid_friendly: kids,
       quiet_times: draft.quiet_times.trim() || null,
     };
+    // Entscheidungen vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const save = () => (partner ? api.admin.updatePartner(token, partner.id, input) : api.admin.createPartner(token, input));
+    const saved = partner ? 'Der Partner ist aktualisiert.' : 'Der Partner ist angelegt. Jetzt Bilder, Aufkleber und Angebote ergänzen.';
     try {
-      const { data } = partner ? await api.admin.updatePartner(token, partner.id, input) : await api.admin.createPartner(token, input);
+      const { data } = await save();
       apply(data);
       void market.refresh();
       if (!partner) router.setParams({ id: String(data.id) });
-      await notifyUser('Gespeichert', partner ? 'Der Partner ist aktualisiert.' : 'Der Partner ist angelegt. Jetzt Bilder, Aufkleber und Angebote ergänzen.');
+      await notifyUser('Gespeichert', saved);
     } catch (e) {
-      const err = e as { errors?: Record<string, string[]> };
-      setErrors(err.errors ?? {});
-      await notifyUser('Nicht gespeichert', errorMessage(e));
-    } finally {
-      setSaving(false);
+      await showSaveError(e);
     }
+    setSaving(false);
+  };
+
+  const showSaveError = async (e: unknown) => {
+    const err = e as { errors?: Record<string, string[]> };
+    setErrors(err.errors ?? {});
+    await notifyUser('Nicht gespeichert', errorMessage(e));
   };
 
   const upload = async (kind: 'logo' | 'cover') => {
@@ -201,7 +222,11 @@ export default function AdminPartnerScreen() {
   const rotate = async () => {
     if (!token || !partner) return;
     if (!(await confirmAction('Neuen Aufkleber-Code erzeugen?', 'ALLE alten Aufkleber dieses Partners funktionieren danach nicht mehr. Nur bei Missbrauch nötig.', 'Neu erzeugen', true))) return;
-    apply((await api.admin.rotatePartnerToken(token, partner.id)).data);
+    try {
+      apply((await api.admin.rotatePartnerToken(token, partner.id)).data);
+    } catch (e) {
+      await notifyUser('Kein neuer Code', errorMessage(e));
+    }
   };
 
   const addStaff = async () => {
@@ -217,15 +242,23 @@ export default function AdminPartnerScreen() {
   const removeStaff = async (userId: number, name: string) => {
     if (!token || !partner) return;
     if (!(await confirmAction(`${name} entfernen?`, 'Die Person kann danach nicht mehr für diesen Partner scannen.', 'Entfernen', true))) return;
-    apply((await api.admin.removeStaff(token, partner.id, userId)).data);
+    try {
+      apply((await api.admin.removeStaff(token, partner.id, userId)).data);
+    } catch (e) {
+      await notifyUser('Nicht entfernt', errorMessage(e));
+    }
   };
 
   const remove = async () => {
     if (!token || !partner) return;
     if (!(await confirmAction('Partner löschen?', 'Löscht den Partner mit allen Angeboten. Buchungen bleiben als Beleg erhalten. Zum Pausieren lieber „Aktiv" ausschalten.', 'Löschen', true))) return;
-    await api.admin.deletePartner(token, partner.id);
-    void market.refresh();
-    router.back();
+    try {
+      await api.admin.deletePartner(token, partner.id);
+      void market.refresh();
+      router.back();
+    } catch (e) {
+      await notifyUser('Nicht gelöscht', errorMessage(e));
+    }
   };
 
   const field = (key: keyof Draft, label: string, extra: Partial<React.ComponentProps<typeof TextField>> = {}) => (

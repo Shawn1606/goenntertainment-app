@@ -306,6 +306,7 @@ go-live).
 
 ```bash
 cd <clone>/deploy
+docker compose exec backup bash /opt/deploy/backup.sh --once     # a fresh backup set first
 git pull --ff-only
 scripts/preflight.sh
 docker compose --profile tools build --pull
@@ -313,7 +314,9 @@ docker compose up -d
 ```
 
 Docker rebuilds only what changed and replaces the containers; the database and the uploads stay
-in their volumes, and api applies new migrations when it starts. When an update adds a required
+in their volumes, and api applies new migrations when it starts. Going back to the old images
+does not undo a migration, which is why the update starts with a backup set: the way back is a
+[restore](#restore) of that set. When an update adds a required
 setting, `scripts/preflight.sh` and `docker compose` name it: add it to `deploy/.env`
 ([Settings](#settings)) and run the steps again. Who approves an update before it goes live:
 `______` (whoever is accountable for the app, to be named before go-live).

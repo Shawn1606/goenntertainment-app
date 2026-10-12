@@ -17,6 +17,7 @@ import { formatCredits } from '@/domain/club';
 import { formatDateTime, formatDay } from '@/domain/date-format';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useSignals, useTheme } from '@/hooks/use-theme';
+import { useNow } from '@/hooks/use-now';
 import { api, errorMessage, type CreditLot, type CreditTransaction } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { useMarket } from '@/lib/market-context';
@@ -77,19 +78,22 @@ export default function WalletScreen() {
   const [error, setError] = useState<string | null>(null);
   const [added, setAdded] = useState<number | null>(null);
 
+  // `setCredits` bleibt stabil: Neu geladen wird nur beim Zurückkommen und mit neuem Token.
+  const { setCredits } = market;
   const load = useCallback(async () => {
     if (!token) return;
-    try {
-      const { data } = await api.wallet(token);
-      setTransactions(data.transactions);
-      setLots(data.lots ?? []);
-      setValidity(data.validity_label ?? null);
-      market.setCredits(data.balance);
-    } catch {
-      // Der Stand oben kommt dann aus dem Konto.
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+    // Ohne Antwort kommt der Stand oben aus dem Konto. (Kein try: Bedingungen darin
+    // kann der React Compiler nicht übersetzen.)
+    const data = await api
+      .wallet(token)
+      .then((res) => res.data)
+      .catch(() => null);
+    if (!data) return;
+    setTransactions(data.transactions);
+    setLots(data.lots ?? []);
+    setValidity(data.validity_label ?? null);
+    setCredits(data.balance);
+  }, [token, setCredits]);
 
   useFocusEffect(
     useCallback(() => {
@@ -99,11 +103,12 @@ export default function WalletScreen() {
 
   const balance = user?.credits_balance ?? 0;
   const [allLots, setAllLots] = useState(false);
-  const now = new Date();
+  const now = useNow();
   const shownLots = allLots ? lots : lots.slice(0, LOTS_SHOWN);
 
   const redeem = async () => {
-    if (!token || !code.trim()) return;
+    // Auch Enter (onSubmitEditing) läuft hier durch: nicht während des Einlösens und nicht mit zu kurzem Code.
+    if (!token || redeeming || code.trim().length < 6) return;
     setRedeeming(true);
     setError(null);
     try {
@@ -115,9 +120,8 @@ export default function WalletScreen() {
       void load();
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setRedeeming(false);
     }
+    setRedeeming(false);
   };
 
   return (

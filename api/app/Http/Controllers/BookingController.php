@@ -9,6 +9,7 @@ use App\Models\Offer;
 use App\Models\Partner;
 use App\Support\BookingCalendar;
 use App\Support\Bookings;
+use App\Support\BusinessDay;
 use App\Support\TestPhase\TestPhase;
 use App\Support\Wallet;
 use Illuminate\Database\UniqueConstraintViolationException;
@@ -32,6 +33,7 @@ class BookingController extends Controller
     public function index(Request $request): JsonResponse
     {
         $bookings = Booking::with(self::RELATIONS)
+            ->withFeedbackGiven()
             ->where('user_id', $request->user()->getKey())
             ->orderByRaw("CASE WHEN status = 'confirmed' AND valid_until > ? THEN 0 ELSE 1 END", [now()])
             ->orderByDesc('id')
@@ -49,7 +51,8 @@ class BookingController extends Controller
             'people' => ['required', 'integer', 'min:1', 'max:'.Bookings::MAX_PEOPLE],
             'pay_method' => ['required', Rule::in(Bookings::PAY_METHODS)],
             'group_id' => ['nullable', 'integer'],
-            'preferred_date' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:today'],
+            // „Heute" in Ortszeit, nicht in der Zeitzone des Servers (BusinessDay).
+            'preferred_date' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:'.BusinessDay::today()],
         ], [
             'offer_id.*' => 'Welches Angebot möchtest du buchen?',
             'people.*' => 'Bitte gib an, wie viele ihr seid.',

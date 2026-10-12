@@ -1,7 +1,7 @@
 import Constants from 'expo-constants';
 
 /**
- * Basis-URL des JS-Backends (Ordner `server/`, ersetzt das alte Laravel).
+ * Basis-URL der API (Laravel, Ordner `api/`).
  *
  * Die Adresse steht bewusst NICHT mehr im Code, sondern kommt aus der Umgebung:
  *

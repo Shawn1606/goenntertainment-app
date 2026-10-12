@@ -49,6 +49,10 @@ return [
             'password' => env('MAIL_PASSWORD'),
             'timeout' => null,
             'local_domain' => env('MAIL_EHLO_DOMAIN', parse_url((string) env('APP_URL', 'http://localhost'), PHP_URL_HOST)),
+            // Only over an encrypted connection: these mails carry sign-in and password-reset
+            // codes. The server sets it (deploy/docker-compose.yml); locally and in CI, Mailpit
+            // speaks plain SMTP, hence off unless set.
+            'require_tls' => env('MAIL_REQUIRE_TLS', false),
         ],
 
         'ses' => [

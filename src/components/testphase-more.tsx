@@ -19,6 +19,7 @@ import { SectionTitle } from '@/components/admin-ui';
 import { useCelebrate } from '@/components/celebration';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { ChoiceChip } from '@/components/ui/choice-chip';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { TextField } from '@/components/ui/text-field';
@@ -47,9 +48,8 @@ function useRunner(onState: (state: TestphaseState) => void) {
       onState((await action()).data);
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
   return { busy, run };
 }
@@ -346,20 +346,9 @@ function ShareSection({ state, onState }: Props) {
                 {b.people} Personen · {formatCredits(b.total_credits)} Credits · Anteil {formatCredits(b.share_credits)} pro Person
               </Text>
               <View style={styles.chips}>
-                {b.members.map((m) => {
-                  const on = sel.includes(m.id);
-                  return (
-                    <PressableScale
-                      key={m.id}
-                      onPress={() => toggle(b.booking_id, m.id)}
-                      haptic="select"
-                      accessibilityRole="checkbox"
-                      accessibilityState={{ checked: on }}
-                      style={[styles.chip, { borderColor: on ? colors.tint : colors.border, backgroundColor: on ? colors.tint : colors.background }]}>
-                      <Text style={[styles.chipText, { color: on ? '#ffffff' : colors.text }]}>{m.name}</Text>
-                    </PressableScale>
-                  );
-                })}
+                {b.members.map((m) => (
+                  <ChoiceChip key={m.id} size="small" multi label={m.name} active={sel.includes(m.id)} onPress={() => toggle(b.booking_id, m.id)} />
+                ))}
               </View>
               <Button
                 title={sel.length > 0 ? `${sel.length} um ${formatCredits(b.share_credits * sel.length)} Credits bitten` : 'Wen bittest du?'}
@@ -465,7 +454,7 @@ function PollSection({ state, onState }: Props) {
             <Text style={[styles.label, { color: colors.textSecondary }]}>Gruppe</Text>
             <ChipRow>
               {groups.map((g) => (
-                <Chip key={g.id} label={g.name} on={activeGroup === g.id} onPress={() => setGroupId(g.id)} />
+                <ChoiceChip key={g.id} size="small" label={g.name} active={activeGroup === g.id} onPress={() => setGroupId(g.id)} />
               ))}
             </ChipRow>
             <TextField label="Frage" value={title} onChangeText={setTitle} placeholder="Was machen wir am Freitag?" />
@@ -474,10 +463,12 @@ function PollSection({ state, onState }: Props) {
               {offers.map((o) => {
                 const on = chosen.includes(o.id);
                 return (
-                  <Chip
+                  <ChoiceChip
                     key={o.id}
+                    size="small"
+                    multi
                     label={o.partner ? `${o.title} · ${o.partner}` : o.title}
-                    on={on}
+                    active={on}
                     onPress={() => setChosen((c) => (on ? c.filter((x) => x !== o.id) : c.length >= 3 ? c : [...c, o.id]))}
                   />
                 );
@@ -595,9 +586,8 @@ function useClaim(onState: (state: TestphaseState) => void) {
       celebrate({ title: 'Abgeholt!', subtitle: claim.label, credits: res.credits, kind: 'coins' });
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
   return { busy, run };
 }
@@ -620,21 +610,6 @@ function ChipRow({ children }: { children: ReactNode }) {
   return <View style={styles.chips}>{children}</View>;
 }
 
-function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
-  const colors = useTheme();
-  return (
-    <PressableScale
-      onPress={onPress}
-      haptic="select"
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: on }}
-      style={[styles.chip, { borderColor: on ? colors.tint : colors.border, backgroundColor: on ? colors.tint : colors.background }]}>
-      <Text style={[styles.chipText, { color: on ? '#ffffff' : colors.text }]} numberOfLines={1}>
-        {label}
-      </Text>
-    </PressableScale>
-  );
-}
 
 const styles = StyleSheet.create({
   stack: { gap: Spacing.two },
@@ -665,8 +640,6 @@ const styles = StyleSheet.create({
   albumCountText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 11.5 },
   albumName: { fontFamily: FontFamily.semibold, fontSize: 11.5, textAlign: 'center' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  chip: { borderWidth: 1.5, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 7, maxWidth: '100%' },
-  chipText: { fontFamily: FontFamily.semibold, fontSize: 13 },
   iconBtn: { padding: 6 },
   option: {
     flexDirection: 'row',

@@ -34,8 +34,7 @@ const pad = (value: number) => String(value).padStart(2, '0');
 /** Deutsche Wochentags-Kürzel, indexiert wie `Date.getDay()`. */
 const WEEKDAYS = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'] as const;
 
-const MINUTE_MS = 60 * 1000;
-const HOUR_MS = 60 * MINUTE_MS;
+const HOUR_MS = 60 * 60 * 1000;
 
 /**
  * ISO-String → `Date`, oder `null`, wenn daraus kein Datum wird.
@@ -99,13 +98,6 @@ export function formatDateTimeCompact(iso: string | null | undefined): string {
   return `${formatDay(iso)} ${formatClock(iso)}`;
 }
 
-/** `TT.MM. HH:MM` – wenn das Jahr aus dem Zusammenhang klar ist (Storys). */
-export function formatDayTimeShort(iso: string | null | undefined): string {
-  const date = parse(iso);
-  if (!date) return '';
-  return `${formatDayShort(iso)} ${formatClock(iso)}`;
-}
-
 /**
  * Trennzeile zwischen den Tagen im Chat: „Heute", „Gestern", „Fr, 24.07."
  * oder das vollständige Datum.
@@ -136,28 +128,4 @@ export function formatDaySeparator(iso: string | null | undefined, now: Date): s
   }
 
   return formatDay(iso);
-}
-
-/**
- * Kurzform für die Chat-Übersicht: „jetzt", „vor 15 Min", „vor 3 Std",
- * „Gestern", „20.07.".
- *
- * Ein Zeitpunkt in der Zukunft gilt als „jetzt". Das ist kein theoretischer Fall:
- * Die Uhr des Geräts weicht regelmäßig um Sekunden von der des Servers ab, und
- * „vor -1 Min" wäre die schlechtere Antwort darauf.
- */
-export function formatRelativeShort(iso: string | null | undefined, now: Date): string {
-  const date = parse(iso);
-  if (!date) return '';
-
-  const elapsed = now.getTime() - date.getTime();
-
-  if (elapsed < MINUTE_MS) return 'jetzt';
-  if (elapsed < HOUR_MS) return `vor ${Math.floor(elapsed / MINUTE_MS)} Min`;
-  if (sameDay(date, now)) return `vor ${Math.floor(elapsed / HOUR_MS)} Std`;
-
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (sameDay(date, yesterday)) return 'Gestern';
-
-  return formatDayShort(iso);
 }

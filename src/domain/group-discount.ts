@@ -1,7 +1,7 @@
 /**
  * Wie weit ist eine Gruppe bis zur nächsten Rabattstufe?
  *
- * Die Gruppenkarte zeigt einen Balken: „−10 % – noch 2 Personen bis −12,5 %".
+ * Die Gruppenkarte zeigt einen Balken: „−5 % – noch 2 Personen bis −7 %".
  * Das macht den Gruppenrabatt greifbar: Man sieht, dass Einladen etwas bringt.
  * Gerechnet wird mit denselben Regeln wie beim Buchen (`discountFor`, shared/club.json).
  */

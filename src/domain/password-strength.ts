@@ -34,8 +34,13 @@ export type PasswordStrength = {
 };
 
 export type PasswordContext = {
-  /** Benutzername, E-Mail, Name – alles, was ein Angreifer über die Person weiß. */
+  /** Benutzername, E-Mail, Name – alles, was ein Angreifer über die Person weiß (für die Bewertung). */
   personal?: (string | null | undefined)[];
+  /**
+   * Was der SERVER als persönlich prüft: nur Benutzername und E-Mail, nicht der Name
+   * (api/app/Support/PasswordPolicy.php). Fehlt es, gilt `personal`.
+   */
+  account?: (string | null | undefined)[];
   /** Häufige Passwörter, kleingeschrieben. */
   common?: readonly string[];
 };
@@ -152,7 +157,7 @@ export function passwordStrength(password: string, context: PasswordContext = {}
   // Leetspeak, Namensteile) – aber `meetsPolicy` darf dem Server nicht
   // widersprechen, sonst sagt die App „wird abgelehnt" und der Server nimmt es an.
   const policyCommon = commonSet.has(lower);
-  const policyPersonal = (context.personal ?? []).some((raw) => {
+  const policyPersonal = (context.account ?? context.personal ?? []).some((raw) => {
     if (!raw) return false;
     const whole = raw.toLowerCase();
     const token = whole.includes('@') ? whole.split('@')[0] : whole;
@@ -198,13 +203,18 @@ export function passwordStrength(password: string, context: PasswordContext = {}
     if (score < 3 && classes < 3) hints.push('Groß- und Kleinbuchstaben oder ein Sonderzeichen hinzufügen.');
   }
 
+  // Wie der Server: Länge in Zeichen (mb_strlen, nicht UTF-16-Einheiten – ein Emoji ist
+  // EIN Zeichen) und ein Buchstabe a–z/A–Z (Umlaute zählen dort nicht als Buchstabe).
   const meetsPolicy =
-    value.length >= MIN_LENGTH && hasLetter && hasDigit && !policyCommon && !policyPersonal;
+    [...value].length >= MIN_LENGTH && /[a-zA-Z]/.test(value) && hasDigit && !policyCommon && !policyPersonal;
 
   // Was der Server verlangt, steht IMMER vorn – auch bei einer starken Passphrase
   // ohne Zahl. Sonst hieße es „Sehr stark" und das Absenden scheiterte trotzdem.
   if (value.length > 0 && !meetsPolicy && hasLetter && !hasDigit) {
     hints.unshift('Die App verlangt mindestens eine Zahl.');
+  }
+  if (value.length > 0 && !meetsPolicy && hasLetter && !/[a-zA-Z]/.test(value)) {
+    hints.unshift('Die App verlangt mindestens einen Buchstaben von a bis z – Umlaute zählen dafür nicht.');
   }
 
   return {

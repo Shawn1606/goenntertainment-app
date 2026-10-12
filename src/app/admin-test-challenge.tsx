@@ -91,33 +91,38 @@ export default function AdminTestChallengeScreen() {
     if (!token) return;
     setSaving(true);
     setErrors({});
+    // Vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const input: Parameters<typeof api.admin.testphase.createChallenge>[1] = {
+      type,
+      title: title.trim(),
+      description: description.trim() || null,
+      metric,
+      target: numberOrNull(target) ?? 0,
+      reward_credits: numberOrNull(reward) ?? 0,
+      period,
+      starts_at: period === 'range' ? isoDay(startsAt) : null,
+      ends_at: period === 'range' ? isoDay(endsAt) : null,
+      partner_id: partnerId,
+      interest_id: interestId,
+      match_text: matchText.trim() || null,
+      offer_kind: offerKind,
+      plans: plans.length ? plans : null,
+      is_secret: secret,
+      is_choice: choice,
+    };
     try {
-      await api.admin.testphase.createChallenge(token, {
-        type,
-        title: title.trim(),
-        description: description.trim() || null,
-        metric,
-        target: numberOrNull(target) ?? 0,
-        reward_credits: numberOrNull(reward) ?? 0,
-        period,
-        starts_at: period === 'range' ? isoDay(startsAt) : null,
-        ends_at: period === 'range' ? isoDay(endsAt) : null,
-        partner_id: partnerId,
-        interest_id: interestId,
-        match_text: matchText.trim() || null,
-        offer_kind: offerKind,
-        plans: plans.length ? plans : null,
-        is_secret: secret,
-        is_choice: choice,
-      });
+      await api.admin.testphase.createChallenge(token, input);
       router.back();
     } catch (e) {
-      const err = e as { errors?: Record<string, string[]> };
-      setErrors(err.errors ?? {});
-      await notifyUser('Nicht gespeichert', errorMessage(e));
-    } finally {
-      setSaving(false);
+      await showSaveError(e);
     }
+    setSaving(false);
+  };
+
+  const showSaveError = async (e: unknown) => {
+    const err = e as { errors?: Record<string, string[]> };
+    setErrors(err.errors ?? {});
+    await notifyUser('Nicht gespeichert', errorMessage(e));
   };
 
   const label = (text: string) => <Text style={[styles.label, { color: colors.textSecondary }]}>{text}</Text>;

@@ -77,9 +77,9 @@ test('a listener that unsubscribes while being called does not skip the others',
 
 /**
  * Sign-out steps that record their order; `storage` makes removing the stored token fail,
- * `history` removing the search history (F-44).
+ * `device` removing the offline copy of bookings and pass (F-44).
  */
-function signOutSteps(storage: 'works' | 'fails' = 'works', history: 'works' | 'fails' = 'works') {
+function signOutSteps(storage: 'works' | 'fails' = 'works', device: 'works' | 'fails' = 'works') {
   const calls: string[] = [];
   const steps = {
     forget: () => {
@@ -89,9 +89,9 @@ function signOutSteps(storage: 'works' | 'fails' = 'works', history: 'works' | '
       calls.push('clearStorage');
       if (storage === 'fails') throw new Error('storage unavailable');
     },
-    clearHistory: async () => {
-      calls.push('clearHistory');
-      if (history === 'fails') throw new Error('history storage unavailable');
+    clearDeviceData: async () => {
+      calls.push('clearDeviceData');
+      if (device === 'fails') throw new Error('device storage unavailable');
     },
     notice: async () => {
       calls.push('notice');
@@ -103,26 +103,26 @@ function signOutSteps(storage: 'works' | 'fails' = 'works', history: 'works' | '
 test('signing out forgets the session in memory before the storage is touched', async () => {
   const deliberate = signOutSteps();
   await signOutLocally(deliberate.steps, false);
-  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage', 'clearHistory'], 'a deliberate sign-out shows no notice');
+  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage', 'clearDeviceData'], 'a deliberate sign-out shows no notice');
 
   const rejected = signOutSteps();
   await signOutLocally(rejected.steps, true);
-  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'clearHistory', 'notice']);
+  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'clearDeviceData', 'notice']);
 });
 
 test('after a 401 a storage error still signs out and tells the person why', async () => {
   const { steps, calls } = signOutSteps('fails');
   await assert.doesNotReject(signOutLocally(steps, true));
-  assert.deepEqual(calls, ['forget', 'clearStorage', 'clearHistory', 'notice'], 'the session must be forgotten even when the storage fails');
+  assert.deepEqual(calls, ['forget', 'clearStorage', 'clearDeviceData', 'notice'], 'the session must be forgotten even when the storage fails');
 });
 
 test('a deliberate sign-out passes a storage error on, after forgetting the session', async () => {
   const { steps, calls } = signOutSteps('fails');
   await assert.rejects(signOutLocally(steps, false), /storage unavailable/);
-  assert.deepEqual(calls, ['forget', 'clearStorage', 'clearHistory'], 'the session must be forgotten even when the storage fails');
+  assert.deepEqual(calls, ['forget', 'clearStorage', 'clearDeviceData'], 'the session must be forgotten even when the storage fails');
 });
 
-test('every sign-out removes the search history, also when removing the token failed (F-44)', async () => {
+test('every sign-out removes the offline copy, also when removing the token failed (F-44)', async () => {
   for (const [storage, rejected] of [
     ['works', false],
     ['works', true],
@@ -131,21 +131,21 @@ test('every sign-out removes the search history, also when removing the token fa
   ] as const) {
     const { steps, calls } = signOutSteps(storage);
     await signOutLocally(steps, rejected).catch(() => {});
-    assert.ok(calls.includes('clearHistory'), `no history removal (token storage ${storage}, ${rejected ? '401' : 'deliberate'})`);
-    assert.ok(calls.indexOf('forget') < calls.indexOf('clearHistory'), 'the session must be forgotten first');
+    assert.ok(calls.includes('clearDeviceData'), `no removal of the offline copy (token storage ${storage}, ${rejected ? '401' : 'deliberate'})`);
+    assert.ok(calls.indexOf('forget') < calls.indexOf('clearDeviceData'), 'the session must be forgotten first');
   }
 });
 
-test('a failing history removal never fails or stops a sign-out (F-44)', async () => {
+test('a failing removal of the offline copy never fails or stops a sign-out (F-44)', async () => {
   const deliberate = signOutSteps('works', 'fails');
   await assert.doesNotReject(signOutLocally(deliberate.steps, false));
-  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage', 'clearHistory']);
+  assert.deepEqual(deliberate.calls, ['forget', 'clearStorage', 'clearDeviceData']);
 
   const rejected = signOutSteps('works', 'fails');
   await assert.doesNotReject(signOutLocally(rejected.steps, true));
-  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'clearHistory', 'notice'], 'the person must still be told why');
+  assert.deepEqual(rejected.calls, ['forget', 'clearStorage', 'clearDeviceData', 'notice'], 'the person must still be told why');
 
-  // A token storage error is still passed on, not hidden by the history step.
+  // A token storage error is still passed on, not hidden by the device step.
   const both = signOutSteps('fails', 'fails');
   await assert.rejects(signOutLocally(both.steps, false), (err) => err instanceof Error && err.message === 'storage unavailable');
 });

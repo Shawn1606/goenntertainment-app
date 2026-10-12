@@ -38,6 +38,10 @@ class RateLimitRulesTest extends TestCase
         'write-report' => ['user' => '10/600,50/86400', 'ip' => '100/600'],
         'write-block' => ['user' => '30/600,200/86400', 'ip' => '300/600'],
         'write-admin' => ['user' => '120/600', 'ip' => '600/600'],
+        'read' => ['user' => '300/60'],
+        'read-public' => ['ip' => '120/60'],
+        'read-admin' => ['user' => '120/60'],
+        'admin-export' => ['user' => '10/3600'],
         'two-factor-failures' => ['account' => '10/900'],
         'lock-wait' => '5',
     ];

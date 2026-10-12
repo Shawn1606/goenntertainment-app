@@ -14,20 +14,24 @@ import { ShareOfferSheet } from '@/components/share-offer-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { CategoryIcon } from '@/components/ui/category-icon';
+import { ChoiceChip } from '@/components/ui/choice-chip';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { Stepper } from '@/components/ui/stepper';
 import { BrandGradient, FontFamily, MaxContentWidth, Radius, Spacing, Stroke } from '@/constants/theme';
 import { applyHappyHour, formatCredits, formatEuro, formatPercent, happyHourPercent, planFor, quoteCredits, quoteMoney } from '@/domain/club';
 import { formatDistance } from '@/domain/distance';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import { api, errorMessage, type Availability, type Offer, type PayMethod } from '@/lib/api';
+import { useNow } from '@/hooks/use-now';
+import { api, errorMessage, type Availability, type Offer, type PayMethod, type Quote } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import * as feedback from '@/lib/feedback';
 import { useMarket } from '@/lib/market-context';
+import { goBack } from '@/lib/navigation';
 
 /** Wunschtermin als Schnellwahl – kein Kalender: Die Buchung gilt ohnehin `valid_days` lang. */
 function dateChoices(now: Date): { key: string; label: string; value: string | null }[] {
@@ -103,14 +107,15 @@ export default function OfferScreen() {
   // Personenzahl in den Grenzen des Angebots – gerechnet, nicht gespeichert: So
   // stimmt sie sofort, auch wenn das Angebot erst nach dem ersten Bild ankommt.
   const people = offer ? Math.min(offer.max_people ?? 50, Math.max(offer.min_people, peopleInput)) : peopleInput;
-  const choices = dateChoices(new Date());
+  const now = useNow();
+  const choices = dateChoices(now);
   const interest = market.interests.find((i) => i.id === (offer?.interest_id ?? offer?.partner?.interest_id));
 
   if (!offer) {
     return (
       <View style={[styles.center, { backgroundColor: colors.background }]}>
         <Stack.Screen options={{ headerShown: true, title: 'Angebot' }} />
-        {error ? <MascotError detail={error} onRetry={() => router.back()} /> : <ActivityIndicator color={colors.tint} />}
+        {error ? <MascotError detail={error} onRetry={() => goBack()} /> : <ActivityIndicator color={colors.tint} />}
       </View>
     );
   }
@@ -145,13 +150,10 @@ export default function OfferScreen() {
       ? null
       : !date
         ? 'Begrenzte Plätze – wähl einen Tag, dann siehst du, was frei ist.'
-        : !availability
-          ? null
-          : availability.available === 0
-            ? 'An diesem Tag ist alles ausgebucht.'
-            : (availability.available_for_you ?? 0) < people
-              ? `Die letzten ${availability.reserved} Plätze sind für Platinum-Mitglieder reserviert.`
-              : `Noch ${availability.available_for_you} ${availability.available_for_you === 1 ? 'Platz' : 'Plätze'} frei an diesem Tag.`;
+        : availability
+          ? seatsText(availability, people, plan.key === 'platinum')
+          : null;
+  const goldSaving = plan.key === 'free' ? goldSavingText(offer, people) : null;
   const quote = payMethod === 'money' ? money : creditQuote;
   const balance = user?.credits_balance ?? 0;
   const missingCredits = payMethod === 'credits' && creditQuote ? Math.max(0, creditQuote.totalCredits - balance) : 0;
@@ -191,15 +193,32 @@ export default function OfferScreen() {
       credits.open();
       return;
     }
-    const total = payMethod === 'money' ? formatEuro(money!.totalCents) : `${formatCredits(creditQuote!.totalCredits)} Credits`;
+    setBooking(true);
+    // Der verbindliche Preis kommt vom Server: Die App rechnet nur eine Vorschau, und ihr
+    // Club-Stand kann veraltet sein. „Zahlungspflichtig" bestätigt man nur, was auch abgebucht wird.
+    let binding: Quote | null = null;
+    try {
+      binding = (await api.quote(token, offer.id, people, payMethod)).data;
+    } catch (e) {
+      feedback.failed();
+      await notifyUser('Preis nicht abrufbar', errorMessage(e));
+    }
+    if (!binding) {
+      setBooking(false);
+      return;
+    }
+    // Wich der Plan der Vorschau ab, den Club-Stand auffrischen – dann stimmt auch sie wieder.
+    if (binding.plan !== plan.key) void market.refreshClub();
     const testNote = payMethod === 'money' && market.club?.payments_mode === 'test' ? '\n\nTestmodus: Es wird kein echtes Geld abgebucht.' : '';
     const ok = await confirmAction(
       'Jetzt buchen?',
-      `${offer.title} bei ${offer.partner?.name ?? 'Partner'} für ${people} ${people === 1 ? 'Person' : 'Personen'} – ${total}.${testNote}`,
+      `${offer.title} bei ${offer.partner?.name ?? 'Partner'} für ${people} ${people === 1 ? 'Person' : 'Personen'} – ${quotedPrice(binding)}.${testNote}`,
       'Zahlungspflichtig buchen',
     );
-    if (!ok) return;
-    setBooking(true);
+    if (!ok) {
+      setBooking(false);
+      return;
+    }
     try {
       const result = await api.book(token, {
         offerId: offer.id,
@@ -222,9 +241,8 @@ export default function OfferScreen() {
     } catch (e) {
       feedback.failed();
       await notifyUser('Buchung hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBooking(false);
     }
+    setBooking(false);
   };
 
   return (
@@ -236,7 +254,7 @@ export default function OfferScreen() {
           title: offer.title,
         }}
       />
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}>
+      <PullToCloseScroll knobTop={insets.top + 60} contentContainerStyle={{ paddingBottom: insets.bottom + 120 }}>
         <View style={styles.hero}>
           {offer.image_url ? (
             <Image source={{ uri: offer.image_url }} style={StyleSheet.absoluteFill} contentFit="cover" />
@@ -361,9 +379,9 @@ export default function OfferScreen() {
               <View style={styles.block}>
                 <Text style={[styles.label, { color: colors.textSecondary }]}>Für eine Gruppe?</Text>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
-                  <Pick label="Nur ich" active={groupId === null} onPress={() => setGroupId(null)} />
+                  <ChoiceChip label="Nur ich" active={groupId === null} onPress={() => setGroupId(null)} />
                   {market.groups.map((g) => (
-                    <Pick
+                    <ChoiceChip
                       key={g.id}
                       label={g.name}
                       active={groupId === g.id}
@@ -381,7 +399,7 @@ export default function OfferScreen() {
               <Text style={[styles.label, { color: colors.textSecondary }]}>Wann ungefähr?</Text>
               <View style={styles.chipsWrap}>
                 {choices.map((c) => (
-                  <Pick key={c.key} label={c.label} active={date === c.value} onPress={() => setDate(c.value)} />
+                  <ChoiceChip key={c.key} label={c.label} active={date === c.value} onPress={() => setDate(c.value)} />
                 ))}
               </View>
               {seatsHint ? <Text style={[styles.hintLine, { color: colors.textSecondary }]}>{seatsHint}</Text> : null}
@@ -423,24 +441,11 @@ export default function OfferScreen() {
               </View>
             ) : null}
 
-            {plan.key === 'free' ? (
+            {goldSaving ? (
               <PressableScale onPress={() => router.push('/club')} accessibilityRole="button" haptic="tap">
                 <View style={[styles.upsell, { borderColor: '#f0c44c' }]}>
                   <Icon name="crown" size={16} color="#b27b00" />
-                  <Text style={[styles.upsellText, { color: colors.text }]}>
-                    Mit Gold sparst du hier{' '}
-                    {offer.price_cents !== null
-                      ? formatEuro(
-                          quoteMoney(CLUB_RULES, {
-                            plan: 'gold',
-                            people,
-                            unitPriceCents: offer.price_cents,
-                            maxDiscountPercent: offer.max_discount_percent,
-                          }).discountCents - (money?.discountCents ?? 0),
-                        )
-                      : '10 %'}{' '}
-                    mehr.
-                  </Text>
+                  <Text style={[styles.upsellText, { color: colors.text }]}>Mit Gold sparst du hier {goldSaving} mehr.</Text>
                   <Icon name="chevron-right" size={16} color={colors.textSecondary} />
                 </View>
               </PressableScale>
@@ -450,7 +455,7 @@ export default function OfferScreen() {
           <Button title="In Gruppe teilen" variant="secondary" icon="share" onPress={() => setSharing(true)} />
           <Button title="Angebot melden" variant="ghost" size="small" icon="flag" onPress={() => setReporting(true)} />
         </View>
-      </ScrollView>
+      </PullToCloseScroll>
 
       {/* Fester Buchen-Knopf unten */}
       <View
@@ -488,25 +493,6 @@ export default function OfferScreen() {
   );
 }
 
-function Pick({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  const colors = useTheme();
-  return (
-    <PressableScale
-      onPress={onPress}
-      haptic="select"
-      accessibilityRole="button"
-      accessibilityState={{ selected: active }}
-      style={[
-        styles.pick,
-        {
-          borderColor: active ? colors.tint : colors.border,
-          backgroundColor: active ? colors.tint : colors.background,
-        },
-      ]}>
-      <Text style={[styles.pickText, { color: active ? '#ffffff' : colors.text }]}>{label}</Text>
-    </PressableScale>
-  );
-}
 
 function Line({ label, value, good, muted }: { label: string; value: string; good?: boolean; muted?: boolean }) {
   const colors = useTheme();
@@ -517,6 +503,45 @@ function Line({ label, value, good, muted }: { label: string; value: string; goo
       <Text style={[styles.lineValue, { color: tone }]}>{value}</Text>
     </View>
   );
+}
+
+/** Was an einem Tag mit Kontingent noch frei ist – in Worten. */
+function seatsText(a: Availability, people: number, platinum: boolean): string {
+  if (a.available === 0) return 'An diesem Tag ist alles ausgebucht.';
+  const forYou = a.available_for_you ?? 0;
+  if (forYou >= people) return `Noch ${forYou} ${forYou === 1 ? 'Platz' : 'Plätze'} frei an diesem Tag.`;
+  // Für alle wäre genug frei, nur nicht für dich: Die letzten Plätze hält Platinum.
+  if (!platinum && a.reserved > 0 && (a.available ?? 0) >= people) {
+    return `Die letzten ${a.reserved} ${a.reserved === 1 ? 'Platz ist' : 'Plätze sind'} für Platinum-Mitglieder reserviert.`;
+  }
+  if (forYou === 0) return 'Für dich ist an diesem Tag nichts mehr frei.';
+  return `Nur noch ${forYou} ${forYou === 1 ? 'Platz' : 'Plätze'} frei – zu wenig für ${people} Personen.`;
+}
+
+/**
+ * Was Gold bei diesem Angebot mehr spart als der Free Plan, in der Währung des
+ * Angebots – `null`, wenn es nichts spart (etwa weil der Rabattdeckel greift).
+ */
+function goldSavingText(offer: Offer, people: number): string | null {
+  const limit = offer.max_discount_percent;
+  if (offer.price_cents !== null) {
+    const free = quoteMoney(CLUB_RULES, { plan: 'free', people, unitPriceCents: offer.price_cents, maxDiscountPercent: limit });
+    const gold = quoteMoney(CLUB_RULES, { plan: 'gold', people, unitPriceCents: offer.price_cents, maxDiscountPercent: limit });
+    const saved = free.totalCents - gold.totalCents;
+    return saved > 0 ? formatEuro(saved) : null;
+  }
+  if (offer.price_credits !== null) {
+    const free = quoteCredits(CLUB_RULES, { plan: 'free', people, unitCredits: offer.price_credits, maxDiscountPercent: limit });
+    const gold = quoteCredits(CLUB_RULES, { plan: 'gold', people, unitCredits: offer.price_credits, maxDiscountPercent: limit });
+    const saved = free.totalCredits - gold.totalCredits;
+    return saved > 0 ? `${formatCredits(saved)} Credits` : null;
+  }
+  return null;
+}
+
+/** Der verbindliche Preis aus der Server-Antwort, so wie die Bestätigung ihn nennt. */
+function quotedPrice(q: Quote): string {
+  return q.pay_method === 'money' ? formatEuro(q.total_cents ?? 0) : `${formatCredits(q.total_credits ?? 0)} Credits`;
 }
 
 const styles = StyleSheet.create({
@@ -617,13 +642,6 @@ const styles = StyleSheet.create({
   label: { fontFamily: FontFamily.semibold, fontSize: 13 },
   chips: { gap: Spacing.two },
   chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
-  pick: {
-    borderWidth: Stroke,
-    borderRadius: 999,
-    paddingHorizontal: 13,
-    paddingVertical: 7,
-  },
-  pickText: { fontFamily: FontFamily.semibold, fontSize: 13.5 },
   breakdown: {
     borderWidth: Stroke,
     borderStyle: 'dashed',

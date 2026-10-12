@@ -3,8 +3,8 @@
 namespace App\Support\TestPhase;
 
 use App\Models\User;
+use App\Support\BusinessDay;
 use Carbon\CarbonInterface;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -31,13 +31,15 @@ final class Streak
      */
     public static function state(User $user, CarbonInterface $now): array
     {
+        // Kalenderwochen in Ortszeit: Sonntag 23:30 Uhr in Goettingen gehoert noch zur alten Woche.
+        $now = BusinessDay::local($now);
         $since = $now->copy()->startOfWeek()->subWeeks(self::LOOKBACK_WEEKS);
         $active = DB::table('stamps')
             ->where('user_id', $user->getKey())
             ->whereNotNull('partner_id')
-            ->where('created_at', '>=', $since)
+            ->where('created_at', '>=', BusinessDay::stored($since))
             ->pluck('created_at')
-            ->map(fn ($at) => self::weekKey(Carbon::parse($at)))
+            ->map(fn ($at) => self::weekKey(BusinessDay::local($at)))
             ->flip()
             ->all();
 

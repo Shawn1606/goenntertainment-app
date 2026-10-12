@@ -12,17 +12,21 @@ export type Coords = { lat: number; lng: number };
  * kein Geocoding mehr: Die Entfernung ist eine Rechnung, keine Suche.
  *
  * Wer in den Einstellungen „Standort nutzen" ausschaltet, bekommt keinen
- * System-Dialog und `null`.
+ * System-Dialog und `null`. Gefragt wird erst, wenn die gespeicherten
+ * Einstellungen geladen sind – vorher gälte kurz die Vorgabe „an", und die App
+ * fragte beim Start nach dem Standort, obwohl man ihn ausgeschaltet hat. Mit
+ * `enabled: false` (z. B. abgemeldet) fragt sie gar nicht.
  */
 let cached: Coords | null = null;
 
-export function useLocation(): { coords: Coords | null; denied: boolean } {
-  const { settings } = useAppSettings();
+export function useLocation({ enabled = true }: { enabled?: boolean } = {}): { coords: Coords | null; denied: boolean } {
+  const { settings, loading } = useAppSettings();
   const [coords, setCoords] = useState<Coords | null>(cached);
   const [denied, setDenied] = useState(false);
+  const wanted = enabled && !loading && settings.useLocation;
 
   useEffect(() => {
-    if (!settings.useLocation || cached) return;
+    if (!wanted || cached) return;
     let active = true;
     Location.requestForegroundPermissionsAsync()
       .then(async ({ status }) => {
@@ -31,8 +35,10 @@ export function useLocation(): { coords: Coords | null; denied: boolean } {
           return;
         }
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        // Inzwischen ausgeschaltet oder nicht mehr gebraucht: nichts merken.
+        if (!active) return;
         cached = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        if (active) setCoords(cached);
+        setCoords(cached);
       })
       .catch(() => {
         if (active) setDenied(true);
@@ -40,7 +46,7 @@ export function useLocation(): { coords: Coords | null; denied: boolean } {
     return () => {
       active = false;
     };
-  }, [settings.useLocation]);
+  }, [wanted]);
 
   // Ausgeschaltet heißt: kein Standort – auch wenn noch einer im Speicher liegt.
   return { coords: settings.useLocation ? (coords ?? cached) : null, denied };

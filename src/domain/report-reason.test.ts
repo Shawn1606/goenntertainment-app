@@ -44,19 +44,17 @@ test('genau ein Grund gilt als dringend', () => {
   assert.deepEqual(urgent.map((reason) => reason.key), ['danger']);
 });
 
-test('every report target has a label and a known icon, and comments are reportable (F-08)', () => {
-  const exports = report as unknown as Record<string, unknown>;
-  const targets = exports.REPORT_TARGETS;
-  assert.ok(Array.isArray(targets), 'the app has no list of report targets');
-  assert.ok(targets.includes('post_comment'), 'comments under posts cannot be reported');
-  assert.ok(targets.includes('activity_comment'), 'comments under events cannot be reported');
-  assert.equal(new Set(targets).size, targets.length, 'a target is listed twice');
-
-  const labels = exports.REPORT_TARGET_LABELS as Record<string, { icon: string; label: string }>;
-  for (const target of targets as string[]) {
-    assert.ok(labels?.[target]?.label, `${target}: no label for the admin list`);
-    assert.ok((UI_ICON_NAMES as readonly string[]).includes(labels[target].icon), `${target}: unknown icon`);
+test('jedes Meldeziel hat Wort und bekanntes Symbol – und jedes nur einmal', () => {
+  const { REPORT_TARGETS, REPORT_TARGET_LABELS } = report;
+  assert.ok(REPORT_TARGETS.length > 0);
+  assert.equal(new Set(REPORT_TARGETS).size, REPORT_TARGETS.length, 'ein Ziel steht doppelt da');
+  for (const target of REPORT_TARGETS) {
+    assert.ok(REPORT_TARGET_LABELS[target].label, `${target}: kein Wort für die Admin-Liste`);
+    assert.ok((UI_ICON_NAMES as readonly string[]).includes(REPORT_TARGET_LABELS[target].icon), `${target}: unbekanntes Symbol`);
   }
-  assert.equal(report.isCommentTarget('activity_comment'), true);
-  assert.equal(report.isCommentTarget('post'), false);
+});
+
+test('ein unbekanntes Ziel zeigt die Admin-Liste mit seinem Schlüssel und einer Fahne', () => {
+  assert.deepEqual(report.reportTargetLabel('group'), { icon: 'users', label: 'Gruppe' });
+  assert.deepEqual(report.reportTargetLabel('brandneu'), { icon: 'flag', label: 'brandneu' });
 });

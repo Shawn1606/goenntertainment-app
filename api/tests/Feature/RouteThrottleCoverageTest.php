@@ -74,8 +74,55 @@ class RouteThrottleCoverageTest extends TestCase
         'POST api/blocks' => 'throttle:write-block',
         'DELETE api/blocks/{userId}' => 'throttle:write-block',
 
+        // Reads without a token: per client address
+        'GET|HEAD api/interests' => 'throttle:read-public',
+        'GET|HEAD api/bookings/{id}/calendar.ics' => 'throttle:read-public',
+        // Signed-in reads, and the price quote (computes, writes nothing): per account
+        'GET|HEAD api/user' => 'throttle:read',
+        'GET|HEAD api/offers' => 'throttle:read',
+        'GET|HEAD api/offers/{offer}' => 'throttle:read',
+        'POST api/offers/{offer}/quote' => 'throttle:read',
+        'GET|HEAD api/offers/{offer}/availability' => 'throttle:read',
+        'GET|HEAD api/partners' => 'throttle:read',
+        'GET|HEAD api/partners/{partner}' => 'throttle:read',
+        'GET|HEAD api/bookings' => 'throttle:read',
+        'GET|HEAD api/bookings/{id}' => 'throttle:read',
+        'GET|HEAD api/badges' => 'throttle:read',
+        'GET|HEAD api/club' => 'throttle:read',
+        'GET|HEAD api/wallet' => 'throttle:read',
+        'GET|HEAD api/features' => 'throttle:read',
+        'GET|HEAD api/bingo' => 'throttle:read',
+        'GET|HEAD api/stamps' => 'throttle:read',
+        'GET|HEAD api/pass' => 'throttle:read',
+        'GET|HEAD api/partner/me' => 'throttle:read',
+        'GET|HEAD api/partner/bookings' => 'throttle:read',
+        'GET|HEAD api/groups' => 'throttle:read',
+        'GET|HEAD api/groups/{id}' => 'throttle:read',
+        'GET|HEAD api/groups/{id}/messages' => 'throttle:read',
+        'GET|HEAD api/blocks' => 'throttle:read',
+
+        // Admin reads, and the voucher codes (each worth credits) with a tighter limit of their own
+        'GET|HEAD api/admin/stats' => 'throttle:read-admin',
+        'GET|HEAD api/admin/bookings' => 'throttle:read-admin',
+        'GET|HEAD api/admin/reports' => 'throttle:read-admin',
+        'GET|HEAD api/admin/users' => 'throttle:read-admin',
+        'GET|HEAD api/admin/users/{id}' => 'throttle:read-admin',
+        'GET|HEAD api/admin/evidence' => 'throttle:read-admin',
+        'GET|HEAD api/admin/evidence-files/{file}' => 'throttle:read-admin',
+        'GET|HEAD api/admin/partners' => 'throttle:read-admin',
+        'GET|HEAD api/admin/partners/{partner}' => 'throttle:read-admin',
+        'GET|HEAD api/admin/offers' => 'throttle:read-admin',
+        'GET|HEAD api/admin/voucher-batches' => 'throttle:read-admin',
+        'GET|HEAD api/admin/features' => 'throttle:read-admin',
+        'GET|HEAD api/admin/testphase' => 'throttle:read-admin',
+        'GET|HEAD api/admin/voucher-batches/{batch}/codes.csv' => 'throttle:admin-export',
+
         // Admin writes
         'PATCH api/admin/reports/{id}' => 'throttle:write-admin',
+        'DELETE api/admin/messages/{id}' => 'throttle:write-admin',
+        'PATCH api/admin/groups/{id}' => 'throttle:write-admin',
+        'DELETE api/admin/groups/{id}' => 'throttle:write-admin',
+        'POST api/admin/users/{id}/clear-profile' => 'throttle:write-admin',
         'PATCH api/admin/users/{id}' => 'throttle:write-admin',
         'POST api/admin/users/{id}/ban' => 'throttle:write-admin',
         'POST api/admin/users/{id}/timeout' => 'throttle:write-admin',
@@ -114,52 +161,10 @@ class RouteThrottleCoverageTest extends TestCase
         'POST api/admin/testphase/polls/{id}/close' => 'throttle:write-admin',
     ];
 
-    private const READ = 'signed-in read; reads are not limited yet (backlog)';
-
-    private const ADMIN_READ = 'admin read; reads are not limited yet (backlog)';
-
-    /** Route signature => why it has no limiter. */
+    /** Route signature => why it has no limiter. No route of the app's own is waiting for one. */
     private const EXEMPT = [
         'GET|HEAD api/health' => 'container health probe; one constant query, nothing user-specific',
-        'GET|HEAD api/interests' => 'public read of the category list; reads are not limited yet (backlog)',
-        'GET|HEAD api/bookings/{id}/calendar.ics' => 'public read behind a signed link (App\Support\BookingCalendar); reads are not limited yet (backlog)',
-        'GET|HEAD api/user' => 'signed-in read of the own account; reads are not limited yet (backlog)',
-        'POST api/logout' => 'deletes only the token it is sent with; nothing to guess or to flood',
-        'POST api/offers/{offer}/quote' => 'computes a price and writes nothing; reads are not limited yet (backlog)',
-        'GET|HEAD api/offers' => self::READ,
-        'GET|HEAD api/offers/{offer}' => self::READ,
-        'GET|HEAD api/offers/{offer}/availability' => self::READ,
-        'GET|HEAD api/partners' => self::READ,
-        'GET|HEAD api/partners/{partner}' => self::READ,
-        'GET|HEAD api/bookings' => self::READ,
-        'GET|HEAD api/bookings/{id}' => self::READ,
-        'GET|HEAD api/badges' => self::READ,
-        'GET|HEAD api/club' => self::READ,
-        'GET|HEAD api/wallet' => self::READ,
-        'GET|HEAD api/features' => self::READ,
-        'GET|HEAD api/bingo' => self::READ,
-        'GET|HEAD api/stamps' => self::READ,
-        'GET|HEAD api/pass' => self::READ,
-        'GET|HEAD api/partner/me' => self::READ,
-        'GET|HEAD api/partner/bookings' => self::READ,
-        'GET|HEAD api/groups' => self::READ,
-        'GET|HEAD api/groups/{id}' => self::READ,
-        'GET|HEAD api/groups/{id}/messages' => self::READ,
-        'GET|HEAD api/blocks' => self::READ,
-        'GET|HEAD api/admin/stats' => self::ADMIN_READ,
-        'GET|HEAD api/admin/bookings' => self::ADMIN_READ,
-        'GET|HEAD api/admin/reports' => self::ADMIN_READ,
-        'GET|HEAD api/admin/users' => self::ADMIN_READ,
-        'GET|HEAD api/admin/users/{id}' => self::ADMIN_READ,
-        'GET|HEAD api/admin/evidence' => self::ADMIN_READ,
-        'GET|HEAD api/admin/evidence-files/{file}' => self::ADMIN_READ,
-        'GET|HEAD api/admin/partners' => self::ADMIN_READ,
-        'GET|HEAD api/admin/partners/{partner}' => self::ADMIN_READ,
-        'GET|HEAD api/admin/offers' => self::ADMIN_READ,
-        'GET|HEAD api/admin/voucher-batches' => self::ADMIN_READ,
-        'GET|HEAD api/admin/voucher-batches/{batch}/codes.csv' => self::ADMIN_READ,
-        'GET|HEAD api/admin/features' => self::ADMIN_READ,
-        'GET|HEAD api/admin/testphase' => self::ADMIN_READ,
+        'POST api/logout' => 'deletes only the token it is sent with; nothing to guess or to flood, and a refused sign-out would keep the token',
         'GET|HEAD /' => 'static web page of the framework skeleton',
         'GET|HEAD c/{token}' => 'static page that opens the app for a sticker link; no database',
         'GET|HEAD g/{code}' => 'static page that opens the app for an invitation link; no database',
@@ -287,6 +292,27 @@ class RouteThrottleCoverageTest extends TestCase
         $this->assertSame([], $unlimited, "{$checked} auth write routes checked");
     }
 
+    /** Every read route of the API, by its method: none may go without a limiter either. */
+    public function test_every_api_read_route_has_a_limiter(): void
+    {
+        $checked = 0;
+        $unlimited = [];
+        foreach (Route::getRoutes()->getRoutes() as $route) {
+            $reads = array_diff($route->methods(), ['GET', 'HEAD', 'OPTIONS']) === [];
+            // The container's health probe (EXEMPT says why).
+            if (! $reads || ! str_starts_with($route->uri(), 'api/') || $route->uri() === 'api/health') {
+                continue;
+            }
+            $checked++;
+            if (self::throttles($route) === []) {
+                $unlimited[] = self::signature($route);
+            }
+        }
+
+        $this->assertGreaterThanOrEqual(35, $checked, "only {$checked} API read routes found");
+        $this->assertSame([], $unlimited, "{$checked} API read routes checked");
+    }
+
     /** Every write route, by its method: none may go without a limiter, whatever the table says. */
     public function test_every_write_route_has_a_limiter(): void
     {
@@ -295,8 +321,8 @@ class RouteThrottleCoverageTest extends TestCase
         foreach (Route::getRoutes()->getRoutes() as $route) {
             $writes = array_diff($route->methods(), ['GET', 'HEAD', 'OPTIONS']) !== [];
             $signature = self::signature($route);
-            // Writes nothing (the price of an offer), and the sign-out of the token in use.
-            if (! $writes || in_array($signature, ['POST api/offers/{offer}/quote', 'POST api/logout'], true)) {
+            // The sign-out of the token in use (EXEMPT says why).
+            if (! $writes || $signature === 'POST api/logout') {
                 continue;
             }
             $checked++;

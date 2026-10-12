@@ -2,6 +2,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
 import type { Booking, PassToken } from '@/lib/api';
+import { loadSessionUserId } from '@/lib/token-store';
 
 /**
  * Offline-Pass: Was im Keller einer Bowlingbahn ohne Netz noch gehen muss –
@@ -12,6 +13,10 @@ import type { Booking, PassToken } from '@/lib/api';
  * der Inhalt in Stücke geteilt (`…_0`, `…_1`, …) und die Anzahl extra
  * gespeichert. Gespeichert wird nur, was zum Vorzeigen nötig ist; beim Abmelden
  * wird alles gelöscht (clearOfflineCache).
+ *
+ * Jede Kopie trägt die Konto-Nummer, die neben dem Token liegt (token-store).
+ * Gelesen wird sie nur für genau dieses Konto: Schlug das Löschen beim Abmelden
+ * fehl, sieht die oder der Nächste am Gerät trotzdem keine fremden Codes.
  */
 const BOOKINGS_KEY = 'goenn_offline_bookings';
 const PASS_KEY = 'goenn_offline_pass';
@@ -20,9 +25,24 @@ const MAX_BOOKINGS = 12;
 /** Sicher unter der SecureStore-Grenze von 2048 Byte (Umlaute zählen doppelt). */
 const CHUNK = 900;
 
-export type OfflineBookings = { savedAt: string; bookings: Booking[] };
+export type OfflineBookings = { owner: number; savedAt: string; bookings: Booking[] };
 
-async function setRaw(key: string, value: string | null): Promise<void> {
+type OfflinePass = { owner: number; token: string; expires_at: string };
+
+/**
+ * Ein Zugriff nach dem anderen. Ein Speichern, das beim Abmelden noch läuft,
+ * darf sich nicht mit dem Löschen mischen – sonst blieben Stücke des alten
+ * Kontos liegen, oder ein Lesen fände halb alte, halb neue Stücke.
+ */
+let queue: Promise<unknown> = Promise.resolve();
+
+function queued<T>(job: () => Promise<T>): Promise<T> {
+  const run = queue.then(job);
+  queue = run.catch(() => undefined);
+  return run;
+}
+
+async function writeRaw(key: string, value: string | null): Promise<void> {
   if (Platform.OS === 'web') {
     try {
       if (value === null) globalThis.localStorage?.removeItem(key);
@@ -41,7 +61,7 @@ async function setRaw(key: string, value: string | null): Promise<void> {
   else await SecureStore.deleteItemAsync(`${key}_count`);
 }
 
-async function getRaw(key: string): Promise<string | null> {
+async function readRaw(key: string): Promise<string | null> {
   if (Platform.OS === 'web') {
     try {
       return globalThis.localStorage?.getItem(key) ?? null;
@@ -60,6 +80,14 @@ async function getRaw(key: string): Promise<string | null> {
   return parts.join('');
 }
 
+function setRaw(key: string, value: string | null): Promise<void> {
+  return queued(() => writeRaw(key, value));
+}
+
+function getRaw(key: string): Promise<string | null> {
+  return queued(() => readRaw(key));
+}
+
 /** Nur offene Buchungen mit Code – und nur, was man zum Vorzeigen braucht. */
 export function offlineSubset(bookings: Booking[]): Booking[] {
   return bookings
@@ -68,15 +96,20 @@ export function offlineSubset(bookings: Booking[]): Booking[] {
     .slice(0, MAX_BOOKINGS);
 }
 
+/** Ohne bekanntes Konto keine Kopie: Sie ließe sich niemandem sicher zuordnen. */
 export async function saveOfflineBookings(bookings: Booking[]): Promise<void> {
-  const data: OfflineBookings = { savedAt: new Date().toISOString(), bookings: offlineSubset(bookings) };
+  const owner = await loadSessionUserId();
+  if (owner === null) return;
+  const data: OfflineBookings = { owner, savedAt: new Date().toISOString(), bookings: offlineSubset(bookings) };
   await setRaw(BOOKINGS_KEY, JSON.stringify(data));
 }
 
 export async function loadOfflineBookings(): Promise<OfflineBookings | null> {
   try {
-    const raw = await getRaw(BOOKINGS_KEY);
-    return raw ? (JSON.parse(raw) as OfflineBookings) : null;
+    const [raw, owner] = await Promise.all([getRaw(BOOKINGS_KEY), loadSessionUserId()]);
+    if (!raw || owner === null) return null;
+    const data = JSON.parse(raw) as OfflineBookings;
+    return data.owner === owner ? data : null;
   } catch {
     return null;
   }
@@ -85,16 +118,20 @@ export async function loadOfflineBookings(): Promise<OfflineBookings | null> {
 /** Den länger gültigen Pass beiseitelegen (aus GET /pass). */
 export async function saveOfflinePass(pass: PassToken): Promise<void> {
   if (!pass.offline_token || !pass.offline_expires_at) return;
-  await setRaw(PASS_KEY, JSON.stringify({ token: pass.offline_token, expires_at: pass.offline_expires_at }));
+  const owner = await loadSessionUserId();
+  if (owner === null) return;
+  const data: OfflinePass = { owner, token: pass.offline_token, expires_at: pass.offline_expires_at };
+  await setRaw(PASS_KEY, JSON.stringify(data));
 }
 
-/** Der Offline-Pass – nur, solange er noch gilt. */
+/** Der Offline-Pass – nur für dieses Konto und nur, solange er noch gilt. */
 export async function loadOfflinePass(now: Date = new Date()): Promise<{ token: string; expires_at: string } | null> {
   try {
-    const raw = await getRaw(PASS_KEY);
-    if (!raw) return null;
-    const pass = JSON.parse(raw) as { token: string; expires_at: string };
-    return new Date(pass.expires_at).getTime() > now.getTime() ? pass : null;
+    const [raw, owner] = await Promise.all([getRaw(PASS_KEY), loadSessionUserId()]);
+    if (!raw || owner === null) return null;
+    const pass = JSON.parse(raw) as OfflinePass;
+    if (pass.owner !== owner || new Date(pass.expires_at).getTime() <= now.getTime()) return null;
+    return { token: pass.token, expires_at: pass.expires_at };
   } catch {
     return null;
   }

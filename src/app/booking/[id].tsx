@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Linking, StyleSheet, Text, View } from 'react-native';
 
 import { Mascot, MascotError } from '@/components/mascot';
 import { PartnerLogo } from '@/components/partner-logo';
@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
 import { PressableScale } from '@/components/ui/pressable-scale';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { TextField } from '@/components/ui/text-field';
 import { API_URL } from '@/constants/config';
 import { FontFamily, MaxContentWidth, Night, Radius, Spacing } from '@/constants/theme';
@@ -17,7 +18,8 @@ import { formatCredits, formatEuro, formatPercent, planFor } from '@/domain/club
 import { formatDateTime, formatDay } from '@/domain/date-format';
 import type { UiIconName } from '@/domain/ui-icon';
 import { useTheme } from '@/hooks/use-theme';
-import { api, errorMessage, type Booking } from '@/lib/api';
+import { useNow } from '@/hooks/use-now';
+import { ApiError, api, errorMessage, type Booking } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { CLUB_RULES } from '@/lib/club-rules';
 import { confirmAction, notifyUser } from '@/lib/confirm';
@@ -55,29 +57,49 @@ export default function BookingScreen() {
   const [busy, setBusy] = useState(false);
   /** Ohne Netz: Stand der gespeicherten Kopie. */
   const [offlineSince, setOfflineSince] = useState<string | null>(null);
+  const now = useNow();
 
-  useEffect(() => {
-    if (!token) return;
-    api
-      .booking(token, Number(id))
-      .then(({ data }) => {
-        setBooking(data);
-        setOfflineSince(null);
-      })
-      .catch(async (e) => {
-        // Offline-Pass: die zuletzt gespeicherte Kopie (oder was die Liste schon hat).
-        const fromList = market.bookings.find((b) => b.id === Number(id));
-        const cached = await loadOfflineBookings();
-        const copy = fromList ?? cached?.bookings.find((b) => b.id === Number(id)) ?? null;
-        if (copy) {
-          setBooking(copy);
-          setOfflineSince(cached?.savedAt ?? new Date().toISOString());
-        } else {
-          setError(errorMessage(e, 'Diese Buchung konnten wir nicht laden.'));
-        }
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, id]);
+  // Was die Liste gerade kennt – gelesen erst im Fehlerfall, ohne dass jede neue
+  // Liste die Buchung noch einmal lädt.
+  // Bei jedem Zurückkommen neu laden: Nach „Am Aufkleber einlösen" soll hier
+  // „Eingelöst" stehen, nicht weiter „Gültig" mit einem Storno-Knopf.
+  const listed = market.bookings;
+  useFocusEffect(
+    useCallback(() => {
+      if (!token) return;
+      let active = true;
+      api
+        .booking(token, Number(id))
+        .then(({ data }) => {
+          if (!active) return;
+          setBooking(data);
+          setOfflineSince(null);
+          setError(null);
+        })
+        .catch(async (e) => {
+          // Offline-Pass: die zuletzt gespeicherte Kopie (oder was die Liste schon hat) –
+          // aber nur ohne Verbindung oder bei einem Serverfehler. Gibt es die Buchung
+          // nicht (mehr) oder gehört sie jemand anderem, ist das kein Offline-Fall.
+          const reachable = e instanceof ApiError && e.status > 0 && e.status < 500;
+          if (reachable) {
+            if (active) setError(errorMessage(e, 'Diese Buchung konnten wir nicht laden.'));
+            return;
+          }
+          const cached = await loadOfflineBookings();
+          if (!active) return;
+          const copy = listed.find((b) => b.id === Number(id)) ?? cached?.bookings.find((b) => b.id === Number(id)) ?? null;
+          if (copy) {
+            setBooking(copy);
+            setOfflineSince(cached?.savedAt ?? new Date().toISOString());
+          } else {
+            setError(errorMessage(e, 'Diese Buchung konnten wir nicht laden.'));
+          }
+        });
+      return () => {
+        active = false;
+      };
+    }, [token, id, listed]),
+  );
 
   if (!booking) {
     return (
@@ -90,7 +112,7 @@ export default function BookingScreen() {
 
   const open = booking.status === 'confirmed';
   const plan = planFor(CLUB_RULES, booking.plan_key);
-  const expiry = open ? expiryInfo(booking.valid_until, new Date()) : null;
+  const expiry = open ? expiryInfo(booking.valid_until, now) : null;
   const band =
     expiry?.tone === 'urgent'
       ? { bg: '#e11d48', fg: '#ffffff', sub: 'rgba(255,255,255,0.85)' }
@@ -120,9 +142,8 @@ export default function BookingScreen() {
       feedback.left();
     } catch (e) {
       await notifyUser('Storno hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
 
   const addToCalendar = async () => {
@@ -138,7 +159,7 @@ export default function BookingScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: 'Dein Ticket' }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <PullToCloseScroll contentContainerStyle={styles.content}>
         {offlineSince ? (
           <Card tone="soft" style={styles.offline}>
             <Icon name="clock" size={18} color={colors.textSecondary} />
@@ -301,7 +322,7 @@ export default function BookingScreen() {
           />
         ) : null}
         {open ? <Button title="Buchung stornieren" variant="danger" onPress={cancel} loading={busy} /> : null}
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }
@@ -321,13 +342,14 @@ function FeedbackCard({ partnerName, onSend }: { partnerName: string; onSend: (r
     if (rating === 0) return;
     setSending(true);
     setError(null);
+    // Vor dem `try`: Eine Bedingung darin kann der React Compiler nicht übersetzen.
+    const note = comment.trim() || null;
     try {
-      await onSend(rating, comment.trim() || null);
+      await onSend(rating, note);
     } catch (e) {
       setError(errorMessage(e));
-    } finally {
-      setSending(false);
     }
+    setSending(false);
   };
 
   return (

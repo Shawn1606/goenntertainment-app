@@ -6,6 +6,7 @@ use App\Models\Interest;
 use App\Models\Partner;
 use App\Models\TestphaseChallenge;
 use App\Models\User;
+use App\Support\BusinessDay;
 use App\Support\Club;
 use App\Support\Format;
 use App\Support\Wallet;
@@ -74,7 +75,8 @@ final class Board
      */
     private static function build(User $user): array
     {
-        $now = now();
+        // Ortszeit: Woche, Monat, Jahr und Tag der Zeitraeume sind die in Goettingen (BusinessDay).
+        $now = BusinessDay::now();
         $claimed = DB::table('testphase_claims')
             ->where('user_id', $user->getKey())
             ->get(['key', 'period'])
@@ -233,7 +235,7 @@ final class Board
         if ($c === null) {
             throw ValidationException::withMessages(['challenge_id' => ['Diese Challenge kann man nicht auswählen.']]);
         }
-        [, , $period] = self::window($c, now());
+        [, , $period] = self::window($c, BusinessDay::now());
 
         $existing = DB::table('testphase_choices')->where('user_id', $user->getKey())->where('challenge_id', $c->id)->where('period', $period);
         if ($existing->exists()) {
@@ -279,18 +281,21 @@ final class Board
     }
 
     /**
-     * Zeitfenster einer Challenge: [von, bis, Schluessel, Anzeige].
+     * Zeitfenster einer Challenge: [von, bis, Schluessel, Anzeige] - in Ortszeit (BusinessDay);
+     * `$now` wird dorthin umgerechnet. Abfragen rechnen die Grenzen zurueck (Progress::count).
      *
      * @return array{0: CarbonInterface, 1: CarbonInterface, 2: string, 3: string}
      */
     public static function window(TestphaseChallenge $c, CarbonInterface $now): array
     {
+        $now = BusinessDay::local($now);
         if ($c->period === 'week') {
             return [$now->copy()->startOfWeek(), $now->copy()->endOfWeek(), Streak::weekKey($now), 'KW '.$now->isoWeek()];
         }
         if ($c->period === 'range' && $c->starts_at && $c->ends_at) {
-            $from = $c->starts_at->copy()->startOfDay();
-            $to = $c->ends_at->copy()->endOfDay();
+            // Ein Datum ohne Uhrzeit: der ganze Kalendertag in Goettingen.
+            $from = BusinessDay::startOf($c->starts_at);
+            $to = BusinessDay::startOf($c->ends_at)->endOfDay();
 
             return [$from, $to, 'range-'.$from->format('Ymd'), $from->format('d.m.').'–'.$to->format('d.m.Y')];
         }

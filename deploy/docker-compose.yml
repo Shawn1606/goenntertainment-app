@@ -190,6 +190,8 @@ services:
       MAIL_USERNAME: ${MAIL_USERNAME?MAIL_USERNAME is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
       MAIL_PASSWORD: ${MAIL_PASSWORD?MAIL_PASSWORD is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
       MAIL_SCHEME: ${MAIL_SCHEME:-}
+      # Never in clear text: STARTTLS (or smtps) or no mail at all (api/config/mail.php).
+      MAIL_REQUIRE_TLS: 'true'
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
       # Nur dieser Container spielt Schema-Änderungen ein, nicht auch noch der scheduler – zwei
@@ -267,6 +269,8 @@ services:
       MAIL_USERNAME: ${MAIL_USERNAME?MAIL_USERNAME is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
       MAIL_PASSWORD: ${MAIL_PASSWORD?MAIL_PASSWORD is missing in deploy/.env (empty is allowed for a relay without login; see deploy/.env.example)}
       MAIL_SCHEME: ${MAIL_SCHEME:-}
+      # Never in clear text: STARTTLS (or smtps) or no mail at all (api/config/mail.php).
+      MAIL_REQUIRE_TLS: 'true'
       MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?MAIL_FROM_ADDRESS is missing in deploy/.env (the sender mailbox, an operator decision; see deploy/.env.example)}
       MAIL_FROM_NAME: GÖ4Fun
       # Retention in days (F-16, api/app/Support/Retention.php): how long evidence images and

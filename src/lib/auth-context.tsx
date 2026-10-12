@@ -45,6 +45,41 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/**
+ * Beim Start: gespeicherten Token laden und gegen /api/user prüfen. Wirft nie:
+ * Ein Speicherfehler (Android-Schlüsselbund zurückgesetzt, im Browser gesperrter
+ * Speicher) zählt als „kein Token“ – sonst bliebe die App für immer auf dem
+ * Startbild stehen.
+ */
+async function restoreSession(): Promise<{ token: string | null; user: User | null }> {
+  try {
+    // First of all: an earlier version may have stored the password on this device; it goes
+    // now, even if the sign-in screen is never shown (src/lib/credential-store.ts).
+    await migrateSavedLogin();
+    const stored = await loadToken();
+    if (!stored) return { token: null, user: null };
+    try {
+      const { user: me } = await api.me(stored);
+      // Kept beside the token, also for a session from before this version (F-44).
+      await saveSessionUserId(me.id);
+      return { token: stored, user: me };
+    } catch (error) {
+      // Token ungültig (401) oder Konto gesperrt (403) → verwerfen. Bei
+      // reinem Netzfehler behalten, damit man offline nicht abgemeldet wird.
+      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+        await clearToken();
+        // The session ended while the app was closed (the account deleted, the token
+        // revoked): its offline copy goes too (F-44).
+        await clearOfflineCache().catch(() => undefined);
+        return { token: null, user: null };
+      }
+      return { token: stored, user: null };
+    }
+  } catch {
+    return { token: null, user: null };
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [token, setToken] = useState<string | null>(null);
@@ -78,7 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setUser(null);
         },
         clearStorage: clearToken,
-        clearHistory: () => clearOfflineCache(),
+        clearDeviceData: () => clearOfflineCache(),
         notice: () =>
           notifyUser(
             'Abgemeldet',
@@ -99,41 +134,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [endLocalSession],
   );
 
-  // Beim Start: gespeicherten Token laden und gegen /api/user prüfen.
+  // Beim Start: gespeicherten Token laden und gegen /api/user prüfen (restoreSession).
   useEffect(() => {
     let active = true;
-
-    (async () => {
-      // First of all: an earlier version may have stored the password on this device; it goes
-      // now, even if the sign-in screen is never shown (src/lib/credential-store.ts).
-      await migrateSavedLogin();
-
-      const stored = await loadToken();
-      if (stored) {
-        try {
-          const { user: me } = await api.me(stored);
-          // Kept beside the token, also for a session from before this version (F-44).
-          await saveSessionUserId(me.id);
-          if (active) {
-            setToken(stored);
-            setUser(me);
-          }
-        } catch (error) {
-          // Token ungültig (401) oder Konto gesperrt (403) → verwerfen. Bei
-          // reinem Netzfehler behalten, damit man offline nicht abgemeldet wird.
-          if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-            await clearToken();
-            // The session ended while the app was closed (the account deleted, the token
-            // revoked): its offline copy goes too (F-44).
-            await clearOfflineCache().catch(() => undefined);
-          } else if (active && stored) {
-            setToken(stored);
-          }
-        }
-      }
-      if (active) setIsBootstrapping(false);
-    })();
-
+    void restoreSession().then((restored) => {
+      if (!active) return;
+      if (restored.token) setToken(restored.token);
+      if (restored.user) setUser(restored.user);
+      setIsBootstrapping(false);
+    });
     return () => {
       active = false;
     };
@@ -171,7 +180,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(updated);
       },
       applyUser: (updated) => setUser(updated),
-      patchUser: (patch) => setUser((prev) => (prev ? { ...prev, ...patch } : prev)),
+      // Nur ein neues Objekt, wenn sich wirklich etwas ändert: Fast alles hängt an
+      // `user`, und jede Club-Antwort ruft das hier – meist mit denselben Werten.
+      patchUser: (patch) =>
+        setUser((prev) => {
+          if (!prev) return prev;
+          const changed = (Object.keys(patch) as (keyof User)[]).some((key) => !Object.is(prev[key], patch[key]));
+          return changed ? { ...prev, ...patch } : prev;
+        }),
       refreshUser: async () => {
         if (!token) return;
         try {
@@ -208,10 +224,4 @@ export function useAuth(): AuthContextValue {
     throw new Error('useAuth muss innerhalb von <AuthProvider> benutzt werden.');
   }
   return ctx;
-}
-
-/** Das angemeldete Konto samt Token – für Screens hinter dem Login-Wächter. */
-export function useSession(): { token: string; user: User } | null {
-  const { token, user } = useAuth();
-  return token && user ? { token, user } : null;
 }

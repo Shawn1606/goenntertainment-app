@@ -62,9 +62,8 @@ export default function ChangeEmailScreen() {
       await notifyUser('Code unterwegs', `Wir haben dir einen Code an ${res.destination} geschickt.`);
     } catch (e) {
       setErrors({ code: [e instanceof ApiError ? e.firstError() : 'Unbekannter Fehler.'] });
-    } finally {
-      setSending(false);
     }
+    setSending(false);
   }
 
   /** Step 1: nothing changes yet; the server mails a code to the new address. */
@@ -86,9 +85,8 @@ export default function ChangeEmailScreen() {
       setStep('code');
     } catch (e) {
       showError(e, 'email');
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   }
 
   /** Step 2: the code from the new address makes the change. */
@@ -106,9 +104,8 @@ export default function ChangeEmailScreen() {
       router.back();
     } catch (e) {
       showError(e, 'code');
-    } finally {
-      setSaving(false);
     }
+    setSaving(false);
   }
 
   /** Back to step 1, for another address or a new code; the typed address and password stay. */

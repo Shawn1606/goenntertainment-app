@@ -27,7 +27,7 @@ export type TipContext = {
   season?: SeasonKey;
   /** 0 = Sonntag … 6 = Samstag. Ohne Angabe kein Wochentags-Satz. */
   weekday?: number;
-  /** Credits, die als Nächstes verfallen – und in wie vielen Tagen. */
+  /** Credits, die als Nächstes verfallen – und in wie vielen Kalendertagen (0 = heute, 1 = morgen). */
   expiringCredits?: number;
   expiringDays?: number;
 };
@@ -46,16 +46,19 @@ function greeting(hour: number, name: string | null): string {
 /** Ab so wenigen Tagen vor dem Verfall erinnert Goenni (wie die Mail, 30 Tage vorher). */
 export const EXPIRY_WARN_DAYS = 30;
 
+function expiryLine(credits: number, days: number): string {
+  if (days <= 0) return `${credits} Credits verfallen heute – schnell noch was buchen!`;
+  if (days === 1) return `${credits} Credits verfallen morgen – schnell noch was buchen!`;
+  return `${credits} Credits verfallen in ${days} Tagen – lös sie ein, bevor sie weg sind!`;
+}
+
 export function homeTips(ctx: TipContext): Tip[] {
   const tips: Tip[] = [];
 
   // Bald verfallende Credits zuerst – das kostet sonst echtes Guthaben.
   if (ctx.expiringCredits && ctx.expiringCredits > 0 && ctx.expiringDays !== undefined && ctx.expiringDays <= EXPIRY_WARN_DAYS) {
     tips.push({
-      line:
-        ctx.expiringDays <= 1
-          ? `${ctx.expiringCredits} Credits verfallen morgen – schnell noch was buchen!`
-          : `${ctx.expiringCredits} Credits verfallen in ${ctx.expiringDays} Tagen – lös sie ein, bevor sie weg sind!`,
+      line: expiryLine(ctx.expiringCredits, ctx.expiringDays),
       mood: ctx.expiringDays <= 7 ? 'oops' : 'thinking',
     });
   }

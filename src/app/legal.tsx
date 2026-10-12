@@ -19,7 +19,7 @@
  */
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HomeBackground } from '@/components/home-background';
@@ -27,6 +27,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Entrance } from '@/components/ui/entrance';
 import { GlassCard, SectionHeader } from '@/components/ui/glass';
 import { Icon } from '@/components/ui/icon';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { Links } from '@/constants/links';
 import { hasOperatorGaps } from '@/constants/operator';
 import { MaxContentWidth, Radius, Spacing } from '@/constants/theme';
@@ -68,7 +69,8 @@ function OverviewView() {
 
   return (
     <HomeBackground style={styles.screen}>
-      <ScrollView
+      <PullToCloseScroll
+        knobTop={insets.top + 8}
         contentContainerStyle={[
           styles.content,
           { paddingTop: insets.top + Spacing.four, paddingBottom: insets.bottom + Spacing.five },
@@ -113,7 +115,7 @@ function OverviewView() {
         <ThemedText type="small" style={[styles.centered, { color: surface.textMuted }]}>
           Stand: {LEGAL_VERSION}
         </ThemedText>
-      </ScrollView>
+      </PullToCloseScroll>
     </HomeBackground>
   );
 }
@@ -131,7 +133,8 @@ function DocumentView({ doc }: { doc: LegalDocument }) {
 
   return (
     <HomeBackground style={styles.screen}>
-      <ScrollView
+      <PullToCloseScroll
+        knobTop={insets.top + 8}
         contentContainerStyle={[
           styles.content,
           { paddingTop: insets.top + Spacing.four, paddingBottom: insets.bottom + Spacing.five },
@@ -206,7 +209,7 @@ function DocumentView({ doc }: { doc: LegalDocument }) {
         <ThemedText type="small" style={[styles.centered, { color: surface.textMuted }]}>
           Stand: {LEGAL_VERSION}
         </ThemedText>
-      </ScrollView>
+      </PullToCloseScroll>
     </HomeBackground>
   );
 }

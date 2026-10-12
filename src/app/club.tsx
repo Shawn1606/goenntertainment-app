@@ -1,14 +1,16 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import { Mascot } from '@/components/mascot';
 import { PlanBadge } from '@/components/plan-badge';
+import { PlanComparison, PlanFaq, PlanSectionTitle, TripExample } from '@/components/plan-overview';
 import { Button } from '@/components/ui/button';
 import { PressableScale } from '@/components/ui/pressable-scale';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { FontFamily, MaxContentWidth, Night, PlanLook, Radius, Spacing, Stroke } from '@/constants/theme';
 import {
   creditValidityLabel,
@@ -41,6 +43,10 @@ import { useMarket } from '@/lib/market-context';
  * Monatspreise; die Monats-Credits kommen trotzdem jeden Monat. Nach dem ersten
  * Jahr läuft es monatlich weiter (monatlich kündbar). Während eines laufenden
  * Jahresabos gibt es keinen Stufenwechsel – das rechnet der Server genauso.
+ *
+ * Unter den Karten der Überblick (src/components/plan-overview.tsx): alle
+ * Vorteile als Tabelle, ein Beispiel-Ausflug zum Durchklicken und die häufigen
+ * Fragen. Die Karten selbst zeigen darum nur das Wichtigste je Stufe.
  */
 export default function ClubScreen() {
   const colors = useTheme();
@@ -49,10 +55,11 @@ export default function ClubScreen() {
   const [busy, setBusy] = useState<string | null>(null);
   const [cheer, setCheer] = useState(0);
 
+  // `refreshClub` bleibt stabil, solange man angemeldet ist: einmal beim Öffnen.
+  const { refreshClub } = market;
   useEffect(() => {
-    void market.refreshClub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    void refreshClub();
+  }, [refreshClub]);
 
   const club = market.club;
   const current = user?.club_plan ?? 'free';
@@ -84,9 +91,8 @@ export default function ClubScreen() {
     } catch (e) {
       feedback.failed();
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   const cancel = async () => {
@@ -104,15 +110,14 @@ export default function ClubScreen() {
       market.applyClub(data);
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, title: 'GÖ4Fun Club' }} />
-      <ScrollView contentContainerStyle={styles.content}>
+      <PullToCloseScroll contentContainerStyle={styles.content}>
         <Card tone="night" style={styles.hero}>
           <Mascot mood={cheer > 0 ? 'cheer' : 'happy'} gesture="wave" size={76} jumpKey={cheer} waves={cheer > 0} />
           <View style={{ flex: 1, gap: 6 }}>
@@ -198,14 +203,12 @@ export default function ClubScreen() {
                 )}
               </LinearGradient>
               <View style={styles.planBody}>
-                <Perk text={plan.discountPercent > 0 ? `${formatPercent(plan.discountPercent)} Rabatt auf jedes Partner-Angebot` : 'Normale Partnerpreise'} />
-                <Perk text={`Gruppenrabatt von ${formatPercent(groupFrom)} bis ${formatPercent(groupTo)}`} />
-                <Perk text={`Zu sechst insgesamt ${formatPercent(sixPercent)} Rabatt`} />
+                {/* Das Wichtigste je Stufe – alles Weitere steht im Vergleich darunter. */}
+                {plan.discountPercent > 0 ? <Perk text={`${formatPercent(plan.discountPercent)} Rabatt auf jedes Partner-Angebot`} /> : null}
+                <Perk text={`Gruppenrabatt ${formatPercent(groupFrom).replace(' %', '')}–${formatPercent(groupTo)}, zu sechst ${formatPercent(sixPercent)} insgesamt`} />
                 {plan.monthlyCredits > 0 ? <Perk text={`${plan.monthlyCredits} Credits jeden Monat geschenkt`} /> : null}
-                <Perk text={`Stempelkarte: ${CLUB_RULES.stampCard.fields} Stempel = ${stampReward} Credits`} />
-                <Perk text={`Jede ${CLUB_RULES.stampCard.goldenEvery}. Karte golden: ${goldenReward} Credits`} />
+                <Perk text={`Volle Stempelkarte: ${stampReward} Credits, golden ${goldenReward}`} />
                 <Perk text={`Credits gelten ${creditValidityLabel(CLUB_RULES, plan.key)}`} />
-                <Perk text="Mit Credits bei Partnern bezahlen" />
                 {plan.key !== 'free' && !isCurrent && !locked ? (
                   <Button title={buttonTitle} icon="crown" onPress={() => subscribe(plan)} loading={busy === plan.key} style={styles.planButton} />
                 ) : null}
@@ -222,15 +225,22 @@ export default function ClubScreen() {
           );
         })}
 
+        <PlanSectionTitle title="Alle Vorteile im Vergleich" subtitle="Was jede Stufe bringt – deine ist markiert." />
+        <PlanComparison current={current} />
+
+        <PlanSectionTitle title="Was kostet ein Ausflug?" subtitle="Personen und Preis wählen – so viel zahlt ihr in jeder Stufe." />
+        <TripExample current={current} />
+
+        <PlanSectionTitle title="Häufige Fragen" />
+        <PlanFaq />
+
         <Card tone="soft">
           <Text style={[styles.note, { color: colors.textSecondary }]}>
-            {testMode
-              ? 'Testmodus: Abos werden ohne echte Zahlung abgeschlossen. '
-              : ''}
-            Abos laufen einen Monat oder ein Jahr und verlängern sich automatisch – das Jahresabo danach monatlich. Kündigen geht jederzeit zum Ende der Laufzeit. Ein Wechsel zwischen Gold und Platinum startet sofort eine neue Laufzeit. Wie lange Credits gelten, hängt an der Stufe bei der Gutschrift; mit dem Wechsel in eine höhere Stufe gilt die längere Frist auch für deine offenen Credits. Ausgegeben werden immer zuerst die, die am frühesten verfallen.
+            {testMode ? 'Testmodus: Abos werden ohne echte Zahlung abgeschlossen. ' : ''}
+            Abos laufen einen Monat oder ein Jahr und verlängern sich automatisch – das Jahresabo danach monatlich. Kündigen geht jederzeit zum Ende der Laufzeit.
           </Text>
         </Card>
-      </ScrollView>
+      </PullToCloseScroll>
     </View>
   );
 }

@@ -38,9 +38,8 @@ export default function AdminEvidenceScreen() {
       setItems(res.data);
     } catch {
       setError('Beweismittel konnten nicht geladen werden.');
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   }, [token]);
 
   useFocusEffect(

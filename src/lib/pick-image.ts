@@ -35,13 +35,14 @@ function askImageSource(label: string): Promise<'gallery' | 'camera' | null> {
 /**
  * Ein Bild aussuchen – oder `null`, wenn abgebrochen wurde bzw. der Zugriff fehlt.
  *
- * Eine Stelle für alle drei Bilder dieser Seite (Beitrag, Profilbild, Banner):
- * Vorher stand derselbe Dreischritt (fragen, Erlaubnis, öffnen) je Bild neu da.
- * `fallbackName` benennt nur die Datei, wenn das System keinen Namen mitgibt.
+ * Eine Stelle für alle Bilder der App (Profilbild, Partner-Logo und -Banner,
+ * Angebotsbild, Beweisbild): Vorher stand derselbe Dreischritt (fragen, Erlaubnis,
+ * öffnen) je Bild neu da. `fallbackName` benennt nur die Datei, wenn das System
+ * keinen Namen mitgibt.
  *
  * `crop` schaltet das Zuschneiden dazu (siehe {@link CROP}). Bewusst NICHT für
- * das Foto eines Beitrags: Dort gibt es keinen Rahmen, in den es passen muss, und
- * iOS würde jedes Querformat-Foto ins Quadrat zwingen.
+ * Bilder ohne festen Rahmen (etwa ein Beweis-Screenshot): iOS würde jedes
+ * Querformat ins Quadrat zwingen.
  */
 export async function pickImage(
   label: string,

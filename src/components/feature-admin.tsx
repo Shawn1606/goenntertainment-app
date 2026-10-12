@@ -55,9 +55,8 @@ export function useAdminFeatures() {
       await refreshBingo();
     } catch (e) {
       await notifyUser('Hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBusy(null);
     }
+    setBusy(null);
   };
 
   return { state, busy, error, load, run };

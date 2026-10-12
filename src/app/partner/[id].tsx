@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Linking, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MascotError } from '@/components/mascot';
@@ -12,6 +12,7 @@ import { ReportSheet } from '@/components/report-sheet';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Icon } from '@/components/ui/icon';
+import { PullToCloseScroll } from '@/components/ui/pull-to-close';
 import { FontFamily, MaxContentWidth, Night, Spacing } from '@/constants/theme';
 import { formatDistance } from '@/domain/distance';
 import { useTheme } from '@/hooks/use-theme';
@@ -62,7 +63,7 @@ export default function PartnerScreen() {
   return (
     <View style={[styles.flex, { backgroundColor: colors.backgroundElement }]}>
       <Stack.Screen options={{ headerShown: true, headerTransparent: true, title: partner.name }} />
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.five }}>
+      <PullToCloseScroll knobTop={insets.top + 60} contentContainerStyle={{ paddingBottom: insets.bottom + Spacing.five }}>
         <View style={styles.cover}>
           {partner.cover_url ? (
             <Image source={{ uri: partner.cover_url }} style={StyleSheet.absoluteFill} contentFit="cover" />
@@ -134,7 +135,7 @@ export default function PartnerScreen() {
 
           <Button title="Partner melden" variant="ghost" size="small" icon="flag" onPress={() => setReporting(true)} />
         </View>
-      </ScrollView>
+      </PullToCloseScroll>
       <ReportSheet target={reporting ? { type: 'partner', id: partner.id, label: partner.name } : null} onClose={() => setReporting(false)} />
     </View>
   );

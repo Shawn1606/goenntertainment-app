@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Linking, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { SecurityNote, SecurityScreen } from '@/components/security/security-screen';
 import { BrandButton } from '@/components/ui/brand-button';
@@ -13,6 +13,7 @@ import { useTheme } from '@/hooks/use-theme';
 import { api, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
+import { shareText } from '@/lib/share';
 
 /**
  * Zwei-Faktor-Anmeldung einrichten und verwalten.
@@ -58,14 +59,15 @@ export default function TwoFactorScreen() {
   async function run<T>(work: () => Promise<T>): Promise<T | null> {
     setBusy(true);
     setError(null);
+    // Ohne `finally`: Damit kann der React Compiler die Seite nicht übersetzen.
+    let result: T | null = null;
     try {
-      return await work();
+      result = await work();
     } catch (e) {
       setError(e instanceof ApiError ? e.firstError() : 'Etwas ist schiefgelaufen. Bitte versuch es noch mal.');
-      return null;
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
+    return result;
   }
 
   async function startEmail() {
@@ -182,9 +184,11 @@ export default function TwoFactorScreen() {
         <BrandButton
           title="Codes teilen / speichern"
           variant="glass"
-          onPress={() =>
-            Share.share({ message: `GÖ4Fun – Wiederherstellungscodes\n\n${step.codes.join('\n')}` }).catch(() => {})
-          }
+          onPress={async () => {
+            // shareText kann auch der Browser am Rechner (Zwischenablage) – Share.share allein tat dort nichts.
+            const outcome = await shareText(`GÖ4Fun – Wiederherstellungscodes\n\n${step.codes.join('\n')}`, 'GÖ4Fun – Wiederherstellungscodes');
+            if (outcome === 'copied') await notifyUser('Kopiert', 'Die Codes liegen in der Zwischenablage – leg sie an einem sicheren Ort ab.');
+          }}
         />
         <BrandButton title="Ich habe sie gespeichert" onPress={() => setStep({ kind: 'overview' })} />
       </SecurityScreen>

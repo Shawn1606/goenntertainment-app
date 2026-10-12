@@ -115,7 +115,7 @@ test('zu langer Text sagt, was zu tun ist', () => {
 });
 
 test('die Laengengrenze ist dieselbe wie im Backend', () => {
-  // server/src/messaging.js: MAX_MESSAGE_LENGTH = 1000. Laufen die auseinander,
+  // api/app/Http/Controllers/ChatController.php: MAX_LENGTH = 1000. Laufen die auseinander,
   // schneidet die App etwas ab, das der Server annehmen wuerde – oder sie laesst
   // etwas zu, das er ablehnt.
   assert.equal(MAX_MESSAGE_LENGTH, 1000);

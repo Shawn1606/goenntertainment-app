@@ -227,19 +227,6 @@ const REGISTRY: Record<UiIconName, IconComponent> = {
   age: AgeIcon,
 };
 
-/**
- * Zur Laufzeit prüfbar, damit ein Test die Tabelle gegen die Namensliste halten
- * kann, ohne React zu rendern.
- */
-export function hasIcon(name: string): boolean {
-  return Object.prototype.hasOwnProperty.call(REGISTRY, name);
-}
-
-/** Alle Namen, für die es hier eine Zeichnung gibt. */
-export function registeredIconNames(): string[] {
-  return Object.keys(REGISTRY);
-}
-
 export type IconProps = SvgProps & {
   name: UiIconName;
   size?: number;

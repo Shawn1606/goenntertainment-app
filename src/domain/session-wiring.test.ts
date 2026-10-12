@@ -62,20 +62,20 @@ test('the app start removes a stored password before anything else', () => {
 
 test('every authenticated request reports its answer', () => {
   const api = code('lib/api.ts');
-  const fetchSites = (api.match(/Authorization: `Bearer \$\{token\}`/g) ?? []).length;
-  // Through parseResponse, or (the text download) reported directly; minus the report inside
-  // parseResponse itself.
-  const reported =
-    (api.match(/return parseResponse<[^>]+>\(response, token\);/g) ?? []).length +
-    (api.match(/sessionWatch\.report\(response\.status, token\);/g) ?? []).length -
-    1;
-
-  // Denominator: the fetch sites that send a token (request, upload, fetchText).
-  assert.ok(fetchSites >= 3, `only ${fetchSites} authenticated fetch sites found`);
-  assert.equal(reported, fetchSites, `${fetchSites} authenticated fetch sites, ${reported} report their answer`);
-  // Every request to the API (the other fetch reads a picked image on the web, never the API).
-  assert.equal((api.match(/await fetch\(`\$\{API_URL\}/g) ?? []).length, fetchSites, 'a fetch to the API that sends no token was added: check it');
+  // Two places call the API: exchange() (for request and upload) and the text download
+  // (fetchText). The other fetch reads a picked image on the web, never the API.
+  assert.equal((api.match(/await fetch\(`\$\{API_URL\}/g) ?? []).length, 2, 'a new fetch to the API was added: check that it reports its answer');
+  // exchange() hands every answer to parseResponse, which reports it before anything else.
+  assert.match(api, /response = await fetch\(`\$\{API_URL\}\$\{path\}`, \{ \.\.\.init, signal: controller\.signal \}\);[\s\S]*?return await parseResponse<T>\(response, token\);/);
   assert.match(api, /async function parseResponse<T>\(response: Response, token: string \| null \| undefined\): Promise<T> \{\s*sessionWatch\.report\(response\.status, token\);/);
+
+  // Every place that sends a token passes it on to exchange(), or (the text download) reports
+  // the answer itself - minus the report inside parseResponse.
+  const tokenSites = (api.match(/Authorization: `Bearer \$\{token\}`/g) ?? []).length;
+  const viaExchange = (api.match(/return exchange<T>\(path, init, token, (?:REQUEST|UPLOAD)_TIMEOUT_MS\);/g) ?? []).length;
+  const direct = (api.match(/sessionWatch\.report\(response\.status, token\);/g) ?? []).length - 1;
+  assert.ok(tokenSites >= 3, `only ${tokenSites} authenticated fetch sites found`);
+  assert.equal(viaExchange + direct, tokenSites, `${tokenSites} places send a token, ${viaExchange + direct} report the answer`);
 });
 
 test('the auth state signs out through one path when a session is rejected', () => {
@@ -109,7 +109,7 @@ test('signing out clears the session in memory before the stored token', () => {
 /*
  * F-44: what the session left on the device goes with it. The marketplace keeps no search history;
  * the personal data it keeps is the offline copy of the bookings and the pass (src/lib/offline-cache.ts).
- * The tested logic is the history step of signOutLocally (session.test.ts); these checks prove
+ * The tested logic is the clearDeviceData step of signOutLocally (session.test.ts); these checks prove
  * that the app hands it the real storage on every path.
  */
 
@@ -128,7 +128,7 @@ test('every way the session ends removes the offline copy of bookings and pass (
   const end = context.indexOf('sessionWatch.subscribe(', start);
   assert.ok(start >= 0 && end > start, 'endLocalSession not found before the 401 listener');
   const body = context.slice(start, end);
-  assert.match(body, /clearHistory: \(\) => clearOfflineCache\(\),/, 'endLocalSession does not remove the offline copy');
+  assert.match(body, /clearDeviceData: \(\) => clearOfflineCache\(\),/, 'endLocalSession does not remove the offline copy');
   assert.equal((context.match(/endLocalSession\((?:true|false)\)/g) ?? []).length, 2, 'logout and the 401 listener both end in endLocalSession');
   // No other sign-out path that could skip it.
   assert.equal((withoutImports.match(/\bclearOfflineCache\(/g) ?? []).length, 2, 'expected the offline copy removed in endLocalSession and at app start only');

@@ -13,6 +13,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
 import { DEFAULT_FEATURES, isSeasonKey, type BingoState, type FeatureState } from '@/domain/features';
+import { keepIfSame } from '@/domain/same-data';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
@@ -23,7 +24,8 @@ type FeaturesValue = {
   /** Stand des Stadt-Bingos, `null` solange aus oder nicht geladen. */
   bingo: BingoState | null;
   setBingo: (bingo: BingoState) => void;
-  refreshBingo: () => Promise<void>;
+  /** Bingo neu laden; `false`, wenn es nicht geklappt hat (oder aus ist). */
+  refreshBingo: () => Promise<boolean>;
 };
 
 const FeaturesContext = createContext<FeaturesValue>({
@@ -31,11 +33,20 @@ const FeaturesContext = createContext<FeaturesValue>({
   refresh: async () => {},
   bingo: null,
   setBingo: () => {},
-  refreshBingo: async () => {},
+  refreshBingo: async () => false,
 });
 
 export function useFeatures(): FeaturesValue {
   return useContext(FeaturesContext);
+}
+
+/**
+ * Die Schalter aus der Server-Antwort; ein unbekanntes Saison-Thema zählt als keins.
+ * Außerhalb der Komponente: Eine Bedingung in einem `try` kann der React Compiler
+ * nicht übersetzen, und dann bliebe der ganze Provider unübersetzt.
+ */
+function featuresFrom(data: { bingo?: unknown; season?: unknown }): FeatureState {
+  return { bingo: data.bingo === true, season: isSeasonKey(data.season) ? data.season : null };
 }
 
 export function FeaturesProvider({ children }: { children: ReactNode }) {
@@ -43,22 +54,33 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
   const [features, setFeatures] = useState<FeatureState>(DEFAULT_FEATURES);
   const [bingo, setBingo] = useState<BingoState | null>(null);
 
+  // Anderes Konto: dessen Schalter (auch Admin-Vorschauen) und Bingo-Stand gelten
+  // nicht weiter, bis die eigenen geladen sind.
+  const [stateToken, setStateToken] = useState(token);
+  if (stateToken !== token) {
+    setStateToken(token);
+    setFeatures(DEFAULT_FEATURES);
+    setBingo(null);
+  }
+
   const refresh = useCallback(async () => {
     if (!token) return;
     try {
       const { data } = await api.features(token);
-      setFeatures({ bingo: data.bingo === true, season: isSeasonKey(data.season) ? data.season : null });
+      setFeatures((prev) => keepIfSame(prev, featuresFrom(data)));
     } catch {
       // Ohne Antwort bleibt der letzte Stand – Schalter sind nie lebenswichtig.
     }
   }, [token]);
 
   const refreshBingo = useCallback(async () => {
-    if (!token || !features.bingo) return;
+    if (!token || !features.bingo) return false;
     try {
       setBingo((await api.bingo(token)).data);
+      return true;
     } catch {
       setBingo(null);
+      return false;
     }
   }, [token, features.bingo]);
 
@@ -69,7 +91,7 @@ export function FeaturesProvider({ children }: { children: ReactNode }) {
     api
       .features(token)
       .then(({ data }) => {
-        if (active) setFeatures({ bingo: data.bingo === true, season: isSeasonKey(data.season) ? data.season : null });
+        if (active) setFeatures((prev) => keepIfSame(prev, featuresFrom(data)));
       })
       .catch(() => {});
     return () => {

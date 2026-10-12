@@ -28,5 +28,14 @@ bootstrap/cache/*.php
 
 tests/
 phpunit.xml
+.phpunit.result.cache
+.phpunit.cache/
 *.md
 .git
+
+# Eine lokale SQLite-Datei (Laravel legt sie beim Einrichten an) – die API läuft nur auf
+# MySQL, und die Datei trüge lokale Daten ins Abbild.
+database/*.sqlite*
+
+# Composer-Zugangsdaten (private Pakete) gehören nie in ein Abbild.
+auth.json

@@ -1,8 +1,8 @@
 /**
  * Images that only the signed-in person may load (F-11): ban evidence and the image the AI
- * moderation refused (admins only), and story images (signed-in viewers while the story runs).
- * The server keeps them out of the public /storage and serves them under its API with the same
- * bearer token as every other API call (server/src/media.js builds those addresses).
+ * moderation refused (admins only). The API keeps them out of the public /storage and serves
+ * them under /api/admin/evidence-files with the same bearer token as every other API call
+ * (AppSupportMedia builds those addresses).
  *
  * The token goes ONLY to the API this app talks to: an address on another host (an imported
  * banner, a picture somewhere else) never gets it, and neither does a public /storage address,

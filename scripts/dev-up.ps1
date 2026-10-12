@@ -125,21 +125,28 @@ function Start-DevWindow([string]$title, [string]$command) {
     Start-Process powershell -WorkingDirectory $root -ArgumentList '-NoExit', '-ExecutionPolicy', 'Bypass', '-Command', $script | Out-Null
 }
 
-function Stop-PortOwnerWindow([int]$port) {
-    # Beendet den Prozess am Port UND das PowerShell-Fenster, in dem er läuft –
-    # sonst bliebe ein totes Fenster stehen.
+function Stop-MetroOnPort([int]$port) {
+    # Beendet Metro am Port – nur Metro (node … expo … start), nie ein fremdes Programm, das den
+    # Port zufällig belegt. Das Fenster, in dem es lief, schließt nur, wenn dieses Skript es
+    # geöffnet hat (sein Titel steht in der Befehlszeile): ein eigenes Terminal bleibt offen.
+    # $true, wenn Metro beendet wurde.
     $owner = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -First 1
-    if (-not $owner) { return }
-    $cur = Get-CimInstance Win32_Process -Filter "ProcessId=$owner" -ErrorAction SilentlyContinue
+    if (-not $owner) { return $false }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$owner" -ErrorAction SilentlyContinue
+    if (-not $proc -or $proc.Name -ne 'node.exe' -or $proc.CommandLine -notmatch 'expo.*\bstart\b') { return $false }
+    $cur = $proc
     $window = $null
     while ($cur) {
         if ($cur.Name -eq 'powershell.exe') { $window = $cur; break }
         $cur = Get-CimInstance Win32_Process -Filter "ProcessId=$($cur.ParentProcessId)" -ErrorAction SilentlyContinue
     }
     Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
-    if ($window) { Stop-Process -Id $window.ProcessId -Force -ErrorAction SilentlyContinue }
+    if ($window -and $window.CommandLine -like '*Goenn Expo/Metro*') {
+        Stop-Process -Id $window.ProcessId -Force -ErrorAction SilentlyContinue
+    }
     Start-Sleep -Seconds 2
+    return $true
 }
 
 $started = @()
@@ -151,8 +158,8 @@ if (-not $NoServers) {
         $started += 'Laravel'
     }
     if ($envChanged -and (Test-Port 8081)) {
-        Stop-PortOwnerWindow 8081
-        $started += 'Metro (neu, wegen neuer IP)'
+        if (Stop-MetroOnPort 8081) { $started += 'Metro (neu, wegen neuer IP)' }
+        else { $started += 'Port 8081 gehört nicht Metro – nicht angefasst' }
     }
     if (-not (Test-Port 8081)) {
         $hostEnv = if ($ip) { "`$env:REACT_NATIVE_PACKAGER_HOSTNAME='$ip'; " } else { '' }

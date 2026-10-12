@@ -27,8 +27,8 @@ const BLOCKED_TERMS: BlockedTermLists = lists;
  *
  * - `'username'` fuer den Benutzernamen,
  * - `'name'` fuer den Anzeigenamen (echte Nachnamen wie „Fick" gehen hier durch),
- * - `'text'` fuer alles, was man schreibt: Titel, Beschreibung, Ort, Chat,
- *   Beitraege, Kommentare, Story-Unterschriften, Gruppenbeschreibungen.
+ * - `'text'` fuer alles, was man schreibt: Chat-Nachrichten, Gruppenbeschreibungen,
+ *   Titel und Beschreibungen im Admin-Bereich.
  *   Gruppenname: `'name'` – er ist eine Selbstbezeichnung wie ein Anzeigename.
  *
  * Leere Werte ergeben null; ob ein Feld Pflicht ist, prueft das Formular selbst.

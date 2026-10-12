@@ -39,9 +39,8 @@ export function ShareOfferSheet({ offer, visible, onClose }: { offer: Pick<Offer
     } catch (e) {
       feedback.failed();
       await notifyUser('Teilen hat nicht geklappt', errorMessage(e));
-    } finally {
-      setSending(null);
     }
+    setSending(null);
   };
 
   const toGroups = () => {

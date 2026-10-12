@@ -22,7 +22,7 @@
  * darunter, was davon Bonus ist und BIS WANN genau dieses Paket gilt (jede
  * Gutschrift verfällt für sich). Ein Overlay darüber ginge nicht, das Blatt ist
  * schon ein Modal. Schließt man das Blatt, jubelt Goenni unten im Dock noch
- * einmal (`useMascotDock().say`).
+ * einmal (`useDockActions().say`).
  */
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -32,7 +32,7 @@ import Animated, { Easing, interpolate, useAnimatedStyle, useReducedMotion, useS
 
 import { Burst } from '@/components/celebration';
 import { Mascot } from '@/components/mascot';
-import { useMascotDock } from '@/components/mascot-dock';
+import { useDockActions } from '@/components/mascot-dock';
 import { Button } from '@/components/ui/button';
 import { CountUp } from '@/components/ui/count-up';
 import { Icon } from '@/components/ui/icon';
@@ -47,7 +47,6 @@ import {
   formatEuro,
   packBonus,
   packPriceCents,
-  packTotalCredits,
 } from '@/domain/club';
 import { formatDay } from '@/domain/date-format';
 import { purchaseLine } from '@/domain/mascot-lines';
@@ -105,7 +104,7 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
   const [buying, setBuying] = useState<number | null>(null);
   /** Der letzte Kauf – für Feier und Erfolgszeile; `key` zählt hoch. */
   const [success, setSuccess] = useState<{ added: number; bonus: number; key: number; until: string } | null>(null);
-  const dock = useMascotDock();
+  const dock = useDockActions();
 
   const balance = user?.credits_balance ?? 0;
   const testMode = (club?.payments_mode ?? 'test') === 'test';
@@ -114,12 +113,23 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
   const firstBonusFor = (credits: number) => (firstPercent > 0 ? firstPurchaseBonus(CLUB_RULES, credits) : 0);
   const validity = creditValidityLabel(CLUB_RULES, user?.club_plan);
 
+  // Preise und Bonus so, wie der Server sie berechnet (Club-Stand). Die mitgelieferten
+  // Regeln nur, solange er noch nicht geladen ist: Eine alte App-Version zeigte sonst
+  // nach einer Preisänderung einen anderen Betrag, als „Zahlungspflichtig" abgebucht wird.
+  const packCredits = club?.packs.length ? club.packs.map((p) => p.credits) : CLUB_RULES.credits.packs;
+  const packFor = (credits: number) => {
+    const server = club?.packs.find((p) => p.credits === credits);
+    return server
+      ? { bonus: server.bonus, priceCents: server.price_cents }
+      : { bonus: packBonus(CLUB_RULES, credits), priceCents: packPriceCents(CLUB_RULES, credits) };
+  };
+
   const buy = async (credits: number) => {
     if (!token || buying !== null) return;
-    const bonus = packBonus(CLUB_RULES, credits);
+    const { bonus, priceCents } = packFor(credits);
     const first = firstBonusFor(credits);
     const extra = bonus + first;
-    const price = formatEuro(packPriceCents(CLUB_RULES, credits));
+    const price = formatEuro(priceCents);
     const ok = await confirmAction(
       `${formatCredits(credits)}${extra ? ` + ${formatCredits(extra)}` : ''} Credits kaufen`,
       `Für ${price}.${extra ? ` Du bekommst insgesamt ${formatCredits(credits + extra)} Credits${first ? `, davon ${formatCredits(first)} Erstkauf-Bonus` : ''}.` : ''} Credits gelten ${validity} ab Kauf.${testMode ? '\n\nTestmodus: Es wird kein echtes Geld abgebucht.' : ''}`,
@@ -127,22 +137,26 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
     );
     if (!ok) return;
     setBuying(credits);
-    try {
-      const { data } = await api.buyCredits(token, credits);
-      setCredits(data.balance);
-      onPurchased();
-      const until = validUntilFromNow(creditValidityFor(CLUB_RULES, user?.club_plan));
+    // Alles mit Bedingungen steht vor dem `try`: Darin kann der React Compiler sie
+    // nicht übersetzen, und dann bliebe das ganze Blatt unoptimiert.
+    const until = validUntilFromNow(creditValidityFor(CLUB_RULES, user?.club_plan));
+    const showSuccess = (data: { added: number; bonus: number; first_purchase_bonus: number }) => {
       setSuccess((prev) => ({ added: data.added, bonus: (data.bonus ?? 0) + (data.first_purchase_bonus ?? 0), key: (prev?.key ?? 0) + 1, until }));
       dock.say(purchaseLine(data.added, formatDay(until)), 'flip');
       // Der Erstkauf-Bonus ist jetzt verbraucht – der Club-Stand weiß das erst nach dem Nachladen.
       if (data.first_purchase_bonus) void refreshClub();
+    };
+    try {
+      const { data } = await api.buyCredits(token, credits);
+      setCredits(data.balance);
+      onPurchased();
+      showSuccess(data);
       feedback.achieved();
     } catch (e) {
       feedback.failed();
       await notifyUser('Kauf hat nicht geklappt', errorMessage(e));
-    } finally {
-      setBuying(null);
     }
+    setBuying(null);
   };
 
   const close = () => {
@@ -194,11 +208,11 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
       ) : null}
 
       <View style={styles.packs}>
-        {CLUB_RULES.credits.packs.map((credits) => {
-          const bonus = packBonus(CLUB_RULES, credits);
+        {packCredits.map((credits) => {
+          const { bonus, priceCents } = packFor(credits);
           const first = firstBonusFor(credits);
           const flag = FLAGS[credits];
-          const price = formatEuro(packPriceCents(CLUB_RULES, credits));
+          const price = formatEuro(priceCents);
           return (
             <PressableScale
               key={credits}
@@ -231,7 +245,7 @@ function CreditsSheet({ visible, onClose, onPurchased }: { visible: boolean; onC
                   ) : null}
                 </View>
                 <Text style={[styles.packLabel, { color: colors.textSecondary }]} numberOfLines={1}>
-                  {bonus || first ? `= ${formatCredits(packTotalCredits(CLUB_RULES, credits) + first)} Credits` : 'Credits'}
+                  {bonus || first ? `= ${formatCredits(credits + bonus + first)} Credits` : 'Credits'}
                 </Text>
               </View>
               <View style={[styles.price, { backgroundColor: flag ? colors.tint : colors.backgroundSelected }]}>
@@ -411,8 +425,10 @@ const styles = StyleSheet.create({
   flag: { position: 'absolute', top: -10, left: Spacing.three, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   flagText: { color: '#ffffff', fontFamily: FontFamily.bold, fontSize: 10.5, letterSpacing: 0.3 },
   packIcon: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  packText: { flex: 1, gap: 1 },
-  packAmount: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  // minWidth 0: Sonst drückt die Zeile mit den Bonus-Chips den Preis-Knopf weg (Web: min-width auto).
+  packText: { flex: 1, minWidth: 0, gap: 1 },
+  // Umbrechen statt überlaufen: Zwei Bonus-Chips passen auf schmalen Handys nicht neben „1.000".
+  packAmount: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: Spacing.two, rowGap: 4 },
   packCredits: { fontFamily: FontFamily.bold, fontSize: 22 },
   bonus: { backgroundColor: '#ffd24a', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
   bonusText: { color: '#5b3a00', fontFamily: FontFamily.bold, fontSize: 13 },

@@ -2,7 +2,8 @@
 
 /*
 |--------------------------------------------------------------------------
-| Rate limits of the sign-in, sign-up, password and two-factor routes, and of every other write
+| Rate limits of the sign-in, sign-up, password and two-factor routes, of every other write and
+| of every read
 |--------------------------------------------------------------------------
 |
 | One entry per named limiter (App\Providers\AppServiceProvider). Each scope is a key the limiter
@@ -112,6 +113,22 @@ return [
     'write-report' => ['user' => '10/600,50/86400', 'ip' => '100/600'],
     'write-block' => ['user' => '30/600,200/86400', 'ip' => '300/600'],
     'write-admin' => ['user' => '120/600', 'ip' => '600/600'],
+
+    /*
+    | The read classes: every route has a limit (AGENTS.md), reads included. Generous for people -
+    | switching tabs, pulling to refresh, the group chat asking for new messages every four
+    | seconds and the pass renewing every minute stay far below them - and a brake for scripts.
+    | One rule each: a read pays for every counter with a lock and a few cache queries.
+    |   read          every signed-in GET and the price quote (writes nothing), per account
+    |   read-public   the two routes without a token (category list, calendar link), per address
+    |   read-admin    the admin screens, per account: a stolen admin token reads slowly
+    |   admin-export  the voucher codes as CSV, per account: every code there is worth credits
+    | Engineering values without an override setting, like the write classes above.
+    */
+    'read' => ['user' => '300/60'],
+    'read-public' => ['ip' => '120/60'],
+    'read-admin' => ['user' => '120/60'],
+    'admin-export' => ['user' => '10/3600'],
 
     // Not a route limiter: wrong second-factor codes per account, across every sign-in challenge
     // and step-up (App\Support\TwoFactor). At the cap no code is accepted and none is mailed

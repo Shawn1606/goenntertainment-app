@@ -63,11 +63,13 @@ class AdminTest extends MarketplaceTestCase
         $admin = $this->actingAsUser();
         $admin->forceFill(['is_admin' => true])->save();
 
-        $this->postJson('/api/admin/voucher-batches', ['label' => 'REWE Herbst', 'retailer' => 'REWE', 'credits' => 200, 'quantity' => 25])
+        $batch = $this->postJson('/api/admin/voucher-batches', ['label' => 'REWE Herbst', 'retailer' => 'REWE', 'credits' => 200, 'quantity' => 25])
             ->assertCreated()
-            ->assertJsonPath('data.created_count', 25);
+            ->assertJsonPath('data.created_count', 25)
+            ->json('data.id');
 
-        $csv = $this->get('/api/admin/voucher-batches/1/codes.csv')->assertOk()->streamedContent();
+        // The id of the batch just made: InnoDB does not roll its counter back with the test.
+        $csv = $this->get("/api/admin/voucher-batches/{$batch}/codes.csv")->assertOk()->streamedContent();
         $this->assertSame(26, count(array_filter(explode("\n", $csv))));
 
         $someone = $this->user();

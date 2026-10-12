@@ -7,7 +7,7 @@ import { LockIcon } from '@/components/ui/icons';
 import { TextField } from '@/components/ui/text-field';
 import { FontFamily, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { api, ApiError } from '@/lib/api';
+import { api, errorMessage, fieldErrors } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { confirmAction, notifyUser } from '@/lib/confirm';
 import { clearSavedEmail } from '@/lib/credential-store';
@@ -23,6 +23,11 @@ import { clearOfflineCache } from '@/lib/offline-cache';
  * zusätzlich ein Code) und danach noch eine ausdrückliche Rückfrage. Wer kein
  * Passwort hat (reine Google-Anmeldung), tippt stattdessen „LÖSCHEN".
  */
+/** Der Abschiedssatz: der des Servers, sonst unserer. */
+function farewell(res: { message?: string | null }): string {
+  return res.message ?? 'Dein Konto wurde gelöscht. Schade, dass du gehst!';
+}
+
 export default function DeleteAccountScreen() {
   const colors = useTheme();
   const { token, user, logout } = useAuth();
@@ -42,7 +47,7 @@ export default function DeleteAccountScreen() {
       const res = await api.twoFactorSendCode(token);
       await notifyUser('Code unterwegs', `Wir haben dir einen Code an ${res.destination} geschickt.`);
     } catch (e) {
-      setErrors({ code: [e instanceof ApiError ? e.firstError() : 'Der Code konnte nicht verschickt werden.'] });
+      setErrors({ code: [errorMessage(e, 'Der Code konnte nicht verschickt werden.')] });
     }
   }
 
@@ -58,29 +63,26 @@ export default function DeleteAccountScreen() {
 
     setBusy(true);
     setErrors({});
+    // Vor dem `try`: Bedingungen darin kann der React Compiler nicht übersetzen.
+    const proof = {
+      ...(usePhrase ? { confirm: 'LÖSCHEN' } : { password }),
+      ...(needsCode ? { code: code.trim() } : {}),
+    };
     try {
-      const res = await api.deleteAccount(token, {
-        ...(usePhrase ? { confirm: 'LÖSCHEN' } : { password }),
-        ...(needsCode ? { code: code.trim() } : {}),
-      });
+      const res = await api.deleteAccount(token, proof);
       await clearSavedEmail();
       // The offline copy of the bookings and the pass goes now (F-44), not only with the sign-out
       // after the dialog: the dialog waits for a tap, and an app closed there would never reach
       // that sign-out.
       await clearOfflineCache().catch(() => undefined);
-      await notifyUser('Konto gelöscht', res.message ?? 'Dein Konto wurde gelöscht. Schade, dass du gehst!');
+      await notifyUser('Konto gelöscht', farewell(res));
       // Der Token ist mit dem Konto verschwunden – lokal abmelden, dann zeigt die App
       // wieder den Willkommensbildschirm.
       await logout();
     } catch (e) {
-      if (e instanceof ApiError) {
-        setErrors(Object.keys(e.errors).length ? e.errors : { password: [e.firstError()] });
-      } else {
-        setErrors({ password: ['Unbekannter Fehler.'] });
-      }
-    } finally {
-      setBusy(false);
+      setErrors(fieldErrors(e, 'password'));
     }
+    setBusy(false);
   }
 
   return (

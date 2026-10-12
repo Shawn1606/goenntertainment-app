@@ -8,8 +8,6 @@ import {
   formatDay,
   formatDayShort,
   formatDaySeparator,
-  formatDayTimeShort,
-  formatRelativeShort,
 } from './date-format.ts';
 
 /**
@@ -32,11 +30,8 @@ test('Datum und Uhrzeit in der Form, die die App ueberall zeigt', () => {
   assert.equal(formatClock(at(2026, 7, 4, 18, 30)), '18:30');
 });
 
-test('die Admin-Formen unterscheiden sich nur im Komma bzw. im Jahr', () => {
-  // Diese beiden gab es doppelt in admin-evidence.tsx und admin-moderation.tsx
-  // bzw. in admin-stories.tsx – deshalb stehen sie hier und nicht dort.
+test('die Admin-Form hat kein Komma', () => {
   assert.equal(formatDateTimeCompact(at(2026, 7, 4, 9, 5)), '04.07.2026 09:05');
-  assert.equal(formatDayTimeShort(at(2026, 7, 4, 9, 5)), '04.07. 09:05');
 });
 
 test('einstellige Tage und Monate bekommen ihre Null', () => {
@@ -52,7 +47,6 @@ test('was kein Datum ist, ergibt einen leeren Text und keinen Absturz', () => {
     formatDayShort,
     formatClock,
     formatDateTimeCompact,
-    formatDayTimeShort,
   ]) {
     assert.equal(fn(null), '');
     assert.equal(fn(''), '');
@@ -88,36 +82,6 @@ test('„Heute" haengt am Kalendertag, nicht an 24 Stunden', () => {
   assert.equal(formatDaySeparator(at(2026, 7, 27, 23, 50), now), 'Gestern');
 });
 
-/* ------------------------------------------------ Kurzform in der Chatliste */
-
-test('gerade eben heisst „jetzt" – bis genau zur ersten vollen Minute', () => {
-  const now = new Date(2026, 6, 28, 14, 0);
-  assert.equal(formatRelativeShort(at(2026, 7, 28, 14, 0), now), 'jetzt');
-  // 30 Sekunden: noch „jetzt".
-  assert.equal(
-    formatRelativeShort(new Date(2026, 6, 28, 13, 59, 30).toISOString(), now),
-    'jetzt',
-  );
-  // Genau eine Minute: die Zaehlung faengt an. Die Grenze steht hier im Test,
-  // damit sie eine Entscheidung bleibt und nicht ein Zufall der Rechnung wird.
-  assert.equal(formatRelativeShort(at(2026, 7, 28, 13, 59), now), 'vor 1 Min');
-});
-
-test('Minuten und Stunden werden gezaehlt, danach kommt der Tag', () => {
-  const now = new Date(2026, 6, 28, 14, 0);
-  assert.equal(formatRelativeShort(at(2026, 7, 28, 13, 45), now), 'vor 15 Min');
-  assert.equal(formatRelativeShort(at(2026, 7, 28, 11, 0), now), 'vor 3 Std');
-  assert.equal(formatRelativeShort(at(2026, 7, 27, 11, 0), now), 'Gestern');
-  assert.equal(formatRelativeShort(at(2026, 7, 20, 11, 0), now), '20.07.');
-});
-
-test('ein Zeitpunkt in der Zukunft gilt als „jetzt", nicht als negative Dauer', () => {
-  // Passiert echt: Die Uhr des Geraets laeuft der des Servers um Sekunden nach.
-  const now = new Date(2026, 6, 28, 14, 0);
-  assert.equal(formatRelativeShort(at(2026, 7, 28, 14, 2), now), 'jetzt');
-});
-
-test('ohne Zeitpunkt bleibt die Kurzform leer', () => {
-  assert.equal(formatRelativeShort(null, new Date()), '');
+test('ohne Zeitpunkt bleibt die Trennzeile leer', () => {
   assert.equal(formatDaySeparator(null, new Date()), '');
 });

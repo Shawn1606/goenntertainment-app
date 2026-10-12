@@ -10,8 +10,9 @@
  *
  * ## Drei Ebenen Bewegung
  *
- *  - **Lebenszeichen, immer:** Hüpfen mit Stauchen am Boden, Atmen, wippende
- *    Antenne, Blinzeln, wandernder Blick (bei offenen Augen).
+ *  - **Lebenszeichen, in Abständen:** ein Hopser mit Stauchen am Boden und
+ *    nachwippender Antenne, dann Ruhe; Blinzeln, wandernder Blick (bei offenen
+ *    Augen). Bewusst keine Dauerschleifen – jede kostet auf dem Handy jeden Frame.
  *  - **Gesten, wiederkehrend:** winken, umsehen, nicken (`gesture`).
  *  - **Kunststücke, einmalig:** Hüpfer, Salto, Drehung, Tanz, Wackeln, Jubel,
  *    Winken (`trick` + `trickKey`, `jumpKey`, `celebrate`). Mit `lively` zeigt
@@ -33,8 +34,10 @@
  * Funktionen (auch `map` mit Rückruf) laufen dort nicht – im Web fällt das nicht
  * auf, am Gerät stürzt die App ab. Alles Nachschlagen passiert vorher.
  *
- * `useReducedMotion()` schaltet alle Bewegung ab: Dann steht die Figur still, und
- * das ist in Ordnung – sie trägt keine Information, die nur in der Bewegung steckt.
+ * `useStill()` schaltet alle Bewegung ab – bei „Bewegung reduzieren" und solange
+ * die Seite nicht vorn ist (src/components/ui/motion-pause.tsx). Dann steht die
+ * Figur still, und das ist in Ordnung – sie trägt keine Information, die nur in
+ * der Bewegung steckt.
  *
  * ## Saison-Look
  *
@@ -45,17 +48,15 @@
  * neben der Antenne – die bleibt sein Erkennungszeichen. Mit der Saison-Deko in
  * den Einstellungen abschaltbar; `accessory="none"` lässt ihn pur.
  */
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useId, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, {
   Easing,
   cancelAnimation,
   interpolate,
   useAnimatedStyle,
-  useReducedMotion,
   useSharedValue,
   withDelay,
-  withRepeat,
   withSequence,
   withSpring,
   withTiming,
@@ -65,6 +66,7 @@ import Svg, { Circle, Defs, Ellipse, G, LinearGradient as SvgLinearGradient, Pat
 
 import { useSeason } from '@/components/seasonal-decor';
 import { ThemedText } from '@/components/themed-text';
+import { useBeat, useStill } from '@/components/ui/motion-pause';
 import { ERROR_REACTION, pickTrick, trickPause, type MascotGesture, type MascotMood, type MascotTrick } from '@/domain/mascot-mood';
 import type { SeasonKey } from '@/domain/season';
 import { useBrandSurface, useSignals } from '@/hooks/use-theme';
@@ -106,6 +108,9 @@ const GAZE_Y = GAZE_STOPS.map((stop) => stop.y);
 
 /** So weit dreht ein Arm, wenn er ganz oben ist (Grad, von hängend aus). */
 const ARM_RAISE = 85;
+
+/** Ruhe zwischen zwei Hopsern (dazu je Figur ein eigener Versatz). */
+const IDLE_REST_MS = 1700;
 
 /**
  * Wie weit der rechte Arm beim Winken zusätzlich dreht. Hängt er unten, muss er
@@ -186,7 +191,8 @@ export function Mascot({
   label,
   accessory = 'auto',
 }: MascotProps) {
-  const reduced = useReducedMotion();
+  // Steht still bei „Bewegung reduzieren" UND solange die Seite nicht vorn ist (motion-pause.tsx).
+  const reduced = useStill();
   const [phase] = useState(() => Math.random());
   const season = useSeason();
   const { settings } = useAppSettings();
@@ -320,11 +326,11 @@ export function Mascot({
   useEffect(() => {
     if (jumpKey) perform('hop');
   }, [jumpKey, perform]);
+  // Erst der Schlüssel löst aus; `trick` sagt nur, welches Kunststück.
+  const performTrick = useEffectEvent(() => perform(trick));
   useEffect(() => {
-    if (trickKey) perform(trick);
-    // `trick` gehört bewusst nicht dazu: Erst der Schlüssel löst aus.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [trickKey, perform]);
+    if (trickKey) performTrick();
+  }, [trickKey]);
   useEffect(() => {
     if (celebrate) perform('cheer');
   }, [celebrate, perform]);
@@ -349,142 +355,122 @@ export function Mascot({
     return () => clearTimeout(timer);
   }, [lively, reduced, perform, phase]);
 
-  // Atmen – langsam und klein.
+  // Lebenszeichen im Takt (`useBeat`, motion-pause.tsx): ein Hopser, die Antenne
+  // wippt nach, dann Ruhe – und in der Ruhe läuft keine Animation. (Gemessen Okt.
+  // 2026: Atmen, Hüpfen und Antenne liefen vorher ununterbrochen und kosteten JEDEN
+  // Frame Arbeit, auch als endlose Schleifen mit Pause.) Das kaum sichtbare Atmen
+  // (±1 %) fällt ganz weg.
   useEffect(() => {
-    cancelAnimation(breath);
-    if (reduced) {
-      breath.set(0.5);
-      return;
-    }
-    breath.set(0);
-    breath.set(withRepeat(withTiming(1, { duration: asleep ? 4200 : 2600, easing: Easing.inOut(Easing.sin) }), -1, true));
-    return () => cancelAnimation(breath);
-  }, [reduced, asleep, breath]);
+    breath.set(0.5);
+  }, [breath]);
 
-  // Hüpfen: aufwärts bremst es, abwärts beschleunigt es – sonst sieht es aus wie ein Fahrstuhl.
-  useEffect(() => {
-    cancelAnimation(bounce);
-    if (reduced) {
-      bounce.set(0);
-      return;
-    }
-    bounce.set(0);
-    bounce.set(
-      withRepeat(
+  // Hüpfen: aufwärts bremst es, abwärts beschleunigt es – sonst sieht es aus wie ein
+  // Fahrstuhl. Die Antenne wippt im selben Takt nach, damit beides zusammen ruht.
+  const rest = Math.round(IDLE_REST_MS * (asleep ? 1.6 : 1) + phase * 900);
+  const hopUp = asleep ? 760 : 420;
+  const hopDown = asleep ? 820 : 460;
+  const wobbles = mood !== 'oops';
+  useBeat(
+    () => {
+      bounce.set(withSequence(withTiming(1, { duration: hopUp, easing: Easing.out(Easing.quad) }), withTiming(0, { duration: hopDown, easing: Easing.in(Easing.quad) })));
+      if (!wobbles) return;
+      const lead = Math.round(hopUp / 2);
+      const swing = Math.round((hopUp + hopDown - lead) / 4);
+      const ease = Easing.inOut(Easing.sin);
+      antenna.set(
         withSequence(
-          withTiming(1, { duration: asleep ? 760 : 420, easing: Easing.out(Easing.quad) }),
-          withTiming(0, { duration: asleep ? 820 : 460, easing: Easing.in(Easing.quad) }),
+          withDelay(lead, withTiming(1, { duration: swing, easing: ease })),
+          withTiming(-0.7, { duration: swing, easing: ease }),
+          withTiming(0.35, { duration: swing, easing: ease }),
+          withTiming(0, { duration: hopUp + hopDown - lead - swing * 3, easing: ease }),
         ),
-        -1,
-        false,
-      ),
-    );
-    return () => cancelAnimation(bounce);
-  }, [reduced, asleep, bounce]);
-
-  // Antenne wippt – leicht versetzt zum Hüpfen, damit es nicht im Gleichschritt läuft.
-  useEffect(() => {
-    cancelAnimation(antenna);
-    if (reduced || mood === 'oops') {
-      antenna.set(0);
-      return;
-    }
-    antenna.set(-1);
-    antenna.set(withRepeat(withTiming(1, { duration: 900 + phase * 300, easing: Easing.inOut(Easing.sin) }), -1, true));
-    return () => cancelAnimation(antenna);
-  }, [reduced, mood, phase, antenna]);
+      );
+    },
+    rest + hopUp + hopDown,
+    !reduced,
+    rest,
+  );
 
   // Blinzeln: zu schneller als auf, so schlägt ein echtes Lid.
-  useEffect(() => {
-    cancelAnimation(blink);
-    if (reduced || !eyesOpen) {
-      blink.set(0);
-      return;
-    }
-    blink.set(0);
-    blink.set(
-      withRepeat(
-        withSequence(
-          withDelay(2400 + phase * 1600, withTiming(1, { duration: 70, easing: Easing.in(Easing.quad) })),
-          withTiming(0, { duration: 110, easing: Easing.out(Easing.quad) }),
-        ),
-        -1,
-        false,
-      ),
-    );
-    return () => cancelAnimation(blink);
-  }, [reduced, eyesOpen, phase, blink]);
+  const looking = !reduced && eyesOpen;
+  const blinkRest = Math.round(2400 + phase * 1600);
+  useBeat(
+    () => blink.set(withSequence(withTiming(1, { duration: 70, easing: Easing.in(Easing.quad) }), withTiming(0, { duration: 110, easing: Easing.out(Easing.quad) }))),
+    blinkRest + 180,
+    looking,
+    blinkRest,
+  );
 
-  // Wandernder Blick; beim Umsehen (`look`) weiter und mit kürzeren Pausen.
-  useEffect(() => {
-    cancelAnimation(gaze);
-    if (reduced || !eyesOpen) {
-      gaze.set(0);
-      return;
-    }
-    const hold = gesture === 'look' ? 700 : 1500 + phase * 600;
-    gaze.set(0);
-    gaze.set(
-      withRepeat(
-        withSequence(
-          withDelay(hold, withTiming(1, { duration: 400, easing: Easing.inOut(Easing.quad) })),
-          withDelay(hold, withTiming(2, { duration: 400, easing: Easing.inOut(Easing.quad) })),
-          withDelay(hold, withTiming(3, { duration: 400, easing: Easing.inOut(Easing.quad) })),
-          withDelay(hold, withTiming(4, { duration: 400, easing: Easing.inOut(Easing.quad) })),
-        ),
-        -1,
-        false,
-      ),
-    );
-    return () => cancelAnimation(gaze);
-  }, [reduced, eyesOpen, gesture, phase, gaze]);
+  // Wandernder Blick: vier Stationen reihum; beim Umsehen (`look`) weiter und mit kürzeren Pausen.
+  const hold = Math.round(gesture === 'look' ? 700 : 1500 + phase * 600);
+  const gazeStep = useRef(0);
+  useBeat(
+    () => {
+      gazeStep.current = (gazeStep.current % 4) + 1;
+      const move = withTiming(gazeStep.current, { duration: 400, easing: Easing.inOut(Easing.quad) });
+      // Station 4 und 0 sind derselbe Blick: Von 4 zu 1 erst unsichtbar auf 0 springen,
+      // sonst wanderten die Augen rückwärts über 3 und 2.
+      gaze.set(gazeStep.current === 1 ? withSequence(withTiming(0, { duration: 0 }), move) : move);
+    },
+    hold + 400,
+    looking,
+    hold,
+  );
 
   // Winken als wiederkehrende Geste – mit langer Pause, sonst wird es Rauschen.
-  useEffect(() => {
-    cancelAnimation(waveG);
-    if (reduced || gesture !== 'wave') {
-      waveG.set(0);
-      return;
-    }
-    waveG.set(0);
-    waveG.set(
-      withRepeat(
+  const waving = !reduced && gesture === 'wave';
+  const waveRest = Math.round(2600 + phase * 1200);
+  useBeat(
+    () =>
+      waveG.set(
         withSequence(
-          withDelay(2600 + phase * 1200, withTiming(1, { duration: 200, easing: Easing.out(Easing.quad) })),
+          withTiming(1, { duration: 200, easing: Easing.out(Easing.quad) }),
           withTiming(0.45, { duration: 170 }),
           withTiming(1, { duration: 170 }),
           withTiming(0.45, { duration: 170 }),
           withTiming(0, { duration: 280, easing: Easing.in(Easing.quad) }),
         ),
-        -1,
-        false,
       ),
-    );
-    return () => cancelAnimation(waveG);
-  }, [reduced, gesture, phase, waveG]);
+    waveRest + 990,
+    waving,
+    waveRest,
+  );
 
   // Nicken: zweimal kurz einknicken (Stauchen, keine Drehung – sie hat keinen eigenen Kopf).
-  useEffect(() => {
-    cancelAnimation(nod);
-    if (reduced || gesture !== 'nod') {
-      nod.set(0);
-      return;
-    }
-    nod.set(0);
-    nod.set(
-      withRepeat(
+  const nodding = !reduced && gesture === 'nod';
+  const nodRest = Math.round(3000 + phase * 1400);
+  useBeat(
+    () =>
+      nod.set(
         withSequence(
-          withDelay(3000 + phase * 1400, withTiming(1, { duration: 220, easing: Easing.out(Easing.quad) })),
+          withTiming(1, { duration: 220, easing: Easing.out(Easing.quad) }),
           withTiming(0, { duration: 260 }),
           withTiming(1, { duration: 200 }),
           withTiming(0, { duration: 300, easing: Easing.inOut(Easing.quad) }),
         ),
-        -1,
-        false,
       ),
-    );
-    return () => cancelAnimation(nod);
-  }, [reduced, gesture, phase, nod]);
+    nodRest + 980,
+    nodding,
+    nodRest,
+  );
+
+  // Angehalten, Augen zu oder Geste gewechselt: zurück in die Ruhe, statt mitten in
+  // einer Bewegung stehen zu bleiben.
+  useEffect(() => {
+    const resting: SharedValue<number>[] = [];
+    if (reduced) resting.push(bounce);
+    if (reduced || !wobbles) resting.push(antenna);
+    if (!looking) {
+      resting.push(blink, gaze);
+      gazeStep.current = 0;
+    }
+    if (!waving) resting.push(waveG);
+    if (!nodding) resting.push(nod);
+    for (const value of resting) {
+      cancelAnimation(value);
+      value.set(0);
+    }
+  }, [reduced, wobbles, looking, waving, nodding, bounce, antenna, blink, gaze, waveG, nod]);
 
   // Fertige Zahlen für die Worklets (siehe Kopfkommentar).
   const bounceHeight = size * (asleep ? 0.03 : 0.07);

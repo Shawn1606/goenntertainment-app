@@ -3,16 +3,9 @@
  *
  * ## Warum es diesen Screen überhaupt gibt
  *
- * Blockieren funktioniert, indem die Person überall aus der App verschwindet: aus
- * der Suche, aus den Chats, aus den Freundeslisten. Genau deshalb wäre es ohne
- * diese Liste eine Einbahnstraße – man käme an kein Profil mehr, auf dem ein
- * „Freigeben" stehen könnte.
- *
- * ## Was Freigeben NICHT tut
- *
- * Die Freundschaft kommt nicht zurück. Sie wurde beim Blockieren beendet, und ein
- * automatisches Wiederherstellen wäre eine Verbindung, der niemand neu zugestimmt
- * hat. Der Hinweis steht in der Rückfrage, damit niemand danach rätselt.
+ * Blockieren lässt die Person für dich verschwinden: Ihre Nachrichten in den
+ * Gruppen-Chats siehst du nicht mehr. Genau deshalb wäre es ohne diese Liste eine
+ * Einbahnstraße – man käme an keine Stelle mehr, an der ein „Freigeben" stehen könnte.
  */
 import { useFocusEffect } from 'expo-router';
 import { Image } from 'expo-image';
@@ -61,10 +54,9 @@ export default function BlockedScreen() {
       const res = await api.blocks(token);
       setPeople(res.data);
     } catch {
-      setError('Die Liste ließ sich nicht laden. Läuft das Backend?');
-    } finally {
-      setLoading(false);
+      setError('Die Liste ließ sich gerade nicht laden.');
     }
+    setLoading(false);
   }, [token]);
 
   useFocusEffect(
@@ -84,7 +76,7 @@ export default function BlockedScreen() {
     if (!token) return;
     const ok = await confirmAction(
       'Blockierung aufheben',
-      `${person.name} kann dich danach wieder finden und anfragen. Deine frühere Freundschaft kommt nicht zurück.`,
+      `Du siehst die Nachrichten von ${person.name} danach wieder.`,
       'Aufheben',
     );
     if (!ok) return;
@@ -132,7 +124,7 @@ export default function BlockedScreen() {
             <MascotEmpty mood="cheer" size={80}>
               <ThemedText style={{ color: surface.text }}>Niemand blockiert.</ThemedText>
               <ThemedText type="small" style={[styles.centered, { color: surface.textMuted }]}>
-                {'Wenn dich jemand nervt, findest du „Blockieren" direkt am Profil und an jeder Nachricht.'}
+                {'Wenn dich jemand nervt: „Blockieren" findest du an jeder Nachricht im Chat und bei den Mitgliedern einer Gruppe.'}
               </ThemedText>
             </MascotEmpty>
           </GlassCard>

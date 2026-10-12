@@ -211,9 +211,6 @@ export const PlanLook = {
 
 export type PlanLookKey = keyof typeof PlanLook;
 
-/** Holografischer Glitzer der Stempel – der „Sammelkarten"-Moment. */
-export const HoloGradient = ['#ff5f80', '#fe2c55', '#dd2a7b', '#8134af', '#25f4ee', '#fff1a8', '#ff5f80'] as const;
-
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
 /**
@@ -244,9 +241,6 @@ export const Brand = {
  * zwei, dadurch wirkt er lebendiger, ohne bunt zu werden.
  */
 export const BrandGradient = [Palette.indigo, Palette.violet, Palette.fuchsia] as const;
-
-/** Zweiter Verlauf der Referenz (Cyan → Indigo) – für Abwechslung, z. B. Fortschritt. */
-export const CoolGradient = [Palette.cyan, Palette.indigo] as const;
 
 /**
  * Marken-Oberflächen (Karten, Chips, Texte) in hell UND dunkel. Der helle Satz
@@ -419,14 +413,4 @@ export const Spacing = {
   six: 64,
 } as const;
 
-/**
- * Wie weit Inhalt über der unteren Leiste enden muss.
- *
- * 0, seit die Leiste eine eigene ist (src/components/app-tabs.tsx): Sie steht im
- * normalen Fluss UNTER dem Tab-Inhalt und überdeckt nichts mehr. Die native
- * Leiste lag durchscheinend über dem Inhalt, dafür waren 50/80 px nötig. Der
- * Wert bleibt als Name stehen, damit die Stellen, die ihn brauchten, auffindbar
- * sind, falls die Leiste je wieder schwebt.
- */
-export const BottomTabInset = 0;
 export const MaxContentWidth = 800;

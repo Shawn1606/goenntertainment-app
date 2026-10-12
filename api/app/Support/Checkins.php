@@ -28,7 +28,8 @@ use Illuminate\Support\Facades\DB;
  * ## Die Regeln
  *
  * Hoechstens ein Stempel pro Partner und Kalendertag (shared/club.json,
- * `perPartnerPerDay`). Der Besuch selbst wird trotzdem jedes Mal festgehalten.
+ * `perPartnerPerDay`) - der Tag in Ortszeit (App\Support\BusinessDay). Der
+ * Besuch selbst wird trotzdem jedes Mal festgehalten.
  * Die Datenbank sichert die Regel zusaetzlich mit einem eindeutigen Schluessel ab:
  * Zwei Scans in derselben Sekunde koennen nicht beide stempeln.
  *
@@ -56,7 +57,9 @@ final class Checkins
                 'stamped' => false,
             ]);
 
-            $day = now()->toDateString();
+            // Der Kalendertag in Ortszeit: Um 00:30 Uhr ist schon der neue Tag, auch
+            // wenn der Server in UTC rechnet (BusinessDay).
+            $day = BusinessDay::today();
             $stamped = false;
 
             $already = Stamp::where('user_id', $user->getKey())
@@ -135,7 +138,7 @@ final class Checkins
                 return ['changed' => -$ids->count(), 'reward_credits' => 0];
             }
 
-            $day = now()->toDateString();
+            $day = BusinessDay::today();
             for ($i = 0; $i < $delta; $i++) {
                 Stamp::create(['user_id' => $user->getKey(), 'partner_id' => null, 'checkin_id' => null, 'stamp_day' => $day]);
             }

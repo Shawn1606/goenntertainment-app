@@ -6,6 +6,7 @@ use App\Models\Concerns\SerializesMysqlDates;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Eine Buchung - der Beleg, den man beim Partner vorzeigt bzw. per Check-in einloest.
@@ -82,5 +83,18 @@ class Booking extends Model
     public function scopeOpen(Builder $query): void
     {
         $query->where('status', 'confirmed')->where('valid_until', '>', now());
+    }
+
+    /**
+     * Fuer Listen: ob es schon eine Rueckmeldung gibt, in DERSELBEN Abfrage
+     * (`feedback_given`, 1 oder NULL). BookingResource fragt sonst je
+     * eingeloester Buchung einzeln nach.
+     */
+    public function scopeWithFeedbackGiven(Builder $query): void
+    {
+        $query->addSelect(['feedback_given' => DB::table('booking_feedback')
+            ->selectRaw('1')
+            ->whereColumn('booking_feedback.booking_id', 'bookings.id')
+            ->limit(1)]);
     }
 }

@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import { distanceKm } from '@/domain/distance';
+import { keepIfSame } from '@/domain/same-data';
 import {
   api,
   errorMessage,
@@ -47,7 +48,8 @@ const MarketContext = createContext<MarketValue | null>(null);
 
 export function MarketProvider({ children }: { children: ReactNode }) {
   const { token, patchUser } = useAuth();
-  const { coords } = useLocation();
+  // Abgemeldet braucht niemand Entfernungen – und der Willkommensbildschirm fragt nicht nach dem Standort.
+  const { coords } = useLocation({ enabled: token !== null });
 
   const [offers, setOffers] = useState<Offer[]>([]);
   const [interests, setInterests] = useState<Interest[]>([]);
@@ -57,9 +59,34 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Ein anderes Konto (oder abgemeldet): Nichts vom vorigen bleibt stehen. Sonst
+  // sähe, wer sich danach auf demselben Gerät anmeldet, dessen Tickets samt
+  // Einlöse-Code, Stempelkarte und Gruppen, bis die eigenen Daten da sind.
+  const [dataToken, setDataToken] = useState(token);
+  if (dataToken !== token) {
+    setDataToken(token);
+    setOffers([]);
+    setInterests([]);
+    setClub(null);
+    setGroups([]);
+    setBookings([]);
+    setLoading(true);
+    setError(null);
+  }
+
+  // Antworten, die beim Wechsel noch für das vorige Konto unterwegs waren, werden
+  // verworfen – sonst landeten dessen Tickets oder Credit-Stand beim neuen Konto.
+  const liveToken = useRef(token);
+  useLayoutEffect(() => {
+    liveToken.current = token;
+  }, [token]);
+  const stillFor = useCallback((sent: string) => liveToken.current === sent, []);
+
+  // Neue Antworten mit denselben Daten behalten das alte Objekt (`keepIfSame`):
+  // Sonst zeichnete jedes Aktualisieren alle Tab-Seiten neu, auch ohne Änderung.
   const applyClub = useCallback(
     (next: ClubState) => {
-      setClub(next);
+      setClub((prev) => keepIfSame(prev, next));
       patchUser({
         credits_balance: next.credits,
         club_plan: next.plan,
@@ -82,49 +109,59 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const refreshClub = useCallback(async () => {
     if (!token) return;
     try {
-      applyClub((await api.club(token)).data);
+      const { data } = await api.club(token);
+      if (stillFor(token)) applyClub(data);
     } catch {
       // Bleibt beim alten Stand – die Startseite zeigt dann den letzten bekannten.
     }
-  }, [token, applyClub]);
+  }, [token, applyClub, stillFor]);
 
   const refreshGroups = useCallback(async () => {
     if (!token) return;
     try {
-      setGroups((await api.groups(token)).data);
+      const { data } = await api.groups(token);
+      if (stillFor(token)) setGroups((prev) => keepIfSame(prev, data));
     } catch {
       // wie oben
     }
-  }, [token]);
+  }, [token, stillFor]);
 
   const refreshBookings = useCallback(async () => {
     if (!token) return;
     try {
       const { data } = await api.bookings(token);
-      setBookings(data);
+      if (!stillFor(token)) return;
+      setBookings((prev) => keepIfSame(prev, data));
       // Offline-Pass: offene Buchungen mit Code fürs Vorzeigen ohne Netz.
       void saveOfflineBookings(data).catch(() => undefined);
     } catch {
       // Kein Netz? Dann wenigstens die zuletzt gespeicherten offenen Buchungen.
       const cached = await loadOfflineBookings();
+      if (!stillFor(token)) return;
       if (cached) setBookings((current) => (current.length > 0 ? current : cached.bookings));
     }
-  }, [token]);
+  }, [token, stillFor]);
 
-  const refresh = useCallback(async () => {
+  const refreshOffers = useCallback(async () => {
     if (!token) return;
     try {
       const [offerList, cats] = await Promise.all([api.offers(token), api.interests().catch(() => null)]);
+      if (!stillFor(token)) return;
       setError(null);
-      setOffers(offerList.data);
-      if (cats) setInterests(cats.data);
-      await Promise.all([refreshClub(), refreshGroups(), refreshBookings()]);
+      setOffers((prev) => keepIfSame(prev, offerList.data));
+      if (cats) setInterests((prev) => keepIfSame(prev, cats.data));
     } catch (e) {
-      setError(errorMessage(e, 'Die Angebote konnten nicht geladen werden.'));
-    } finally {
-      setLoading(false);
+      if (stillFor(token)) setError(errorMessage(e, 'Die Angebote konnten nicht geladen werden.'));
     }
-  }, [token, refreshClub, refreshGroups, refreshBookings]);
+  }, [token, stillFor]);
+
+  // Alles nebeneinander und unabhängig: Scheitern die Angebote, kommen Club,
+  // Gruppen und Tickets trotzdem (vorher hingen sie am Erfolg der Angebote).
+  const refresh = useCallback(async () => {
+    if (!token) return;
+    await Promise.all([refreshOffers(), refreshClub(), refreshGroups(), refreshBookings()]);
+    if (stillFor(token)) setLoading(false);
+  }, [token, refreshOffers, refreshClub, refreshGroups, refreshBookings, stillFor]);
 
   // Laden, sobald jemand angemeldet ist. Gesetzt wird erst nach der Antwort
   // des Servers – der Compiler sieht das durch das `await` hindurch nicht.

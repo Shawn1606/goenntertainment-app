@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BookingResource;
 use App\Models\Booking;
+use App\Support\BusinessDay;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -21,8 +22,9 @@ class DashboardController extends Controller
     /** GET /api/admin/stats */
     public function stats(): JsonResponse
     {
-        $since = now()->subDays(self::SERIES_DAYS - 1)->startOfDay();
-        $week = now()->subDays(6)->startOfDay();
+        // Tage in Ortszeit (BusinessDay), die Grenzen als Zeitpunkte in app.timezone.
+        $since = BusinessDay::stored(BusinessDay::now()->subDays(self::SERIES_DAYS - 1)->startOfDay());
+        $week = BusinessDay::stored(BusinessDay::now()->subDays(6)->startOfDay());
 
         $bookings = DB::table('bookings');
 
@@ -53,6 +55,7 @@ class DashboardController extends Controller
     public function bookings(Request $request): JsonResponse
     {
         $bookings = Booking::with(['partner', 'offer', 'group', 'user'])
+            ->withFeedbackGiven()
             ->when($request->query('status'), fn ($q, $s) => $q->where('status', $s))
             ->orderByDesc('id')
             ->limit(200)
@@ -82,7 +85,9 @@ class DashboardController extends Controller
             'id' => $r->id,
             'target_type' => $r->target_type,
             'target_id' => $r->target_id,
+            // Wie es JETZT heisst (null: inzwischen weg) - und was im Moment der Meldung da stand.
             'target' => $this->describe($r->target_type, (int) $r->target_id),
+            'snapshot' => $r->snapshot === null ? null : json_decode($r->snapshot, true),
             'reason' => $r->reason,
             'note' => $r->note,
             'status' => $r->status,
@@ -124,19 +129,31 @@ class DashboardController extends Controller
         return $text === null ? null : mb_substr((string) $text, 0, 200);
     }
 
-    /** Luecken-freie Tagesreihe, damit der Graph keine Loecher hat. */
+    /**
+     * Luecken-freie Tagesreihe, damit der Graph keine Loecher hat - je Kalendertag in Ortszeit.
+     * Gezaehlt wird je Stunde (in app.timezone): Jede Stunde gehoert ganz zu einem Tag in
+     * Goettingen, auch ueber die Zeitumstellung hinweg, und die Datenbank braucht keine
+     * Zeitzonen-Tabellen.
+     */
     private function series(string $table, \DateTimeInterface $since): array
     {
-        $rows = DB::table($table)
+        $hours = DB::table($table)
             ->where('created_at', '>=', $since)
-            ->selectRaw('DATE(created_at) as d, COUNT(*) as c')
-            ->groupBy('d')
-            ->pluck('c', 'd');
+            ->selectRaw("DATE_FORMAT(created_at, '%Y-%m-%d %H:00:00') as h, COUNT(*) as c")
+            ->groupBy('h')
+            ->pluck('c', 'h');
+
+        $days = [];
+        foreach ($hours as $hour => $count) {
+            $day = BusinessDay::local((string) $hour)->toDateString();
+            $days[$day] = ($days[$day] ?? 0) + (int) $count;
+        }
 
         $series = [];
+        $today = BusinessDay::now();
         for ($i = self::SERIES_DAYS - 1; $i >= 0; $i--) {
-            $day = now()->subDays($i)->format('Y-m-d');
-            $series[] = ['date' => $day, 'count' => (int) ($rows[$day] ?? 0)];
+            $day = $today->copy()->subDays($i)->format('Y-m-d');
+            $series[] = ['date' => $day, 'count' => $days[$day] ?? 0];
         }
 
         return $series;

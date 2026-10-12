@@ -15,6 +15,28 @@
 /** Größte Verschiebung als Anteil der Stempelgröße (Vorgabe: 15 % – erst 10 %, dann auf Wunsch 50 % mehr). */
 export const MAX_SHIFT = 0.15;
 
+/**
+ * Stempel im Verhältnis zu seinem Feld. Über 1: Er ist größer als das Feld und
+ * ragt über den gestrichelten Rand hinaus – aufgedrückt statt eingepasst
+ * (Nutzerwunsch Okt. 2026; vorher 0,9, da sah es aus wie ausgefüllt).
+ */
+export const STAMP_SCALE = 1.2;
+
+/** Kantenlänge eines Stempels für ein Feld der Größe `slot`, auf ganze Punkte gerundet. */
+export function stampSize(slot: number): number {
+  return Math.round(slot * STAMP_SCALE);
+}
+
+/**
+ * Wie weit ein Stempel höchstens über sein Feld hinausragt (Punkte, eine Seite):
+ * der Überstand durch die Größe plus die größte Verschiebung. Die Karte schneidet
+ * ab, was über ihre Polsterung hinausgeht – dieser Wert muss darunter bleiben.
+ */
+export function stampReach(slot: number): number {
+  const size = stampSize(slot);
+  return (size - slot) / 2 + size * MAX_SHIFT;
+}
+
 /** Größte Schräglage in Grad. */
 export const MAX_TILT = 14;
 
@@ -68,8 +90,12 @@ export function starSwing(amountRoll: number, directionRoll: number): number {
   return clamp(directionRoll) < 0.5 ? -amount : amount;
 }
 
-/** Pause bis zur nächsten Bewegung eines Stempels: 2,5–7 s, damit nie alle gleichzeitig zucken. */
-export function stampPause(roll: number): number {
-  const safe = Number.isFinite(roll) ? Math.min(Math.max(roll, 0), 1) : 0.5;
-  return Math.round(2500 + safe * 4500);
+/**
+ * Welcher von `count` Stempeln beim Schlag `beat` der Karte dran ist (funkeln,
+ * pochen): zufällig wirkend, aber fest – derselbe Schlag trifft immer denselben
+ * Stempel. -1, wenn es keinen gibt.
+ */
+export function stampForBeat(beat: number, count: number): number {
+  if (!(count > 0) || !Number.isFinite(beat)) return -1;
+  return Math.floor(seeded(beat * 7919 + 13)() * Math.floor(count));
 }

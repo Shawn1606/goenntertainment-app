@@ -100,6 +100,80 @@ class CheckinTest extends MarketplaceTestCase
         $this->getJson('/api/partner/bookings?partner_id='.$partner->id)->assertJsonPath('data.0.status', 'redeemed');
     }
 
+    /**
+     * Der Partner sieht nach dem Scan nur, was er fuer sich braucht: den Vornamen, ob gestempelt
+     * wurde, den Stand der laufenden Karte und die Stempel und offenen Buchungen BEI IHM - nicht,
+     * wann und bei welchen anderen Partnern die Person war, ihren Credit-Stand, ihre Club-Stufe
+     * oder ihre Gruppen.
+     */
+    public function test_partner_sieht_nach_dem_scan_nur_seinen_teil(): void
+    {
+        $customer = $this->user(['name' => 'Lena Muster', 'club_plan' => 'gold']);
+        $partner = $this->partner(['name' => 'Kletterhalle']);
+        $elsewhere = $this->partner(['name' => 'Ganz woanders']);
+        $offer = $this->offer($partner);
+        $staff = $this->user();
+        $partner->staff()->attach($staff->id, ['role' => 'staff', 'created_at' => now()]);
+
+        Sanctum::actingAs($customer);
+        $this->postJson('/api/checkins', ['token' => $elsewhere->checkin_token, 'method' => 'nfc'])->assertCreated();
+        $group = $this->postJson('/api/groups', ['name' => 'Geheime Runde'])->assertCreated()->json('data');
+        $this->postJson('/api/bookings', ['offer_id' => $offer->id, 'people' => 2, 'pay_method' => 'money', 'group_id' => $group['id']])->assertCreated();
+        $pass = $this->getJson('/api/pass')->json('data.token');
+
+        Sanctum::actingAs($staff);
+        $data = $this->postJson('/api/partner/checkins', ['partner_id' => $partner->id, 'pass' => $pass])
+            ->assertCreated()
+            ->assertJsonPath('data.customer.first_name', 'Lena')
+            ->assertJsonPath('data.stamped', true)
+            ->assertJsonPath('data.stamps.filled', 2)
+            ->assertJsonPath('data.stamps.fields', 10)
+            ->json('data');
+
+        $this->assertSame(['partner', 'stamped', 'bonus_stamp', 'reward_credits', 'stamps', 'open_bookings', 'customer'], array_keys($data));
+        $this->assertSame(['filled', 'fields', 'remaining', 'stamps'], array_keys($data['stamps']));
+        // Nur der Stempel von eben - der beim anderen Partner bleibt verborgen.
+        $this->assertCount(1, $data['stamps']['stamps']);
+        $this->assertSame($partner->id, $data['stamps']['stamps'][0]['partner']['id']);
+        $this->assertStringNotContainsString('Ganz woanders', json_encode($data));
+        $this->assertStringNotContainsString('Geheime Runde', json_encode($data));
+
+        $this->assertCount(1, $data['open_bookings']);
+        $this->assertSame('Lena', $data['open_bookings'][0]['customer']['first_name']);
+        foreach (['group', 'plan_key', 'calendar_path'] as $key) {
+            $this->assertArrayNotHasKey($key, $data['open_bookings'][0]);
+        }
+
+        // Dieselbe Sicht in der Liste des Partners.
+        $listed = $this->getJson('/api/partner/bookings?partner_id='.$partner->id)->assertOk()->json('data.0');
+        $this->assertSame('Lena', $listed['customer']['first_name']);
+        foreach (['group', 'plan_key', 'calendar_path'] as $key) {
+            $this->assertArrayNotHasKey($key, $listed);
+        }
+    }
+
+    /** GET /api/stamps: die eigene Stempelkarte - nur angemeldet, nur die eigene. */
+    public function test_stempelkarte_lesen(): void
+    {
+        $this->getJson('/api/stamps')->assertUnauthorized();
+
+        $other = $this->user();
+        $user = $this->actingAsUser();
+        $partner = $this->partner(['name' => 'Café am Wall']);
+        DB::table('stamps')->insert(['user_id' => $other->id, 'partner_id' => $partner->id, 'stamp_day' => '2026-10-01', 'created_at' => now()]);
+
+        $this->getJson('/api/stamps')->assertOk()->assertJsonPath('data.total', 0)->assertJsonPath('data.stamps', []);
+
+        $this->postJson('/api/checkins', ['token' => $partner->checkin_token, 'method' => 'qr'])->assertCreated();
+        $this->getJson('/api/stamps')
+            ->assertOk()
+            ->assertJsonPath('data.total', 1)
+            ->assertJsonPath('data.filled', 1)
+            ->assertJsonPath('data.fields', 10)
+            ->assertJsonPath('data.stamps.0.partner.name', 'Café am Wall');
+        $this->assertSame(1, DB::table('stamps')->where('user_id', $user->id)->count());
+    }
+
     public function test_pass_laeuft_ab(): void
     {
         $user = $this->user();
